@@ -2,150 +2,248 @@
 
 Run a fleet of docker based, self-hosted Claude/Codex satellite workers that can ephemerally work through a job queue of given tasks and be managed through a controlled SDK channel.
 
-Using PolyMorphism we support Claude, Codex, and other LLMs as the workers and they can work through managed tasks from a controlling application.
+**One typed event stream, whichever harness runs underneath.** Claude CLI and Codex CLI emit different events with different shapes. Arsox normalizes both into a single protobuf contract, so your application is written once and never rewritten when you switch harnesses, models, or providers. That normalization is the point of the project. Everything else exists to make it usable.
 
-We provide the SDK and the satellites, your application manages what they do. Your application sends job requests to work on x/y/z tasks, settings and LLM keys. The satellite handles the job, streams the results back in realtime through a standardized message shape, and provides a robust API + SDK to make it extremely easy to get and manage the statuses.
+Using polymorphism we support Claude, Codex, and other LLMs as the workers, and they can work through managed tasks from a controlling application.
 
-Satellites naturally come with a job queues, and support threading multiple contexts of conversations together to resume conversation threads. It's literally like using Claude with a terminal as a human, but fully as an SDK and supporting fully remote architecture.
+We provide the SDK and the satellites, your application manages what they do. Your application sends job requests to work on tasks, settings and LLM keys. The satellite handles the job, streams the results back in realtime through a standardized message shape, and provides a robust API and SDK to make it easy to get and manage the statuses.
+
+Satellites come with a job queue, and support threading multiple contexts of conversations together to resume conversation threads. It is like using Claude with a terminal as a human, but fully as an SDK and supporting fully remote architecture.
 
 ## How you use it
 
-These are hosted for free on docker.io as the image:
-> jalapenolabs/ArsoxSatellite-ubuntu:latest
+These are hosted for free on docker.io. The images are:
+
+> `jalapenolabs/arsox-satellite:ubuntu-1.0.0`
 
 ```Dockerfile
-FROM JalapenoLabs/ArsoxSatellite-ubuntu:latest
+FROM jalapenolabs/arsox-satellite:ubuntu-1.0.0
 ```
 
 There are also variants for:
-- `JalapenoLabs/ArsoxSatellite-fedora:latest`
-- `JalapenoLabs/ArsoxSatellite-rocky:latest`
+- `jalapenolabs/arsox-satellite:fedora-1.0.0`
+- `jalapenolabs/arsox-satellite:rocky-1.0.0`
+
+Every image is published with an exact version tag. Floating tags (`ubuntu-latest`, `latest`) exist for convenience but are not recommended for anything you care about: pin the exact version so local, CI, and production never drift.
 
 <!-- TODO: Show a docker compose example -->
 
 Optionally, you can build them yourself too.
 
-Importantly, you will need to configure a security key via ENV.
+Importantly, you must configure a security key via ENV.
+
 ```conf
-ARSOX_SECRET=123
+ARSOX_SECRET=<a long random string>
 ```
 
-This will be used with your host application's API to authenticate it, so this API can be exposed onto the internet but calls will not be responded to without it.
+This authenticates your host application against the satellite's API, so the API can be exposed onto the internet but calls will not be responded to without it.
 
-Omitting this value will allow anyone who can ping the satellite's API to be able to command it, which may lead to security vulnerabilities.
+**The satellite fails to start if `ARSOX_SECRET` is unset.** There is no unauthenticated mode by accident. If you genuinely want an open satellite on a trusted private network, you must say so explicitly with `ARSOX_ALLOW_INSECURE=true`, which logs a loud warning on every boot. Failing closed is deliberate: an accidentally unauthenticated satellite is a remote shell with your credentials in it.
+
+Serve the API over TLS whenever it is reachable outside a trusted network. The secret is a bearer token, so it is only as private as the transport carrying it.
 
 <!-- TODO: Enter code details about how to configure it -->
 <!-- TODO: Show SDK examples of how to use it -->
 
-The SDK is available in x3 languages:
+The SDK is available in three programming languages:
 - Rust (via Cargo) <!-- TODO: Put link here when it's available -->
 - Node/Web (via NPM) <!-- TODO: Put link here when it's available -->
 - Python (via PyPi) <!-- TODO: Put link here when it's available -->
 
-For setting up the Satellite's workspace, you are typically expected to use this in Dockerfile to extend the image and install your own stuff on top of it. For example, if you need golang on this then you should pull this `FROM` on dockerfile and use the `RUN` command to install it yourself.
+For setting up the satellite's workspace, you are typically expected to extend the image in your own Dockerfile and install your own tooling on top of it. For example, if you need Go, pull this image with `FROM` and use `RUN` to install it yourself.
 
 ## Architecture
 
 The satellite spawns with a Rust API running on it.
-The SDK already has each API route registered into it, so you just need to call the SDK at the given endpoint and it'll make the API requests for you.
+The SDK already has each API route registered into it, so you just call the SDK at the given endpoint and it makes the requests for you.
 
-The API itself uses Protobuf mainly first, this helps enforce a strong request/response shape type and forces a universal shape bus. This is one of the major benefits of using Satellites, regardless of if you prefer the Codex CLI harness or the Claude CLI harness-- You can use either but still always get the exact same, strongly typed shape out of each.
+The API speaks protobuf as its primary wire format. This enforces a strong request/response shape and gives you a universal shape bus. This is one of the major benefits of using satellites: whether you prefer the Codex CLI harness or the Claude CLI harness, you get the exact same strongly typed shape out of each.
 
-There is a secondary JSON API, and you can forcibly use JSON by commanding the SDK to use it OR by passing `Content-Type` appropriately as `` <!--TODO: Put proper JSON header value here -->.
+There is a secondary JSON representation of the same contract for manual and browser use. See [Wire protocol](#wire-protocol).
 
-The secret is passed via the `Authorization` header in all of the requests from the SDK.
+The satellite can be queried for its current state or it can be commanded upon.
+Realtime events arrive over a unidirectional WebSocket. See [Event streaming](#event-streaming).
 
-The satellite can be queried for it's current state or it can be commanded upon.
-There's also an SSE channel that opens with the SDK, which will emit messages 
-
-The satellite will handle:
-- The LLM polymorphism (converting Claude request/response shapes to be used by Codex, for example).
+The satellite handles:
+- LLM polymorphism (converting Claude request/response shapes to be used by Codex, for example)
 - Job queues
-- Settings/config
-- Saving/clearing workspaces between jobs (optional) and workspace management
+- Settings and config
+- Workspace management, including saving or clearing workspaces between jobs
+- Deterministic enforcement of permissions, budgets, and secret redaction
 
-The docker container provides lots of packages out of the gate that help Claude/Codex perform faster. These include:
-- git
-- build-essential
-<!-- TODO: Populate! -->
+### Preinstalled tooling
 
-Several CLIs are also pre-installed, such as:
-- gh
-- jira
+The docker container ships a working development environment out of the gate so the agents are not spending their first ten minutes installing basics. Every package is pinned to an exact version in the image build, and the exact set is published in the image's manifest.
+
+Core:
+- `git`, `git-lfs`, `openssh-client`, `ca-certificates`
+- `build-essential` (gcc, g++, make), `pkg-config`
+- `curl`, `wget`, `jq`, `zip`, `unzip`
+- `ripgrep`, `fd`, `less`
+
+Languages and package managers:
+- Node with `corepack` (yarn and pnpm available through corepack)
+- Python 3 with `pip` and `venv`
+
+CLIs:
+- `gh` (GitHub)
+- `jira` (Atlassian)
+
+<!-- TODO: Finalize and publish the exact pinned version manifest per image variant -->
+
+Anything else is yours to add with a `RUN` layer in your own Dockerfile.
 
 ### The workspace
 
-On the satellite's volume itself, the workspace is mounted to:
-> /workspace
+On the satellite's volume, the workspace is mounted at:
 
-Inside of it, it may look a little like this:
+> `/workspace`
+
+Mount it as a named docker volume. Nothing under `/workspace` survives a container replacement otherwise, which silently breaks thread resumption.
+
+Inside, it looks like this:
+
 ```
 /workspace
-  |-- /conversation-thread-id-1
-    CLAUDE.md
-    CODEX.md
-    AGENTS.md
+  |-- <thread-id>/
+    AGENTS.md                        the real instruction file
+    CLAUDE.md                        pointer to AGENTS.md
+    CODEX.md                         pointer to AGENTS.md
     |-- .claude/
     |-- .codex/
-    |-- /repos
-      |-- /repo-name-1
-      |-- /repo-name-2
-      |-- /repo-name-3
-    |-- /artifacts
-  |-- /conversation-thread-id-2
-    CLAUDE.md
-    CODEX.md
-    AGENTS.md
-    |-- .claude/
-    |-- .codex/
-    |-- /repos
-      |-- /repo-name-1
-      |-- /repo-name-2
-      |-- /repo-name-3
-    |-- /artifacts
+    |-- repos/                       integration checkouts, owned by the commander
+      |-- repo-name-1/
+      |-- repo-name-2/
+    |-- members/                     one directory per team member (team mode only)
+      |-- <member-id>/
+        |-- repos/
+          |-- repo-name-1/           git worktree of ../../../repos/repo-name-1
+          |-- repo-name-2/
+        |-- .claude/
+        |-- .codex/
+    |-- artifacts/
+  |-- <thread-id-2>/
+    ...
 ```
 
-Resuming threads is fully available to you to configure, and you can also have them teardown afterwards too.
+Thread IDs are **always generated by the satellite** as UUIDv7 and never accepted from the client. They become filesystem paths, so a client-supplied ID is a path traversal waiting to happen. UUIDv7 also sorts by creation time, which makes listing threads naturally chronological.
 
-The agent files such as CLAUDE.md, CODEX.md, are all pointers towards AGENTS.md. They will point to it with `@/workspace/<thread-id>/AGENTS.md` and this is how we can enable global custom instructions onto the runner.
+The agent files (`CLAUDE.md`, `CODEX.md`) are pointers to `AGENTS.md`. They reference it with `@/workspace/<thread-id>/AGENTS.md`, which is how global custom instructions reach the runner regardless of harness.
 
-Repos are not required in order to perform any work.
+When team mode is off, there is no `members/` directory. The single agent works directly in `repos/`.
 
-### HTTP requests
+Repos are not required to perform any work.
 
-The SDK typically handles this all for you, so you won't need to worry about this.
-The SDK always uses protobuf and always converts it from protobuf into code-ready, usable objects for you in your code (For example, it'll be a Typescript standard JSON object if using the NPM SDK).
+### Parallel checkouts
 
-For text reports and markdown reports, the SDK also provides methods for you to get these if needed. JSON is never used in the SDK.
+Team mode runs several agents at once. If they shared one checkout they would overwrite each other's files and fight over `.git/index.lock`. They do not share one checkout.
 
-This section really only applies if you're making HTTP requests manually (via Postman, for example).
+Each repo is cloned exactly once into `repos/<repo-name>`. Every team member gets a **git worktree** of that clone:
 
-You must use the `Authorization` header that matches the env ARSOX_SECRET environment value in order to access the service.
+```bash
+git -C /workspace/<thread-id>/repos/api \
+  worktree add /workspace/<thread-id>/members/<member-id>/repos/api \
+  -b arsox/<thread-id>/<member-id>
+```
 
-Additionally, you can pass one of x3 values for the `Content-Type` header:
-- `application/protobuf` (default)
-- `application/json`
-- `text/plain`
-- `text/markdown`
+A worktree shares the object store with the primary clone but has its own working directory, its own index, and its own `HEAD`. Disk cost is one working copy per member, not one full clone. Git refuses to check out the same branch in two worktrees, which is exactly the guarantee we want.
 
-When requesting from text/plain or text/markdown, you'll get UTF-8 human-readable information.
-The API will generate text-based reports for each of these.
+Branch layout:
 
-The SDK can be used to run multiple conversation threads at the same time, which each have their own commander + team (unless team mode is off).
+| Branch | Owner | Purpose |
+|---|---|---|
+| the repo's configured base branch | nobody | untouched reference |
+| `arsox/<thread-id>` | commander | the integration branch, the only branch ever pushed |
+| `arsox/<thread-id>/<member-id>` | one team member | that member's private work |
+
+#### Integration protocol
+
+Members never merge into the integration branch themselves. They request it, and Arsox serializes the requests so exactly one merge runs at a time.
+
+1. A member commits to its own branch in its own worktree.
+2. The member calls the `request_integration` MCP tool with the repo and a summary of the change.
+3. Arsox queues the request and, when its turn comes, runs `git merge --no-ff` of the member branch into `arsox/<thread-id>` inside the commander's checkout.
+4. **Clean merge**: the member is notified, and every other member receives an `integration_landed` event telling it to merge the integration branch back into its own worktree to pick up the new work.
+5. **Conflict**: the merge is aborted, and the conflicting hunks are returned to the requesting member. That member merges the integration branch into its own branch, resolves the conflict in its own worktree, and requests integration again. The integration branch is never left in a conflicted state.
+
+Because merges are serialized and conflicts are pushed back to the member that caused them, the integration branch is always buildable and the commander never has to arbitrate a three-way conflict it did not create.
+
+Member branches are local only and are deleted at teardown. Only `arsox/<thread-id>` is ever pushed, and only if push permissions allow it.
+
+### Wire protocol
+
+The SDK handles all of this for you. **Protobuf is always on the wire, in both directions, and the SDK converts it into ordinary native objects.** You never touch a protobuf type: in the Node SDK you get plain TypeScript objects, in Python you get dataclasses, in Rust you get structs. JSON is never the wire format for the SDK, but what you hold in your hands is an ordinary object in your language.
+
+For text and markdown reports, the SDK exposes dedicated methods.
+
+The rest of this section applies only if you are making HTTP requests by hand, from Postman or curl.
+
+**Authentication.** Every request carries:
+
+```
+Authorization: Bearer <ARSOX_SECRET>
+```
+
+The satellite compares in constant time, so the secret cannot be recovered by timing the comparison.
+
+**Request bodies** declare their own encoding with `Content-Type`:
+
+| Value | Meaning |
+|---|---|
+| `application/protobuf` | default, and what the SDK always sends |
+| `application/json` | the same contract rendered as JSON |
+
+**Responses** are negotiated with `Accept`:
+
+| Value | Meaning |
+|---|---|
+| `application/protobuf` | default, and what the SDK always requests |
+| `application/json` | the same contract rendered as JSON |
+| `text/plain` | UTF-8 human-readable report |
+| `text/markdown` | markdown report |
+
+`Content-Type` describes the body you are sending. `Accept` describes what you want back. They are independent, so a JSON request may ask for a markdown response.
+
+Text and markdown responses are generated reports meant for human eyes. They are not a parseable API and their layout may change between minor versions.
+
+### Event streaming
+
+Realtime events travel over **WebSocket**
+
+There are two kinds of socket:
+
+**Thread socket**, one per active thread:
+```
+wss://<satellite>/v1/threads/<thread-id>/stream
+```
+Carries everything that happens inside that thread: agent messages, tool calls, team chat, checker output, integration events, artifacts.
+
+**Control socket**, one per satellite, optional:
+```
+wss://<satellite>/v1/stream
+```
+Carries satellite-level lifecycle only: thread created, thread destroyed, queue depth, health transitions, budget warnings. It never carries thread content.
+
+**Many consumers per socket are allowed.** A horizontally scaled host application can have several replicas subscribed to the same thread, and each receives every event. This matters: a single-subscriber design would force you to designate one special replica and fan out internally.
+
+**Framing.** Binary frames carry protobuf. Text frames carry JSON, and you opt into JSON at handshake time with the `arsox.json.v1` subprotocol. Default is binary protobuf.
+
+**Resumption.** Every event carries a `sequence` number, monotonic per thread, and is persisted before it is sent. Reconnect with `?from_sequence=<n>` to replay everything you missed, so a network blip costs you nothing. Retained history is bounded by the thread's lifetime, so an expired thread cannot be replayed.
+
+**Backpressure.** The satellite buffers a bounded number of undelivered events per consumer. A consumer that falls too far behind is closed with `consumer_lagged` rather than being silently starved or allowed to exhaust satellite memory. Reconnect with `from_sequence` and you lose nothing. Slow consumers degrade loudly, never quietly.
 
 ### State management
 
-Internally, the API that orchestrates the Satellites has a state. 
-Arsox ships with it's own sql-like database that runs with it in the API.
-Database files are stored in `/var/arsox/database`.
+The API that orchestrates the satellite holds its state in an embedded SQLite database, accessed through `sqlx` in WAL mode. There is no external database to run.
+
+Database files live in `/var/arsox/arsox.db`. **Mount `/var/arsox` as a named volume.** The database holds threads, queued turns, event history, and lifetime statistics, so losing it means losing every thread you intended to resume.
 
 #### Lifetime statistics
 
-Lifetime statistics will keep track of all statistics.
-Things like, lifetime tokens used (total, input, output) per LLM model.
-Total tokens used for each thread (total, input, output).
+Lifetime statistics track totals per LLM model and per thread: total, input, and output tokens, plus estimated cost.
 
 In a human readable format via HTTP request:
+
 ```
 Model: Opus 4.8 [1m]
 1,234,567 total tokens
@@ -158,50 +256,132 @@ Model: Opus 4.8 [1m]
 1,234,567 output tokens
 ```
 
-Statistic events will NOT be emitted down the SSE socket when it changes, unless the SDK explicitly opts-in in stream settings, as it may change very rapidly.
-This can be received with a GET request through the SDK.
+Statistics events are **not** emitted over the socket by default, because they change very rapidly. Opt in through stream settings if you want them. Otherwise fetch them with a GET request through the SDK.
+
+### Job queue
+
+Each thread processes **exactly one turn at a time**, forever. Turns within a thread are strictly FIFO. This is not tunable, because a thread is a conversation and conversations are sequential.
+
+Threads run concurrently with each other, bounded by `ARSOX_MAX_CONCURRENT_THREADS` (default `4`). Raise it if the satellite has the CPU and memory, remembering that team mode multiplies the real process count.
+
+- **Enqueue while busy.** The SDK may submit a turn while another is running. It joins the thread's queue and returns a turn ID immediately.
+- **Cancel.** Any queued or running turn can be cancelled by ID. A running turn is asked to stop cooperatively first, then killed after a grace period. Work already committed to a member branch survives.
+- **Depth cap.** Once a thread's queue reaches its cap, further submissions are rejected with `QUEUE_FULL` rather than accumulating without bound.
+- **Persistence.** The queue lives in the embedded database and survives a satellite restart.
+
+### Health and readiness
+
+| Endpoint | Auth | Purpose |
+|---|---|---|
+| `GET /healthz` | none | liveness, always cheap, never touches the database |
+| `GET /readyz` | none | readiness: database open, `/workspace` writable, LLM proxy reachable |
+| `GET /v1/version` | none | satellite version and proto contract version |
+| `GET /v1/status` | bearer | full satellite state, thread list, queue depths |
+| `GET /metrics` | bearer | Prometheus metrics, opt in with `ARSOX_METRICS=true` |
+
+The unauthenticated endpoints expose no thread content and no configuration, only the liveness facts an orchestrator needs before it holds a credential.
+
+### Resource limits
+
+An agent with a shell can fill a disk. These are enforced, not suggested.
+
+- **Per-thread disk quota** for its workspace subtree, default 10 GiB. Exceeding it fails the turn with `DISK_QUOTA_EXCEEDED` rather than taking down the satellite. Configurable per thread.
+- **Per-satellite memory and CPU** are the container's, so set them at the docker level with `--memory` and `--cpus`. Team mode runs several harness processes at once and each one is a real memory consumer.
+- **Artifact size cap**, default 100 MiB per thread, to keep a runaway log out of your artifact download.
+
+### Versioning and compatibility
+
+Protobuf definitions live in a single root `proto/` directory, package `arsox.<domain>.v1`, generated with `buf`. Field numbers are permanent and deleted fields are reserved, so the contract only ever grows within a major version.
+
+- The satellite's proto major version is reported by `GET /v1/version`.
+- SDK major versions track proto major versions. An SDK 1.x talks to any satellite serving `arsox.*.v1`.
+- An SDK **refuses** to talk to a satellite with a higher proto major and says so clearly, rather than failing later with a confusing decode error.
+- An SDK talking to a satellite with a higher minor version warns once and proceeds. Additive fields it does not know about are ignored.
+
+Pin your image tag and your SDK version together.
+
+### Errors
+
+Every error, on every transport, is the same shape: a stable enum code, a human message, a `retryable` flag, and optional structured details. Match on the code, never on the message.
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `UNAUTHENTICATED` | no | missing or wrong bearer token |
+| `PERMISSION_DENIED` | no | the operation is blocked by thread permissions |
+| `INVALID_ARGUMENT` | no | malformed request |
+| `THREAD_NOT_FOUND` | no | unknown thread ID |
+| `THREAD_EXPIRED` | no | the thread's idle TTL elapsed and its workspace is gone |
+| `QUEUE_FULL` | yes | thread queue depth cap reached |
+| `BUDGET_EXHAUSTED` | no | the thread or turn hit its token or cost ceiling |
+| `DISK_QUOTA_EXCEEDED` | no | the thread exceeded its workspace quota |
+| `CHECKER_FAILED` | no | checkers failed and the commander declined to skip them |
+| `INTEGRATION_CONFLICT` | yes | a member's branch conflicts with the integration branch |
+| `HARNESS_CRASHED` | yes | the Claude or Codex CLI process died and could not be recovered |
+| `ALL_LLM_ENDPOINTS_EXHAUSTED` | yes | every configured LLM endpoint failed its retry policy |
+| `CONSUMER_LAGGED` | yes | a stream consumer fell too far behind and was disconnected |
+| `INTERNAL` | yes | a satellite bug, please report it |
+
+### Timeouts
+
+Every long-running operation has a bound, and every bound is configurable per thread.
+
+| Operation | Default | On expiry |
+|---|---|---|
+| single exec command | 30 minutes | the command is killed, output returns to the agent as a failure |
+| single LLM request | 10 minutes | counts as an endpoint failure and triggers the retry or failover policy |
+| turn wall clock | unset | see [Budgets and cost ceilings](#budgets-and-cost-ceilings) |
+| harness idle (no output at all) | 15 minutes | the harness is considered hung and restarted once |
+
+### Failure recovery
+
+**The harness crashes.** Arsox captures the exit code and the last output, then restarts it once with the same context. If it dies again, the turn fails with `HARNESS_CRASHED` and everything already committed survives. In team mode only the crashed member restarts, and the commander is told what happened so it can reassign.
+
+**Every LLM endpoint fails.** The turn ends with `ALL_LLM_ENDPOINTS_EXHAUSTED`. The thread and its workspace are preserved, so once you add working credentials a new turn resumes from where the last one stopped.
+
+**The satellite restarts.** Threads and queues restore from the database, and workspaces restore from the volume. A turn that was in flight is marked `INTERRUPTED`. By default the thread waits for you to decide, and you can configure it to resume automatically instead.
+
+**A checker fails.** See [Repo settings](#repo-settings). Checker failure is a normal outcome routed back to the commander, not a crash.
 
 ## Settings
 
-There's many settings available to help you on your journey.
-These are passed from the SDK and they let you take full control of the satellite.
+There are many settings available. These are passed from the SDK and let you take full control of the satellite.
 
 ### Repo settings
 
-If you have a git repo that you'd like to leverage, this is how you can do it.
+If you have a git repo you want to work in, this is how.
 
-First, we need a repo endpoint. This could look like:
-> https://github.com/JalapenoLabs/arsox-satellites.git
-> git@github.com:JalapenoLabs/arsox-satellites.git
+First, a repo endpoint:
 
-The satellite will attempt to clone it with submodules.
+> `https://github.com/JalapenoLabs/arsox-satellites.git`
+> `git@github.com:JalapenoLabs/arsox-satellites.git`
+
+The satellite clones it with submodules:
+
 ```bash
 git clone --recurse-submodules
 ```
 
-This works well if your repository and submodules are all public. If they're private, you will need to provide authentication.
+This works if your repository and submodules are all public. If they are private, provide authentication: either an SSH private/public key pair or a PAT.
 
-We will expect you to provide one of these from the SDK:
-- SSH private/public key pairs
-- A PAT token to clone it from
 <!-- TODO: Revisit if more auth forms are supported -->
 
-We also allow you to provide repo set up commands (commands such as `yarn install` or `pip3 install`).
-This can be a multi-line string, and you can use semi-colons or newlines to separate each command out.
+You can also provide repo setup commands (`yarn install`, `pip3 install -r requirements.txt`, and so on) as a multi-line string, using semicolons or newlines to separate them.
 
-Multiple repos can be provided if desired.
+Multiple repos can be provided.
 
-Repos can also be configured with a checker command.
-This can be a multi-line string, and you can use semi-colons or newlines to separate each command out.
-Commands separated by newlines are done in parallel with each other, and do NOT fail fast.
-Commands separated by semi-colons do fail fast and block commands below them.
+#### Checkers
 
-The checker command will run after claude/codex determines that it's work is fully complete.
-You can then run verification on it, such as `yarn lint` or `npm run typecheck` and if it doesn't exit as code 0 then it will re-awaken the claude/codex instances to fix it or ignore it before exiting fully.
+Repos can be configured with a checker command, also a multi-line string.
 
-This is a nice way to help add extra verification to your LLM's work before allowing it to return to your SDK as completed. If a checker is provided, the SDK will include it in it's report.
+- Commands separated by **newlines** run in parallel and do **not** fail fast.
+- Commands separated by **semicolons** fail fast and block everything below them.
+
+The checker runs after the agents decide their work is complete. Use it for verification such as `yarn lint` or `yarn typecheck`. If a command exits nonzero, the agents wake back up to fix it or to justify ignoring it before exiting fully.
+
+This adds real verification to your LLM's work before it returns to your SDK as completed. If a checker is provided, the SDK includes its results in the report.
 
 An example checker:
+
 ```
 yarn install;
 yarn lint
@@ -210,266 +390,365 @@ yarn generate && yarn build
 ; yarn deploy --dry-run
 ```
 
-In this above example, yarn install will run first and nothing else will run until it finishes because the semi-colon dictates that it must be awaited.
-Then, the lint + typecheck + generate/build jobs will be ran in parallel. If typecheck fails it won't block the others (no failing fast).
-yarn deploy won't fire until all of the steps before it have successfully completed. This means that if typecheck failed, deploy will never run (intentionally).
-These logs are captured and sent to the LLM automatically.
+Here `yarn install` runs first and nothing else starts until it finishes, because the semicolon makes it a barrier. Then lint, typecheck, and generate/build run in parallel. If typecheck fails it does not block the others. `yarn deploy` never fires until everything above it has succeeded, so a failed typecheck means deploy never runs, intentionally. All of these logs are captured and sent to the LLM automatically.
 
 ### Github
 
-You can pass a PAT into the settings, which will allow the agents to be able to use Github.
-This is highly recommended, and will enable the agent to run any needed GH CLI command.
+Pass a PAT into the settings to let the agents use GitHub. This is highly recommended and enables any needed `gh` command.
 
 When creating the PAT, we recommend allowing:
-- <!-- TODO: Populate for PRs, reading GH actions, reading vars/secrets -->
+<!-- TODO: Populate for PRs, reading GH actions, reading vars/secrets -->
 
 Possible settings:
-- Allow/disallow merging of PRs (defaults to allowed by default).
-- <!-- TODO: Populate -->
+- Allow or disallow merging PRs (default: allowed)
+<!-- TODO: Populate -->
 
-Today, Github will be supported first-class.
-We will develop this with polymorphism, as to easily allow other providers (Gitlab and Bitbucket) to be used in the future.
+GitHub is supported first-class today. The integration is built polymorphically so GitLab and Bitbucket can follow.
 
 ### Jira
 
-You can pass a Jira PAT into the settings also, which will allow the agent to lookup items.
+Pass a Jira PAT to let the agent look up items.
 
 Possible settings:
-- Allow/disallow moving ticket statuses (defaults to allowed)
-- Allow/disallow commenting on tickets (defaults to allowed)
-- <!-- TODO: Populate -->
+- Allow or disallow moving ticket statuses (default: allowed)
+- Allow or disallow commenting on tickets (default: allowed)
+<!-- TODO: Populate -->
 
 ### Custom remote ENV
 
-You can pass an array of objects of custom env variables to have Claude leverage.
+Pass an array of custom environment variables for the agents to use:
+
 ```json
 [
   { "key": "", "value": "", "isSecret": true }
 ]
 ```
 
-Only `key` and `value` are required.
-If isSecret is not provided, then it will default to `true` for security purposes.
-Every secret always gets scanned for in the data before it's sent back to the SDK sender, and will always be hidden.
+Only `key` and `value` are required. If `isSecret` is omitted it defaults to `true`, because defaulting to secret fails safe. Every secret is scanned for and hidden before anything leaves the satellite. See [Secret redaction](#secret-redaction).
 
-### Ephemeral / cleanup
+### Ephemeral and cleanup
 
-Whenever you spawn a new thread / session, you are required to specify how long it should exist on disk for.
+Every thread must declare a lifetime when it is created. This is required, always, as a safety net against forgotten workspaces filling a disk.
 
-The lifetime value is measured in minutes, and will clean up it's workspace after N minutes. This is always required, as a safety net.
+The lifetime is an **idle TTL measured in minutes**. It resets on every turn, and on any SDK interaction with the thread. A thread with a 60 minute TTL that is actively working for three days is never collected, and the same thread sitting untouched for 61 minutes is. This is what you want: the alternative, wall clock from creation, deletes long-running work mid-flight.
 
-You can also have it immediately delete once the thread calls are completed.
+You can also mark a thread to delete itself the moment its turns complete.
+
+When a thread is collected, its entire workspace subtree is removed, including member worktrees and any artifacts you did not download.
+
+### Budgets and cost ceilings
+
+Team mode can run nine LLM contexts at once for days. Without a ceiling, a single prompt loop is a very expensive invoice. Budgets are therefore **required** at thread creation, with an explicit `unlimited` value if that is genuinely what you want. Making the ceiling a conscious decision rather than a default is the whole point.
+
+| Setting | Scope | Default |
+|---|---|---|
+| `maxTokensPerTurn` | one turn, all agents combined | required |
+| `maxCostPerThread` | the thread's entire life, in USD | required |
+| `maxWallClockPerTurn` | one turn | optional, unset |
+
+Enforcement is deterministic, not advisory. Every model request passes through the Arsox LLM proxy, so the proxy counts tokens and refuses further completions once the ceiling is reached. An agent cannot talk its way past it.
+
+At 80% of any ceiling, a `budget_warning` event is emitted so your application can react before the wall.
+
+When a ceiling is hit, the turn ends with `BUDGET_EXHAUSTED`. This is a graceful stop, not a kill: the commander is told the budget is gone, work already committed to branches survives, and artifacts already produced remain downloadable.
 
 ### LLM to use
 
-You can pick whether to use the Claude CLI harness or the Codex CLI harness. By default, we use Claude.
-This is interesting, you could use Anthropic Claude models such as `Opus 5 [1m]` with the Codex CLI.
+Pick the Claude CLI harness or the Codex CLI harness. Claude is the default.
 
-As we expand, we plan to also add support for other LLMs such as (but not limited to):
+The two are independent of the model, which is the interesting part. You can run an Anthropic model such as `Opus 5 [1m]` under the Codex CLI.
+
+As we expand we plan to support more LLMs, including but not limited to:
 - Deepseek
 - Bedrock
-- <!-- TODO: Add others here! -->
+<!-- TODO: Add others here! -->
 
-We are using a LiteLLM sidecar service to help transform request/response LLM shapes for us, to match the required standard shapes for each service. The LiteLLM service will transform an inbound Deepseek conversation request into a Codex-compatible response.
+We use a LiteLLM sidecar to transform request and response shapes into whatever each service requires. It converts an inbound Deepseek conversation request into a Codex-compatible response, and so on.
 
-LiteLLM on it's own is a HUGE ecosystem, it ships with a database, API, and more. However, there's a much lighter version of it that ships only the message request/response transforming capabilities that we are seeking. We use this lighter method for supporting a significantly larger array of LLM models. Anything that LiteLLM supports, we can support too.
+LiteLLM as a whole is a huge ecosystem that ships a database, an API, and much more. We use only its lightweight transformation layer, which is the part we actually want, and which gives us a very large model catalog for very little surface area. Anything LiteLLM supports, we can support. The sidecar is pinned to an exact version like everything else.
 
 We support Anthropic auth tokens (subscription access/refresh tokens, `claude setup-token` tokens, and API keys) and OpenAI auth tokens (subscription access/refresh tokens and API keys).
 
-We also support using custom LLM endpoints, for example self-hosting Azure Anthropic models.
+We also support custom LLM endpoints, for example self-hosted Azure Anthropic models.
 
-Additionally, you can pass multiple LLM endpoints into each job. If one endpoint errors (maybe usage is filled up, or maybe OpenAI is hitting a 529), then it will switch to the next. The order matters, it will proceed from one to the next. This will allow you to stack multiple subscriptions on top of each other or multiple API keys. You can also specify the same LLM endpoint + key but a different model, for example.
+#### Endpoint failover
 
-When defining models, you can also configure it's retry count. By default it will retry up to 10 times with a increasing timeout/wait between them, starting with a 5 second delay and up to a 60 second delay between each. In case you want it to retry up to N times on a 529 or 429 rate limit error code. You can also specify exact error codes to retry on, other than the standard 529/429 codes.
+You can pass multiple LLM endpoints per job. If one errors, because usage is exhausted or the provider is returning 529s, the satellite moves to the next. Order matters and is followed strictly. This lets you stack subscriptions, stack API keys, or list the same endpoint twice with different models.
+
+Each endpoint carries its own retry policy. By default it retries up to 10 times with increasing backoff, starting at 5 seconds and capping at 60 seconds, on 429 and 529. You can change the count, the backoff, and the exact set of status codes that trigger a retry.
+
+Failover is correct but it is not free, and you should order your endpoints knowing why:
+
+- The conversation history is re-serialized into the new provider's shape, and tool-call IDs are rewritten because providers format them differently.
+- The cached prompt prefix at the old provider is gone. The first request to the new endpoint pays full price for the entire history, which on a long thread is a real cost spike rather than a rounding error.
+
+It's recommended to put your cheapest and most reliable endpoint first, and treat later entries as genuine fallbacks rather than a load-balancing pool.
 
 ### Permissions
 
-You can pass along:
-- Web permissions (all / none / preset / custom domain list) (defaults to preset).
-- Blacklisted commit/push branches (you can blacklist pushing commits directly to `main` for example).
-- Whitelist of exec commands that these CLIs can run (defaults to allow all).
-- Allow/disallow pushing commits (defaults to allowed).
-- <!-- TODO: Add more here once added! -->
+Permissions are **deterministic**. A permission that is merely written into a prompt is a suggestion, and an agent under pressure will route around a suggestion. Every control below is enforced by infrastructure the agent cannot reach: agents run as an unprivileged `arsox` user, and the enforcement points are owned by root.
+
+| Control | Default | How it is enforced |
+|---|---|---|
+| Network egress | preset allowlist | The container has no default route. All traffic goes through the Arsox egress proxy, which enforces the domain list. Options: all, none, preset, custom list. |
+| Exec allowlist | preset allowlist | Harness shell calls are brokered by Arsox. Commands outside the list are rejected by exact argv match, and their binaries are not on the agent's `PATH`. |
+| Push at all | allowed | A root-owned `pre-push` hook, installed through `core.hooksPath` outside every worktree, plus a git credential helper that refuses to release credentials for a denied push. |
+| Protected branches | none | Same hook and credential helper. Blacklist `main` and no refspec, config edit, or clever remote gets around it. |
+| Secrets in pushed content | blocked | The same `pre-push` hook scans the outgoing diff. See [Secret redaction](#secret-redaction). |
+| Redaction override | available | The `override_redaction` MCP tool. Setting `allowRedactionOverride: false` unregisters the tool entirely, so no agent in the thread can reach it. |
+| PR merging | disallowed | `gh` is brokered by Arsox, which rejects merge calls that policy forbids. |
+| Filesystem writes | member scope | Unix ownership. A team member can write its own directory and the shared artifacts directory, nothing else. |
+| Token and cost ceilings | required | The Arsox LLM proxy, which every model request traverses. |
+
+Instructions written into `AGENTS.md` are **advisory**, and always will be. They shape behavior, they do not constrain it. Never rely on an `AGENTS.md` line for anything that matters if it is violated.
+
+<!-- TODO: Add more here once added! -->
 
 ### Prompt
 
-You can provide a global prompt which will be populated into `/workspace/<thread-id>/AGENTS.md`.
-CLAUDE.md and CODEX.md will automatically be created for the harness and point at this universal agents file, to fully ensure that it's always loaded.
-There may be prompts placed into the header of that AGENTS.md file from the Arsox system, but then your own details will get populated below.
+Provide a global prompt, which is written into `/workspace/<thread-id>/AGENTS.md`. `CLAUDE.md` and `CODEX.md` are created automatically and point at that universal agents file, so it is always loaded regardless of harness. Arsox places its own header at the top of `AGENTS.md`, and your content follows below it.
 
-### Secret exposure logging
+### Secret redaction
 
-When logs, conversation, and data is streamed back to the remote viewer via SDK then we ensure no secrets are ever leaked in the logs. This is data from the env marked as `isSecret`.
+Anything marked `isSecret` in [custom env](#custom-remote-env) is redacted everywhere it could escape the satellite, not just in the log stream. The stream is the obvious channel and the least dangerous one. A secret committed to a repo and pushed to GitHub is the leak that actually hurts.
 
-You have 3 options for how secrets are securely trimmed out of logs:
-- Anonymous (`sk_ant_12345` becomes exactly x6 stars `******`)
-- PrefixShown (`sk_ant_12345` reveals the first N chars with exactly x6 stars, becomes `sk_ant_123_******`, where N is configurable and is default 8 or 20%, whichever is lower)
-- PostfixShown (`sk_ant_12345` reveals the last N chars with exactly x6 stars, becomes `******nt_12345`, where N is configurable and is default 8 or 20%, whichever is lower)
-- HybridShown (`sk_ant_12345` reveals the first and last N chars with exactly x6 stars, becomes `sk_an******2345` where N is configurable is default 5 or 10%, whichever is lower.)
+Redaction applies to:
+- stream events and their payloads
+- text and markdown reports
+- team chat and direct messages between members
+- checker output and command logs
+- **file contents in commits, and commit messages**
+- **PR titles, bodies, and review comments, and Jira comments**
+- artifact contents, at upload time
 
-Additionally, instead of exactly 6 stars you can configure it to show a different exact number of stars OR honor it's length by setting it to less than 0 (`-1`). When set to 0, it will always show at least 1 star.
+The `pre-push` hook is the hard gate for git. A push containing an unredacted secret is refused outright, so a leak requires a deliberate override rather than an oversight.
+
+#### Redaction modes
+
+For a secret of length `L`, `N` is the number of revealed characters:
+
+| Mode | Rule | `sk_ant_12345` (L=12) |
+|---|---|---|
+| `Anonymous` | reveal nothing | `******` |
+| `PrefixShown` | first `N`, `N = floor(min(8, 0.20 × L))` | `sk******` |
+| `PostfixShown` | last `N`, same `N` | `******45` |
+| `HybridShown` | first and last `N`, `N = max(1, floor(min(5, 0.10 × L)))` | `s******5` |
+
+Two safety rules override the table:
+- A secret shorter than 8 characters is always `Anonymous`. There is no safe prefix of a short secret.
+- If the computed reveal would expose more than half the secret, it falls back to `Anonymous`.
+
+`PostfixShown` is usually the most useful when you need to tell two credentials apart in a log, because the tail of a key is distinguishing while the head is often a shared vendor prefix.
+
+#### Star count
+
+The mask is six stars by default, independent of the secret's length. Configure it:
+
+- any positive integer: exactly that many stars
+- `0`: clamped to `1`, because a mask with no stars is invisible
+- `-1`: mirror the redacted length, one star per hidden character
+
+Be deliberate about `-1`. Mirroring the length leaks the length, which is real information about a credential. The fixed count is the default for that reason.
+
+#### Overrides
+
+Sometimes putting a secret in a repo is the actual task, for example writing a deploy manifest into a private repository. The default is to refuse, and the refusal can be overridden.
+
+**Whether to override is the agent's decision, made in response to an explicit human instruction, not an SDK toggle.** An agent that has been told plainly to commit a specific value calls the `override_redaction` MCP tool naming the exact secret and stating its justification in writing. Every override:
+
+- is scoped to that one secret and that one operation, never blanket and never persistent
+- emits a high-priority stream event the moment it happens
+- appears in the turn's report with the justification the agent gave
+
+So the guardrail holds by default, an explicit human instruction can move it, and nothing moves quietly.
+
+#### The kill switch
+
+The SDK does not decide any individual override, but it does decide whether the capability exists at all.
+
+Set `allowRedactionOverride: false` on a thread and **the `override_redaction` tool is never registered for that thread.** No agent in it, commander or member, can override redaction for any secret, for any reason, no matter what it is told.
+
+The distinction matters. Removing the tool is strictly stronger than gating its behavior: there is no call to make, no refusal to argue with, and no instruction that can reach it. A gate can be talked around, because a persuasive prompt is exactly the thing a gate has to evaluate. An absent tool cannot be.
+
+The default is `true`, which keeps the agent's judgment in play for the case the feature exists to serve. Set it to `false` when a thread runs prompts you do not fully control, or when the repos it can push to are ones where a single leaked credential is unacceptable. Under `false` the `pre-push` hook is an absolute gate rather than a strong default.
 
 ### Streaming settings
 
-You can opt-out of what data you receive. By default, you'll receive all events and data streamed via SSE.
+By default you receive every event over the socket. You can toggle off specific event types if you want less traffic.
 
-You can toggle off specific events, by default you opt-in to all events.
-
-There is always **ONE** SSE socket per Satellite. Never more, never less.
-
-It doesn't matter if you're using Claude CLI or CodexCLI , you'll always get the same shape of data.
-If using the Claude CLI, for example, and it emits a `tool call started` event, then you'll get a standardized shape via the SDK. If you switch to the Codex CLI, which emits the same kind of event but a slightly different shape, then it'll be conformed to the same standardized shape via the SDK.
+It does not matter whether you are running the Claude CLI or the Codex CLI. If Claude emits a `tool call started` event you get the standardized shape, and if you switch to Codex, which emits the same event with a different shape, it is conformed to that same standardized shape. This is the point of the whole project.
 
 ## Team mode
 
-By default, Satellites use a "team mode." You can opt out of this if you wish.
+Team mode is **opt in, default off**.
 
-Opting out will feel a lot more like a standard Claude/Codex session, where you talk to a single agent and a single context limit for it. It's role will be "agent" in this mode.
+With it off, the satellite behaves like a standard Claude or Codex session: one agent, one context window, role `agent`. This is the right default. A first task should not silently spawn nine LLM contexts and the bill that comes with them.
 
-While in team mode, there will be a root "commander" LLM which is responsible for seeing the entire task through it's completion. It's first task on each turn will be to designate what other team members it will need. This does NOT mean the built-in sub-agents that it has, instead it will designate other LLM team members to use.
+With it on, a root **commander** owns the task through to completion. Its first act each turn is to decide which team members it needs. These are not the harness's built-in sub-agents, they are peer LLM team members with their own context windows and their own worktrees.
 
-For example, the commander may choose to spawn a team with (but not limited to):
-- Architect team member
-- Backend team member
-- Frontend team member
-- CI team member
-- QA team member
-- Unit test team member
-- Doc writer team member
+A commander might spawn:
+- Architect
+- Backend
+- Frontend
+- CI
+- QA
+- Unit test
+- Doc writer
 
-These team members will be able to communicate with each other (a team chat and a DM chat).
-Arsox will provide all of the infrastructure necessary for them to easily communicate with each other and know the assignments.
+Team members communicate through a team chat and through direct messages. Arsox provides that infrastructure, so members always know their assignments and can reach each other.
 
-These team members can then spawn their own sub-agents natively.
-This creates a 3 tiered tree of agents.
+Members can also spawn their own native sub-agents, which makes three tiers: commander, members, sub-agents.
 
-This drives 3 very valuable features:
-1. Max parallelizm.
-Code such as backend + frontend + unit tests can all be created at nearly the same time.
-They can move quickly and coordinate.
-2. Max efficiency of context. 
-If we only get an average of 1 million context per LLM agent, then why have one agent do both frontend + backend? There's strong value in the full ownership of context. Having a frontend agent primarily dominate frontend files, and having a backend agent primarily dominate backend files... Now we have 2m total context and each context lane's quality is significantly more optimized per-role.
-3. Quality of ownership.
-When team members take ownership of certain aspects of the application, they can be encouraged to do better and perform better best-industry practices. It also encourages collaboration and micro-decisions made by team discussion encourages better product direction + decisions. A team can debate things, work through issues, generate ideas. A team will always beat the individual.
+### Why a team
 
-Competition is also encouraged.
+**Maximum parallelism.** Backend, frontend, and unit tests are written at nearly the same time, each in its own worktree, coordinating as they go.
+
+**Maximum context efficiency.** If each agent gets roughly a million tokens of context, having one agent do both frontend and backend wastes the budget. A frontend member dominates frontend files and a backend member dominates backend files, so you have two million tokens total and each lane is far more focused.
+
+**Ownership.** When a member owns an area it can be held to a higher standard in that area. Collaboration produces micro-decisions that a single agent never surfaces: a team debates, works through disagreements, and generates options. A team beats the individual.
+
+### What the commander observes
+
+The commander is a manager, not a surveillance system, and this distinction is what keeps the context efficiency argument true.
+
+The commander **does** see:
+- the team chat in full
+- direct messages between members
+- integration requests and their outcomes
+- checker results
+- escalations a member deliberately raises
+
+The commander **does not** see:
+- individual tool calls
+- file reads and writes
+- a member's private reasoning
+- sub-agent activity inside a member
+
+If the commander ingested every file operation, all context would reconverge into one window and it would exhaust its budget faster than a single agent would have. It watches communication between the team, not the work itself. Members surface what matters by saying it out loud.
+
+The SDK still captures everything, from every member: activity, tool calls, discussions. Full observability is yours. It is the commander's context that is kept narrow, not your visibility.
+
+### Competitive framing
+
+Team members are told they are competing with each other, and the commander is told it is competing with other commanders it cannot see.
+
 > The team members play against each other, and the commander plays against the other commanders.
 
-The commander doesn't really have access to other commanders, but it must imagine that it is. It must have the mindset that it's team must be as successful as possible.
-Speed is encouraged over quality. It could take several hours or even days to get something done, that is 100% fine.
-The competition is to have the highest quality output and refactor/refine their work to be the best. The most thoroghly tested, thought through, well documented, and most production-ready.
+Be clear about what this is: **a motivational prompting technique with unproven effect, not a scheduling or quality mechanism.** Nothing in Arsox scores, ranks, or routes work based on it. It costs nothing but the words in the prompt, and it may sharpen output. It is framing, and we would rather say so than dress it up as engineering.
 
-The commander LLM will watch the team chat and help ensure everyone stays on track. The commander can always see all DMs, if the frontend team member messages the backend team member directly then the commander sees and tracks it.
-At the very end of the session, the commander determines what files are an artifact, and typically the commander responds back to the conversation via the SDK directly.
-The SDK captures all team member's logs (activity, discussions, tool calls, etc).
-The commander also ensures fair competition and assigns/retracts points (1, 2, or 3) as team members get things done.
+The competition is for the highest quality output: the most thoroughly tested, the most thought through, the best documented, the most production-ready. **Quality is encouraged over speed.** A task taking hours or even days is completely fine.
 
-This is configurable, you could drive a limit of team members that it can spawn.
-By default, it will not spawn more than 8 team members.
-By default the commander LLM chooses the roles (not from a bucket, but from a suggestion list).
-You can also provide your own suggested roles to ADD to the suggestion list.
+### Team lifecycle
 
-Notably, the team always spawns together and despawns together.
-Additionally, the commander may spawn or despawn team members through the run, it is not limited to what it started with.
-It can do this with MCP that's provided to the commander via Arsox.
+The team spawns together and despawns together. The commander can also spawn or despawn members mid-run through an MCP tool Arsox provides, so it is not locked into the roster it started with.
+
+By default a commander will not spawn more than 8 members, and you can raise or lower that cap. The commander chooses roles itself, guided by a suggestion list rather than restricted to a fixed set. You can add your own roles to that suggestion list.
+
+At the end of a session the commander decides which files are artifacts, and it is typically the commander that responds back through the SDK.
 
 ## Human in the loop
 
-By default, the human is in the loop. You can disable this if you'd like, and let the team fully run the entire task.
-The LLM can ask for approvals (Do you approve this command / approach) and it can ask for clarification questions.
+The human is in the loop by default. Disable it and the team runs the entire task alone.
 
-For clarification questions, it'll behave just like how Claude Code CLI behaves. It can ask up to 5 questions at a time (minimum 1) in one request. One set of questions per thread, it should NEVER allow a scenario such as x10 queued questions, where there are x2 queued question sets at the same time.
+Agents can ask for approvals ("do you approve this command, this approach") and for clarification.
 
-The question can have a title, up to x5 choosable options (each with a title and sub-description).
+**Only the commander asks.** Team members escalate to the commander, and the commander decides whether the question is worth your attention. Without that funnel, eight members would each queue their own questions.
 
-The SDK must respond to all questions in one response, not partially.
-If x5 questions are asked, the SDK must respond with either answering all x5 in the response message or respond by declining all x5 altogether.
-That being said, each response can be freeform or it can partially declined through individual responses.
-The SDK can respond to questions 1-4 by giving it back it's own options, or a freeform string response. Then perhaps question 5 can be marked as declined to answer.
-However, the response shape must be given all x5 at the same time when sent.
+Clarification behaves like the Claude Code CLI. One question set at a time per thread, containing between 1 and 5 questions. There is never a second question set queued behind the first, and never ten questions waiting.
 
-This can all be disabled by the SDK, and you can make the LLM use it's own best judgement to complete the task.
-This can be a little dangerous but is up to the SDK's implementer.
+Each question has a title and up to 5 selectable options, each with its own title and sub-description.
+
+**The SDK must answer the whole set at once.** If 5 questions are asked, the response carries all 5. Individual answers may differ in kind: questions 1 through 4 can be answered with a chosen option or with freeform text, and question 5 can be declined. What you cannot do is answer three now and two later. The response shape is all of them, together.
+
+If a question set goes unanswered past the thread's configured question timeout, the turn ends with the questions recorded in the report rather than hanging forever.
+
+All of this can be disabled, leaving the agents to use their own judgment. That is more dangerous, and it is the implementer's call.
 
 ## Built in skills
 
-Arsox satellites will come with built-in skills that can be used.
-They will be provided in each conversation thread as `/workspace/thread-id/.claude/skills` or `/workspace/thread-id/.codex/skills`
+Satellites ship with built-in skills, provided per conversation thread at `/workspace/<thread-id>/.claude/skills` or `/workspace/<thread-id>/.codex/skills`.
 
 ## Plan mode
 
-EXPERIMENTAL. This is an opt-in feature, default off.
+EXPERIMENTAL. Opt in, default off.
 
-What this will do, is first draft up a plan for review. Even with team mode, this will use a dedicated LLM agent with a clean context window just for the plan mode execution.
-This will have the agent run, and first generate a full plan for the entry request. Claude and Codex CLIs both have plan modes, but if unavailable to the CLI then they will use a skill fallback that's included with Arsox.
-The plan will be sent back to the SDK for review. Once approved, it will proceed.
-If human in the loop is turned off OR if the user turns on auto-approving the plan mode, then it will assume it's approved and proceed like normal to the commander (or to the agent if team mode is disabled).
+A dedicated agent with a clean context window drafts a plan for the request before any work begins, even in team mode. Claude and Codex both have native plan modes, and where the harness lacks one Arsox supplies a skill fallback. The plan output is normalized to the same shape either way.
+
+The plan goes to the SDK for review. Once approved, work proceeds. The planning agent may also decide a plan is unnecessary and skip the step.
+
+If human in the loop is off, or if you enable auto-approval, the plan is treated as approved and passes to the commander (or to the single agent when team mode is off).
 
 ## Automated self-review
 
-EXPERIMENTAL. This is an opt-in feature, default off.
+EXPERIMENTAL. Opt in, default off.
 
-Arsox will provide a default skill for reviewing it's own code.
-It will spawn a dedicated LLM agent with a clean context window to scan all of it's changes and review itself.
-If attached to a pull request, then it will use the pull request as the primary medium for leaving review comments as it reviews it's own work.
-If not attached to a pull request (perhaps a commit already made, or it's just generating an artifact) then it will leave the full review into a file for the Claude agents to review.
-It could suggest changes to the artifact before it's uploaded, or suggest follow up commits onto a branch to improve something that wasn't done well enough.
-If there's no file outputs (nothing to review) then this part will be skipped.
+Arsox provides a default skill for reviewing its own work. A dedicated agent with a clean context window scans all changes and reviews them.
+
+Attached to a pull request, it leaves its review as PR comments. Not attached to one, whether the work is a plain commit or an artifact, it writes the full review to a file for the agents to act on. It can suggest changes to an artifact before upload, or follow-up commits to improve something that fell short.
+
+With no file output, there is nothing to review and the step is skipped.
 
 ## Pull request merging
 
-EXPERIMENTAL. This is an opt-in feature, default off.
+EXPERIMENTAL. Opt in, default off.
 
-By default, we'll require a human to merge pull requests on their own.
-If you want more autonomy given to the LLM, you can allow the commander to merge the pull request on it's own after a task is fully completed + reviewed + everything.
+By default a human merges pull requests. Grant more autonomy and the commander may merge on its own once a task is complete and reviewed.
 
-The commander will **choose** to merge it or not.
-You can also define policy for which PR merging methods to allow (such as squash/merge vs rebase).
+The commander still **chooses** whether to merge. You can also define which merge methods are permitted, such as squash versus rebase. The policy is enforced by the `gh` broker, not by asking nicely.
 
 ## Artifacts
 
-When a job is completed, it will have artifacts ready/available to you.
-For example, maybe it generated a text report that wasn't commited/pushed to a git repo.
+When a job completes, its artifacts are ready for you. A generated text report that was never committed to a repo is the typical case.
 
-These files will be available until the thread expires.
-If the thread is ephemeral, the SDK provides a method to always download/absorb the artifacts before it fully completes.
+Artifacts live until the thread expires. For an ephemeral thread, the SDK provides a method to pull artifacts down before teardown completes.
 
-The LLM will determine what is an artifact to include and what isn't.
-You can also use the SDK to list all files (you can list all non artifacts and list all artifacts), and you can download/upload any files to it to/from your host application.
+The agents decide what counts as an artifact. You can also use the SDK to list every file, artifact and non-artifact alike, and to download or upload any file to or from your host application.
 
-Artifacts are moved upwards from the repo level to the artifacts folder in the conversation dir, as repo dirs are more likely to be torn down or re-created (the most ephemeral) but artifacts can persist in the thread longer-term.
+Artifacts are moved up from the repo level into the thread's `artifacts/` directory, because repo directories are the most ephemeral part of the workspace and are frequently torn down or recreated, while artifacts should outlive them.
+
+Artifact totals are capped per thread. See [Resource limits](#resource-limits).
 
 ## MCP
 
-Satellites also support MCP! So you could integrate it with your Claude/Codex sessions and it can use them to leverage outbound tasks.
+Satellites support MCP, so you can wire your own servers into the Claude and Codex sessions and let the agents use them for outbound work.
+
+Arsox also provides its own MCP tools to the agents, including team spawn and despawn, `request_integration`, and `override_redaction`.
 
 ## Order of operations
 
-There is a "stack" of operation orders that occur on the satellite, in order to fully complete a turn.
+Each turn runs through a fixed stack.
 
-Here's the stack, in order of operation for a new turn on a new thread:
-1. Create a thread (defines repos and settings) (SDK call)
+**A new turn on a new thread:**
+1. Create the thread, defining repos, budgets, TTL, and settings (SDK call)
 2. A turn starts (SDK call)
-3. If plan mode is enabled, a plan mode agent begins working through a plan and awaits review. The agent could also determine if a plan is not needed and allows skipping this step.
-4. A commander is spawned and ingests the job, and spawns a team
-5. The team works until they are all completed
+3. If plan mode is enabled, a plan agent works through a plan and awaits review. It may also decide no plan is needed and skip this step.
+4. A commander is spawned, ingests the job, and spawns its team. Each member receives its own worktree.
+5. The team works, integrating through the commander's queue as they go
 6. The team despawns
-7. Automated checkers run, and if any fail then it brings it back to the commander's attention to re-assign to their team. Note: Checkers could be failing and skipped by the LLMs intentionally, so it should be skippable if the commander determines it so. If the commander chooses to skip it, it should not "stay skipped" for future turns.
-8. Automated self-review triggers here, if enabled.
-9. Auto squash/merge triggers here, if enabled.
-10. Artifact scanning from the commander is done here
-11. Artifact uploading to the SDK triggers here if the SDK wants it back immediately/automatically.
+7. Automated checkers run. Failures return to the commander to reassign. Checkers may be failing for reasons the agents deliberately accept, so the commander can skip them. A skip applies to this turn only and never carries into future turns.
+8. Automated self-review runs, if enabled
+9. Auto squash or merge runs, if enabled
+10. The commander scans for artifacts
+11. Artifacts upload to the SDK, if the SDK wants them returned automatically
 
-Here's the stack, in order of operation, if the thread is already created and still open (re-using an existing thread):
+**A new turn on an existing thread:**
 1. A turn starts (SDK call)
-2. A new plan agent is created with new context, and analyzes the turn + history. It will assess if plan mode is needed. If so, it'll then run a new plan creation.
-3. The commander is spawned again but with all of it's previous context still in tact. It spawns it's team. Critically: The commander can choose if team members spawn with a clean slate (no context) or with their existing previous context.
-4. The team works until they are all completed.
-6. The team despawns.
-7. Automated checkers run, same as new thread.
-8. Automated self-review triggers here, if enabled, same as new thread.
-9. Auto squash/merge triggers here, if enabled, same as new thread.
-10. Artifact scanning from the commander is done here, same as new thread.
-11. Artifact uploading to the SDK triggers here if the SDK wants it back immediately/automatically, same as new thread.
+2. A plan agent is created with fresh context and analyzes the turn plus history. It decides whether a plan is needed, and creates one if so.
+3. The commander is spawned with its previous context intact and spawns its team. The commander chooses per member whether that member starts with a clean slate or with its previous context.
+4. The team works, integrating as before
+5. The team despawns
+6. Automated checkers run, as above
+7. Automated self-review runs, if enabled
+8. Auto squash or merge runs, if enabled
+9. The commander scans for artifacts
+10. Artifacts upload to the SDK, if requested
 
-The SDK can destroy threads itself, or let them expire ephemerally.
+The SDK can destroy threads directly, or let them expire through their idle TTL.
+
+## License
+
+Apache License 2.0. See [LICENSE](./LICENSE).
+
+Apache-2.0 grants patent rights explicitly, which matters for a project published as libraries to Cargo, NPM, and PyPi: downstream users get a clear patent grant from every contributor rather than relying on an implied one.
+
+Contributions are accepted under the same license, per section 5 of the license text. There is no separate CLA.

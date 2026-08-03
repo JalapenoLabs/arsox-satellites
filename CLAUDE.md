@@ -8,7 +8,7 @@ No em dashes anywhere in user-facing text (docs, UI, commits, PRs).
 
 # Arsox
 
-@README.md
+@./README.md
 
 This repo is open-source, public.
 The main branch is production (stable), the develop branch is the working branch (unstable) that PRs push into.
