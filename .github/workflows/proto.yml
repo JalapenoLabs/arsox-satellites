@@ -1,0 +1,124 @@
+# Copyright © 2026 Jalapeno Labs
+
+# The protobuf contract is the one thing every other output depends on, so it is
+# the first thing CI defends. A satellite, three SDKs, and the CLI are all
+# downstream of these files being valid, formatted, non-breaking, and in sync
+# with the generated code committed alongside them.
+name: Proto
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'proto/**'
+      - 'gen/**'
+      - '.github/workflows/proto.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'proto/**'
+      - 'gen/**'
+      - '.github/workflows/proto.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A second push to the same branch makes the first run irrelevant.
+concurrency:
+  group: proto-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned like every other tool in this repo. A floating buf silently changes
+  # lint results and generated output between a developer's machine and CI.
+  BUF_VERSION: '1.57.2'
+
+jobs:
+  proto:
+    name: Lint, build, and verify codegen
+    runs-on: [ linux, fedora, flagship, earthly, docker ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          # `buf breaking` compares against the base branch, which needs real
+          # history rather than the single commit a shallow clone provides.
+          fetch-depth: 0
+
+      - name: Install buf
+        run: |
+          set -euo pipefail
+          release="https://github.com/bufbuild/buf/releases/download/v${BUF_VERSION}"
+          mkdir -p "${RUNNER_TEMP}/buf-install"
+          cd "${RUNNER_TEMP}/buf-install"
+
+          curl -fsSL -o buf-Linux-x86_64 "${release}/buf-Linux-x86_64"
+          curl -fsSL -o sha256.txt "${release}/sha256.txt"
+
+          # Verify against the checksum manifest published with the release, so
+          # a truncated or tampered download fails here rather than producing
+          # mysterious codegen differences later.
+          grep ' buf-Linux-x86_64$' sha256.txt | sha256sum --check --status
+
+          install -m 0755 buf-Linux-x86_64 buf
+          echo "${RUNNER_TEMP}/buf-install" >> "${GITHUB_PATH}"
+
+      - name: Confirm buf version
+        run: |
+          set -euo pipefail
+          installed="$(buf --version)"
+          echo "buf ${installed}"
+          if [ "${installed}" != "${BUF_VERSION}" ]; then
+            echo "::error::Expected buf ${BUF_VERSION}, got ${installed}"
+            exit 1
+          fi
+
+      # Compiles every file and resolves every import. Nothing below is
+      # meaningful if the module does not build.
+      - name: Build
+        working-directory: proto
+        run: buf build
+
+      - name: Lint
+        working-directory: proto
+        run: buf lint
+
+      - name: Check formatting
+        working-directory: proto
+        run: buf format --diff --exit-code
+
+      # The contract only ever grows within a major version. Field numbers are
+      # permanent, deleted fields stay reserved, and messages never move files.
+      # This is the step that makes that a guarantee rather than an intention.
+      - name: Check for breaking changes
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if git cat-file -e "origin/${BASE_REF}:proto/buf.yaml" 2>/dev/null; then
+            buf breaking proto --against ".git#ref=origin/${BASE_REF},subdir=proto"
+          else
+            echo "origin/${BASE_REF} has no proto module yet, so there is nothing to break."
+          fi
+
+      # Generated code is committed, which is only safe if it is provably the
+      # output of the .proto files next to it. Regenerating and diffing is what
+      # stops a contract change landing with stale dists that every downstream
+      # consumer then builds against.
+      - name: Verify generated code is current
+        working-directory: proto
+        run: buf generate
+
+      - name: Fail if codegen is stale
+        run: |
+          set -euo pipefail
+          if [ -n "$(git status --porcelain -- gen)" ]; then
+            echo "::error::Generated code is out of date. Run 'buf generate' in proto/ and commit the result."
+            git status --porcelain -- gen
+            git --no-pager diff -- gen
+            exit 1
+          fi
+          echo "Generated code matches the contract."
