@@ -226,11 +226,30 @@ Carries satellite-level lifecycle only: thread created, thread destroyed, queue 
 
 **Many consumers per socket are allowed.** A horizontally scaled host application can have several replicas subscribed to the same thread, and each receives every event. This matters: a single-subscriber design would force you to designate one special replica and fan out internally.
 
-**Framing.** Binary frames carry protobuf. Text frames carry JSON, and you opt into JSON at handshake time with the `arsox.json.v1` subprotocol. Default is binary protobuf.
+**Direction.** The socket is unidirectional, server to client. Nothing is ever sent up it. Every command, starting a turn, answering questions, approving a plan, cancelling, is an ordinary HTTP request. The socket only tells you what happened.
+
+**The SDK is protobuf only.** Frames are binary protobuf, and no setting in any SDK changes that. JSON frames exist here for the same reason JSON exists on the HTTP API: so you can point Postman or a browser console at a satellite and read what is happening without a protobuf decoder. Ask for them with the `arsox.json.v1` subprotocol at handshake. That is a debugging affordance for hand-driven clients, never a mode the SDK runs in.
 
 **Resumption.** Every event carries a `sequence` number, monotonic per thread, and is persisted before it is sent. Reconnect with `?from_sequence=<n>` to replay everything you missed, so a network blip costs you nothing. Retained history is bounded by the thread's lifetime, so an expired thread cannot be replayed.
 
-**Backpressure.** The satellite buffers a bounded number of undelivered events per consumer. A consumer that falls too far behind is closed with `consumer_lagged` rather than being silently starved or allowed to exhaust satellite memory. Reconnect with `from_sequence` and you lose nothing. Slow consumers degrade loudly, never quietly.
+**Backpressure.** The satellite buffers a bounded number of undelivered events per consumer. A consumer that falls too far behind is closed with `STREAM_CONSUMER_LAGGED` rather than being silently starved or allowed to exhaust satellite memory. Reconnect with `from_sequence` and you lose nothing. Slow consumers degrade loudly, never quietly.
+
+### Attaching to an existing thread
+
+A thread lives entirely on the satellite. The SDK client holds no thread state, only a handle, which means **any process holding the satellite URL, the secret, and the thread ID can attach to a running thread**:
+
+```typescript
+const { thread } = await satellite.threads.attach(threadId)
+```
+
+There is no handoff, no lease, and no ownership. The process that created the thread has no privileged claim on it, and it may have exited hours ago. An attached handle can do everything a creating handle can: read the event stream from any sequence, read current state, queue turns, answer questions, approve plans, download artifacts, and destroy the thread.
+
+This is the intended pattern for a horizontally scaled host application. Persist the thread ID in your own database when you create the thread, and any replica can pick the work back up. A replica that dies mid-turn costs you nothing: the satellite keeps working, and whichever replica attaches next replays from the last sequence it recorded.
+
+Two rules still hold no matter how many clients attach:
+
+- **One turn at a time per thread.** A turn submitted while another runs is queued, not run in parallel. See [Job queue](#job-queue).
+- **One question set at a time, answered once.** If two replicas answer the same question set, the first write wins and the second is rejected with `QUESTION_SET_ALREADY_ANSWERED`. Answering is not idempotent, so coordinate on your side which replica speaks for the human. The same applies to plans, which reject with `PLAN_ALREADY_DECIDED`.
 
 ### State management
 
@@ -266,7 +285,7 @@ Threads run concurrently with each other, bounded by `ARSOX_MAX_CONCURRENT_THREA
 
 - **Enqueue while busy.** The SDK may submit a turn while another is running. It joins the thread's queue and returns a turn ID immediately.
 - **Cancel.** Any queued or running turn can be cancelled by ID. A running turn is asked to stop cooperatively first, then killed after a grace period. Work already committed to a member branch survives.
-- **Depth cap.** Once a thread's queue reaches its cap, further submissions are rejected with `QUEUE_FULL` rather than accumulating without bound.
+- **Depth cap.** Once a thread's queue reaches its cap, further submissions are rejected with `TURN_QUEUE_FULL` rather than accumulating without bound.
 - **Persistence.** The queue lives in the embedded database and survives a satellite restart.
 
 ### Health and readiness
@@ -302,24 +321,132 @@ Pin your image tag and your SDK version together.
 
 ### Errors
 
-Every error, on every transport, is the same shape: a stable enum code, a human message, a `retryable` flag, and optional structured details. Match on the code, never on the message.
+Every error, on every transport, is the same shape: a stable enum code, a human message, a `retryable` flag, and structured details. Match on the code, never on the message.
+
+**Codes are specific on purpose.** A caller should never have to read a message string, reproduce the failure, or open a support ticket to learn which of six things went wrong. If two failures need different handling, they get different codes. We would rather carry a long enum than make you debug ours.
+
+Codes are named `DOMAIN_CONDITION` and grouped by prefix, so you can match a whole family with a prefix check and still narrow to the exact case when you care.
+
+**Auth**
 
 | Code | Retryable | Meaning |
 |---|---|---|
-| `UNAUTHENTICATED` | no | missing or wrong bearer token |
-| `PERMISSION_DENIED` | no | the operation is blocked by thread permissions |
-| `INVALID_ARGUMENT` | no | malformed request |
+| `AUTH_HEADER_MISSING` | no | no `Authorization` header was sent |
+| `AUTH_SCHEME_UNSUPPORTED` | no | the header was present but was not `Bearer` |
+| `AUTH_SECRET_INVALID` | no | the bearer token does not match `ARSOX_SECRET` |
+
+**Request**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `REQUEST_BODY_MALFORMED` | no | the body did not decode as the declared content type |
+| `REQUEST_CONTENT_TYPE_UNSUPPORTED` | no | unrecognized `Content-Type` |
+| `REQUEST_ACCEPT_UNSUPPORTED` | no | unrecognized `Accept` |
+| `REQUEST_FIELD_MISSING` | no | a required field was absent; `details.field` names it |
+| `REQUEST_FIELD_INVALID` | no | a field failed validation; `details.field` and `details.reason` explain |
+| `PROTO_VERSION_UNSUPPORTED` | no | the client speaks a proto major this satellite does not serve |
+
+**Thread lifecycle**
+
+| Code | Retryable | Meaning |
+|---|---|---|
 | `THREAD_NOT_FOUND` | no | unknown thread ID |
-| `THREAD_EXPIRED` | no | the thread's idle TTL elapsed and its workspace is gone |
-| `QUEUE_FULL` | yes | thread queue depth cap reached |
-| `BUDGET_EXHAUSTED` | no | the thread or turn hit its token or cost ceiling |
+| `THREAD_EXPIRED` | no | the idle TTL elapsed and the workspace was collected |
+| `THREAD_DESTROYED` | no | the thread was explicitly destroyed |
+| `THREAD_LIMIT_REACHED` | yes | `ARSOX_MAX_CONCURRENT_THREADS` is saturated |
+
+**Turns and the queue**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `TURN_NOT_FOUND` | no | unknown turn ID |
+| `TURN_ALREADY_RUNNING` | yes | a turn is in flight; submit to the queue instead of running in parallel |
+| `TURN_QUEUE_FULL` | yes | the thread's queue depth cap was reached |
+| `TURN_CANCELLED` | no | the turn was cancelled before completing |
+| `TURN_INTERRUPTED` | yes | the satellite restarted mid-turn; the thread survived |
+
+**Human in the loop**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `QUESTION_SET_NOT_FOUND` | no | no question set is outstanding on this thread |
+| `QUESTION_SET_ALREADY_ANSWERED` | no | another client answered first; read the stream for what it said |
+| `QUESTION_ANSWER_INCOMPLETE` | no | the response did not cover every question in the set |
+| `QUESTION_ANSWER_UNKNOWN_ID` | no | an answer referenced a question or option that is not in the set |
+| `QUESTION_SET_TIMED_OUT` | no | the question timeout elapsed and the turn moved on |
+| `PLAN_NOT_AWAITING_REVIEW` | no | no plan is currently up for approval |
+| `PLAN_ALREADY_DECIDED` | no | another client approved or rejected this plan first |
+
+**Budgets and resources**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `BUDGET_TOKENS_EXHAUSTED` | no | `maxTokensPerTurn` was reached |
+| `BUDGET_COST_EXHAUSTED` | no | `maxCostPerThread` was reached |
+| `BUDGET_WALL_CLOCK_EXHAUSTED` | no | `maxWallClockPerTurn` elapsed |
 | `DISK_QUOTA_EXCEEDED` | no | the thread exceeded its workspace quota |
-| `CHECKER_FAILED` | no | checkers failed and the commander declined to skip them |
+| `ARTIFACT_TOO_LARGE` | no | an artifact exceeded the per-thread artifact cap |
+
+**Permissions**
+
+Each control gets its own code, because "denied" without saying which gate closed is exactly the vagueness this list exists to avoid.
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `PERMISSION_COMMAND_DENIED` | no | the command is not on the exec allowlist; `details.argv` shows it |
+| `PERMISSION_DOMAIN_DENIED` | no | the egress proxy refused the host; `details.host` shows it |
+| `PERMISSION_PUSH_DENIED` | no | pushing is disabled for this thread |
+| `PERMISSION_BRANCH_PROTECTED` | no | the target ref is blacklisted; `details.ref` shows it |
+| `PERMISSION_MERGE_DENIED` | no | PR merging is disabled, or the method is not permitted |
+| `PERMISSION_PATH_DENIED` | no | a write landed outside the agent's own directory |
+| `REDACTION_OVERRIDE_DISABLED` | no | `allowRedactionOverride` is false, so the tool is not registered |
+| `SECRET_IN_PUSH_BLOCKED` | no | the `pre-push` hook found an unredacted secret in the outgoing diff |
+
+**Repos and integration**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `REPO_AUTH_FAILED` | no | the SSH key or PAT was rejected by the remote |
+| `REPO_CLONE_FAILED` | yes | the clone did not complete |
+| `REPO_SETUP_FAILED` | no | a setup command exited nonzero |
+| `WORKTREE_CREATE_FAILED` | yes | a member's worktree could not be created |
 | `INTEGRATION_CONFLICT` | yes | a member's branch conflicts with the integration branch |
-| `HARNESS_CRASHED` | yes | the Claude or Codex CLI process died and could not be recovered |
-| `ALL_LLM_ENDPOINTS_EXHAUSTED` | yes | every configured LLM endpoint failed its retry policy |
-| `CONSUMER_LAGGED` | yes | a stream consumer fell too far behind and was disconnected |
-| `INTERNAL` | yes | a satellite bug, please report it |
+| `CHECKER_FAILED` | no | checkers failed and the commander declined to skip them |
+
+**LLM endpoints**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `LLM_ENDPOINT_UNAUTHORIZED` | no | credentials for that endpoint were rejected |
+| `LLM_ENDPOINT_RATE_LIMITED` | yes | 429 or 529 past the endpoint's retry policy |
+| `LLM_ENDPOINT_TIMEOUT` | yes | a single request exceeded the LLM request timeout |
+| `LLM_MODEL_UNKNOWN` | no | the endpoint does not serve the requested model |
+| `LLM_CONTEXT_EXCEEDED` | no | the conversation no longer fits the model's context window |
+| `LLM_ALL_ENDPOINTS_EXHAUSTED` | yes | every configured endpoint failed; `details.attempts` lists why each did |
+
+**Harness**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `HARNESS_LAUNCH_FAILED` | yes | the Claude or Codex CLI could not be started |
+| `HARNESS_CRASHED` | yes | the CLI process died and the single restart did not recover it |
+| `HARNESS_IDLE_TIMEOUT` | yes | the harness produced no output past the idle bound |
+
+**Streaming**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `STREAM_CONSUMER_LAGGED` | yes | this consumer fell too far behind; reconnect with `from_sequence` |
+| `STREAM_SEQUENCE_EXPIRED` | no | the requested `from_sequence` is older than retained history |
+| `STREAM_SUBPROTOCOL_UNSUPPORTED` | no | the requested WebSocket subprotocol is not offered |
+
+**Internal**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `INTERNAL` | yes | a satellite bug, please report it with the message and `details.trace_id` |
+
+New codes are additive within a proto major version, so an older SDK will meet codes it has never heard of. Handle the unknown case by falling back to the `retryable` flag, which is always populated, and log the raw code so the specificity is not lost on its way to you.
 
 ### Timeouts
 
@@ -336,7 +463,7 @@ Every long-running operation has a bound, and every bound is configurable per th
 
 **The harness crashes.** Arsox captures the exit code and the last output, then restarts it once with the same context. If it dies again, the turn fails with `HARNESS_CRASHED` and everything already committed survives. In team mode only the crashed member restarts, and the commander is told what happened so it can reassign.
 
-**Every LLM endpoint fails.** The turn ends with `ALL_LLM_ENDPOINTS_EXHAUSTED`. The thread and its workspace are preserved, so once you add working credentials a new turn resumes from where the last one stopped.
+**Every LLM endpoint fails.** The turn ends with `LLM_ALL_ENDPOINTS_EXHAUSTED`, and `details.attempts` records why each endpoint was given up on. The thread and its workspace are preserved, so once you add working credentials a new turn resumes from where the last one stopped.
 
 **The satellite restarts.** Threads and queues restore from the database, and workspaces restore from the volume. A turn that was in flight is marked `INTERRUPTED`. By default the thread waits for you to decide, and you can configure it to resume automatically instead.
 
@@ -450,7 +577,7 @@ Enforcement is deterministic, not advisory. Every model request passes through t
 
 At 80% of any ceiling, a `budget_warning` event is emitted so your application can react before the wall.
 
-When a ceiling is hit, the turn ends with `BUDGET_EXHAUSTED`. This is a graceful stop, not a kill: the commander is told the budget is gone, work already committed to branches survives, and artifacts already produced remain downloadable.
+When a ceiling is hit, the turn ends with the code for the ceiling that was actually hit: `BUDGET_TOKENS_EXHAUSTED`, `BUDGET_COST_EXHAUSTED`, or `BUDGET_WALL_CLOCK_EXHAUSTED`. This is a graceful stop, not a kill: the commander is told the budget is gone, work already committed to branches survives, and artifacts already produced remain downloadable.
 
 ### LLM to use
 
