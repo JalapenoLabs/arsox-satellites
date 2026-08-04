@@ -109,8 +109,10 @@ Inside, it looks like this:
     AGENTS.md                        the real instruction file
     CLAUDE.md                        pointer to AGENTS.md
     CODEX.md                         pointer to AGENTS.md
+    |-- .agents/                     the cloned agents repo, read-only source
     |-- .claude/
     |-- .codex/
+    |-- issues/                      prefetched tickets, issues, and pull requests
     |-- repos/                       integration checkouts, owned by the commander
       |-- repo-name-1/
       |-- repo-name-2/
@@ -121,6 +123,7 @@ Inside, it looks like this:
           |-- repo-name-2/
         |-- .claude/
         |-- .codex/
+        |-- screenshots/             virtual browser output, if enabled
     |-- artifacts/
   |-- <thread-id-2>/
     ...
@@ -255,7 +258,9 @@ Two rules still hold no matter how many clients attach:
 
 The API that orchestrates the satellite holds its state in an embedded SQLite database, accessed through `sqlx` in WAL mode. There is no external database to run.
 
-Database files live in `/var/arsox/arsox.db`. **Mount `/var/arsox` as a named volume.** The database holds threads, queued turns, event history, and lifetime statistics, so losing it means losing every thread you intended to resume.
+Database files live in `/var/arsox/arsox.db`. **Mount `/var/arsox` as a named volume.** The database holds threads, queued turns, event history, [incidents](#incidents), and lifetime statistics, so losing it means losing every thread you intended to resume and every record of what went wrong.
+
+Incidents and lifetime statistics are the two things that outlive their thread. Both carry their own retention, independent of the workspace TTL.
 
 #### Lifetime statistics
 
@@ -448,6 +453,62 @@ Each control gets its own code, because "denied" without saying which gate close
 
 New codes are additive within a proto major version, so an older SDK will meet codes it has never heard of. Handle the unknown case by falling back to the `retryable` flag, which is always populated, and log the raw code so the specificity is not lost on its way to you.
 
+### Incidents
+
+The codes above answer "why did my request fail." Most things that go wrong are not that. A prefetched ticket 404s, a checker exits nonzero, an LLM endpoint fails and the next one succeeds, an agent's command hits the exec allowlist. The turn continues. Nothing is returned to the caller. Without somewhere to put these, they are silent.
+
+**Nothing fails silently in Arsox.** Every failure, at every severity, is written to the database as an **incident**, emitted on the stream, and queryable afterward. A code path that swallows a failure and continues without recording one is a bug in Arsox, not a design decision.
+
+Incidents reuse the error codes above rather than defining a parallel taxonomy. The same code means the same thing in both positions; what differs is the disposition.
+
+```typescript
+type Incident = {
+  incidentId: string
+  sequence: number              // position in the thread's event stream
+  threadId: string
+  turnId?: string
+  memberId?: string             // which agent, when attributable
+  code: ErrorCode               // the same enum returned errors use
+  disposition: Disposition
+  retryable: boolean
+  message: string
+  details: Record<string, unknown>
+  occurredAt: string
+}
+```
+
+#### Dispositions
+
+| Disposition | Meaning | Example |
+|---|---|---|
+| `fatal` | Ended the turn | `LLM_ALL_ENDPOINTS_EXHAUSTED` |
+| `recovered` | Failed, then succeeded | `HARNESS_CRASHED` followed by a clean restart |
+| `degraded` | Work continued, something is missing | A prefetched ticket returned 404 |
+| `blocked` | A permission gate closed as designed | `PERMISSION_COMMAND_DENIED` |
+
+**`recovered` is the one people forget, and the one that pays for the feature.** A failover that works looks exactly like success. If your first LLM endpoint rejects every request and the second one quietly covers, you are paying the failover tax on every call forever and nothing tells you. Recording the recovery makes the pattern visible in a query instead of invisible in a bill.
+
+**`blocked` is not a malfunction.** The permission system worked. But a member that tried `docker build`, got denied, and silently worked around it is exactly what you want to see, because it almost always means your allowlist or your setup script is wrong. Blocked incidents are also the raw evidence behind [setup script suggestions](#setup-script-improvements): the suggestion is the agent's opinion, the incident is the receipt.
+
+#### Reading them
+
+Incidents arrive on the [thread socket](#event-streaming) as a single `incident` event type rather than one type per domain. Subscribe once, filter on `code` or `disposition`. Adding a new code never requires a new event type, which keeps the contract additive.
+
+```typescript
+const failures = await thread.incidents.list({
+  disposition: [ 'fatal', 'degraded' ],
+  turnId: turn.id
+})
+```
+
+Satellite-wide: `GET /v1/incidents`, filterable by thread, turn, member, code, disposition, and time range. Every turn report carries incident counts by disposition, so the common case needs no query at all.
+
+#### Incidents outlive their thread
+
+This is the one thing in a thread's life that is deliberately not ephemeral. Incidents persist in the database on their own retention, independent of the [idle TTL](#ephemeral-and-cleanup) that collects the workspace, because "why did last night's run go wrong" is a question asked after the thread is gone. Losing the evidence with the workspace would defeat the point.
+
+`INTERNAL` incidents record a `details.trace_id`. Include it when reporting a bug and we can find the run.
+
 ### Timeouts
 
 Every long-running operation has a bound, and every bound is configurable per thread.
@@ -540,6 +601,93 @@ Possible settings:
 - Allow or disallow moving ticket statuses (default: allowed)
 - Allow or disallow commenting on tickets (default: allowed)
 <!-- TODO: Populate -->
+
+### Agents repo
+
+Bring your own agent configuration as a git repo: your `CLAUDE.md`, your docs, your custom skills, whatever you already keep checked in for local use.
+
+```typescript
+agentsRepo: {
+  url: 'git@github.com:navarrotech/agents.git',
+  ref: 'v2.4.0',
+  auth: { sshPrivateKey: process.env.AGENTS_DEPLOY_KEY }
+}
+```
+
+The repo is cloned **once** into `/workspace/<thread-id>/.agents`, then Arsox materializes it into `.claude/` and `.codex/` for the harnesses. One fetch, two harness directories. Arsox copies rather than symlinks, because agents write into `.claude/` at runtime and those writes must not mutate the clone.
+
+**Pin `ref` to a tag or commit.** A floating `main` means your agents repo can change agent behavior between two threads that you thought were identical, which is the hardest class of bug to notice and the hardest to reproduce. `ref` defaults to the repo's default branch, and the resolved commit SHA appears in the turn report either way.
+
+#### Precedence
+
+`AGENTS.md` is assembled in this order, and the harness pointer files keep pointing at it:
+
+1. **The Arsox header.** System-level facts about the satellite. Not overridable.
+2. **Your agents repo.** Fleet-wide conventions.
+3. **The thread's [`prompt`](#prompt) setting.** Task-specific instructions.
+
+Most specific wins, so a thread can override its fleet, and the fleet can override nothing that Arsox needs to hold. If the agents repo carries its own `CLAUDE.md` or `AGENTS.md`, its content is folded into layer 2 rather than replacing the file, which is what preserves the pointer invariant.
+
+Skills merge by name across the [built-in set](#built-in-skills) and your repo, with your repo winning on a collision.
+
+#### Skills from your repo are not a permission escape
+
+A skill in your agents repo can carry scripts, and those scripts run under exactly the same enforcement as anything else: the exec allowlist, the egress proxy, the filesystem scope, the branch protections. Shipping a skill that shells out does not grant the command; the [permissions](#permissions) table still decides. The agents repo shapes what agents know and prefer. It does not shape what they are allowed to do.
+
+### Issue and ticket prefetch
+
+Hand the SDK a list of Jira keys, GitHub issue numbers, or GitHub PR numbers and Arsox fetches them deterministically before the turn starts.
+
+```typescript
+prefetch: {
+  jira: [ 'BUG-123', 'PLAT-456' ],
+  github: [ 11, 12, 13 ],
+  injection: 'index'
+}
+```
+
+The point is token cost. An agent that discovers it needs `BUG-123` spends a tool call, a CLI round trip, and a large unfiltered payload in context to get it. Arsox fetches the same thing once, off the model's clock, in a shape you control. It is also more reliable: the fetch either succeeds or is reported, rather than depending on an agent choosing to look.
+
+Each item lands in its own directory:
+
+```
+issues/
+  |-- BUG-123/
+    raw.json                     every field, including custom fields
+    issue.md                     rendered summary, comments in order
+    |-- attachments/
+      server.log
+      screenshot-1.png
+  |-- gh-11/
+    raw.json
+    issue.md
+    diff.patch                   pull requests only
+    |-- attachments/
+```
+
+**Jira** items are fetched raw, so every custom field your instance defines is present rather than flattened away. Comments come in order, and attachments are pulled from both the issue and every comment on it.
+
+**GitHub** items are fetched as issue or pull request automatically. A pull request additionally brings its diff, its review comments, its conversation, and its current check status, so an agent asked to address review feedback starts with all of it on disk.
+
+#### Injection
+
+`injection` controls how much reaches the prompt:
+
+| Value | Behavior |
+|---|---|
+| `index` | Default. A one-line entry per item in `AGENTS.md`, pointing at the directory. |
+| `summary` | The rendered `issue.md` of every item is inlined. |
+| `none` | Files on disk, nothing in the prompt. |
+
+`index` is the default because inlining twenty tickets into every agent's context is precisely the cost this feature exists to avoid. The agent reads what it needs.
+
+#### Failures, limits, and secrets
+
+A ticket that 404s or is permission-denied is **recorded and skipped, not fatal.** One bad ID in a list of twenty should not kill a turn that had nineteen good ones. The failures appear in the turn report and as a stream event.
+
+Attachments are capped per item and in total, and an attachment that would breach the thread's [disk quota](#resource-limits) is skipped with a note rather than filling the volume. A heap dump on a ticket is a real thing that happens.
+
+**Prefetched content is untrusted input.** Tickets carry pasted logs, and logs carry credentials. Everything under `issues/` is scanned on the way out by [secret redaction](#secret-redaction) like any other content, but treat the directory as a place secrets arrive rather than a place they cannot.
 
 ### Custom remote ENV
 
@@ -706,6 +854,22 @@ The default is `true`, which keeps the agent's judgment in play for the case the
 
 By default you receive every event over the socket. You can toggle off specific event types if you want less traffic.
 
+**[Incidents](#incidents) cannot be toggled off.** Every other event type is a convenience you may decline; incidents are the record that something went wrong, and a stream that can be configured to hide failures is worse than no stream. Filter them on your side if they are noisy. They are also in the database regardless of what the socket carries, so muting the channel would not suppress the record anyway.
+
+#### Subscribing to everything
+
+Every SDK provides a wildcard subscription alongside the typed ones:
+
+```typescript
+thread.on('all', (event) => auditLog.write(event))
+```
+
+It fires for every event that reaches the client, in sequence order, in addition to any typed handler for the same event. Both run; registering `all` does not consume the event.
+
+**Its real job is forward compatibility.** Event types are additive within a proto major, so a newer satellite will send types your SDK version has no name for. A typed handler cannot subscribe to a type it has never heard of. `all` receives them anyway, which makes it the correct hook for audit logs, message-bus forwarding, and anything that must record the whole stream rather than the parts this SDK release happens to know about.
+
+`all` sees what arrives, not what exists. Event types you disabled above are never put on the wire, so they never reach it. Incidents always do.
+
 It does not matter whether you are running the Claude CLI or the Codex CLI. If Claude emits a `tool call started` event you get the standardized shape, and if you switch to Codex, which emits the same event with a different shape, it is conformed to that same standardized shape. This is the point of the whole project.
 
 ## Team mode
@@ -794,6 +958,84 @@ If a question set goes unanswered past the thread's configured question timeout,
 
 All of this can be disabled, leaving the agents to use their own judgment. That is more dangerous, and it is the implementer's call.
 
+## Services and long-running processes
+
+Three members each run `yarn dev` and two of them fail to bind port 3000. This is the most predictable way a parallel team wastes a turn, and it is worth designing for rather than hoping the agents coordinate.
+
+The reframe that makes it tractable: **two members running `yarn dev` is not a port conflict, it is a duplicate nobody wanted.** They do not each need a dev server. They need one dev server they can both reach. Arsox solves it by making that the only outcome available.
+
+### Declared services
+
+Declare long-running processes in [repo settings](#repo-settings), alongside setup commands and checkers:
+
+```typescript
+services: [
+  {
+    name: 'web',
+    command: 'yarn dev',
+    port: 3000,
+    readyWhen: { httpGet: '/health', timeoutSeconds: 120 },
+    isolation: 'shared'
+  }
+]
+```
+
+A declared service is **started once per thread, not once per member.** It starts lazily on first use, so a turn that never touches the frontend never pays for a dev server. Arsox reference-counts holders, health-checks with `readyWhen` before handing anything back, and every member receives the address in its environment:
+
+```
+ARSOX_SERVICE_WEB_URL=http://127.0.0.1:3000
+```
+
+Members are told to use that variable rather than assume a port. Service stdout and stderr stream as `service.log` events and are readable on disk, so an agent debugging a failed request can read the server's side of it.
+
+If `readyWhen` never passes, the member that asked gets a failure carrying the log tail rather than a timeout with no explanation. Services idle-time out, and are torn down with the thread.
+
+### Ad-hoc long-running commands
+
+Agents will still run things you did not declare. The [exec broker](#permissions) already sees every command, so it handles this without the agents having to cooperate.
+
+A command that has not exited and is listening on a port gets promoted to a service automatically, keyed by repo plus normalized command. **The first member to run it gets a process. Every later member running the same command gets the first one's URL instead of a second process.** No coordination, no negotiation, no second server, and no port collision, because the second one is never started.
+
+### When members genuinely need their own
+
+Set `isolation: 'per-member'` and each member gets its own instance inside its own network namespace. Hardcoded ports stop mattering, because member A's `:3000` and member B's `:3000` are different sockets.
+
+This is the escape hatch, not the default, and it costs real memory: N copies of your dev server rather than one. Reach for it when instances must not share state, such as a test suite that truncates a database on boot.
+
+## Virtual browser
+
+EXPERIMENTAL. Opt in, default off.
+
+Frontend and QA work is hard to do blind. With this enabled, members drive a headless Chrome and see what they built.
+
+```typescript
+virtualBrowser: {
+  enabled: true,
+  allowedRoles: [ 'Frontend', 'QA' ],
+  viewports: [ 'mobile', 'tablet', 'desktop' ]
+}
+```
+
+Arsox provides browser control as [MCP](#mcp) tools: navigate, click, type, resize, screenshot, and read the console. A QA member can walk pages, hammer inputs, switch between viewports, and report what looks wrong. A frontend member can screenshot what it just built.
+
+**Each member gets its own browser context, not its own browser process.** Contexts are isolated in cookies, storage, and session while sharing one Chrome, which keeps memory sane when several members are looking at pages at once.
+
+The browser points at [declared services](#declared-services) through the same `ARSOX_SERVICE_*` addresses, so "run the app and look at it" is two features composing rather than one feature reimplementing the other.
+
+### Screenshots and artifacts
+
+Screenshots land in `members/<member-id>/screenshots/`. A member can tag one, which promotes it to [artifacts](#artifacts) and makes it available to the SDK after the turn.
+
+Attaching them to a pull request has a real constraint worth stating plainly: **GitHub has no public API for uploading an image into a comment.** Arsox commits tagged screenshots to a dedicated orphan branch and links their raw URLs in the comment body. It works and it survives, at the cost of a branch in your repo that exists only to hold images. If you would rather not carry that branch, keep screenshots as artifacts and pull them through the SDK.
+
+### Two constraints
+
+**The browser goes through the egress proxy like everything else.** A browser that can reach any host would be a hole straight through the [web permissions](#permissions) model, since "navigate to a URL" is a network request wearing a different hat. Same allowlist, same enforcement.
+
+**Do not diff screenshots byte for byte.** Font rendering and compositing vary between runs. Screenshots are for an agent to look at and for a human to review, not for exact-match regression assertions.
+
+Chrome is memory-hungry. Budget for it in your container limits, which is part of why this is off by default.
+
 ## Built in skills
 
 Satellites ship with built-in skills, provided per conversation thread at `/workspace/<thread-id>/.claude/skills` or `/workspace/<thread-id>/.codex/skills`.
@@ -825,6 +1067,57 @@ EXPERIMENTAL. Opt in, default off.
 By default a human merges pull requests. Grant more autonomy and the commander may merge on its own once a task is complete and reviewed.
 
 The commander still **chooses** whether to merge. You can also define which merge methods are permitted, such as squash versus rebase. The policy is enforced by the `gh` broker, not by asking nicely.
+
+## Watching pull requests
+
+EXPERIMENTAL. Opt in, default off. Requires the [GitHub](#github) integration.
+
+The team pushes, CI goes red, and somebody has to notice. With this on, the satellite notices and puts the team back to work.
+
+```typescript
+watchPullRequests: {
+  enabled: true,
+  maxAttempts: 3,
+  watchWindowMinutes: 240,
+  pollIntervalSeconds: 20,
+  reactTo: 'satelliteCommits'
+}
+```
+
+**This inverts the thread lifecycle, which is why it is worth reading carefully.** Everywhere else in Arsox the SDK starts turns and the satellite responds. Here the satellite starts a turn on its own, because CI failed while nobody was asking it anything. Every control below exists to keep that inversion from running away.
+
+### The controls
+
+**`maxAttempts` is the one that matters.** CI fails, the team fixes, CI fails again, the team fixes again. Without a hard cap that loop has no floor and your budget is the only thing that stops it. Default 3. On exhaustion the satellite stops, leaves the PR red, and reports.
+
+**Budget is shared, not additional.** Watch-triggered turns draw from the same [`maxCostPerThread`](#budgets-and-cost-ceilings) as everything else. An exhausted budget ends watching immediately, and a watching thread cannot spend past a ceiling you already set.
+
+**`reactTo` decides whose failures count.** The default `satelliteCommits` reacts only to check runs on commits the satellite itself pushed. Set it to `any` and the satellite also reacts when a human pushes to the PR, which is occasionally what you want and is more often two parties editing the same branch at cross purposes.
+
+**Repeated identical failures stop the loop.** If a check fails twice with the same failure signature and the team changed nothing that could plausibly affect it, the satellite stops and says so rather than burning attempts on a flake it cannot fix.
+
+### Idle TTL
+
+A thread waiting on CI is doing nothing, which is exactly what the [idle TTL](#ephemeral-and-cleanup) collects. **Watching counts as activity.** The TTL does not run while a watch window is open, so a thread cannot be garbage collected out from under the PR it is watching. `watchWindowMinutes` bounds it independently, after which watching stops and the normal idle TTL resumes.
+
+### Polling, not webhooks
+
+Arsox polls check status through the `gh` broker on `pollIntervalSeconds`, default 20. Webhooks would be cheaper, but they require the satellite to be inbound-reachable from GitHub, and most satellites sit inside a private network with no route in. Polling works everywhere. A webhook option can come later for fleets that can accept one.
+
+**20 seconds is tuned against dead time, not against request cost.** A poll is one cheap API call. The thing it buys is the gap between CI going red and the team learning about it, and on a three-minute CI run a sixty-second interval can burn a third of that run doing nothing. Twenty makes the reaction feel immediate.
+
+The ceiling is your GitHub rate limit rather than the satellite. Twenty seconds is 180 requests per hour per watched pull request, against 5,000 per hour for an authenticated PAT, shared with every other `gh` call your agents make. That is comfortable for a handful of concurrently watched PRs and worth recomputing before you watch dozens.
+
+### Termination
+
+Watching ends when any of these happens, and the reason is in the report every time:
+
+- CI passes
+- `maxAttempts` is exhausted
+- the budget is exhausted
+- the PR is merged or closed
+- `watchWindowMinutes` elapses
+- the SDK cancels the turn or destroys the thread
 
 ## Post-task suggestions
 
@@ -961,23 +1254,25 @@ Each turn runs through a fixed stack.
 
 **A new turn on a new thread:**
 1. Create the thread, defining repos, budgets, TTL, and settings (SDK call)
-2. A turn starts (SDK call)
-3. If plan mode is enabled, a plan agent works through a plan and awaits review. It may also decide no plan is needed and skip this step.
-4. A commander is spawned, ingests the job, and spawns its team. Each member receives its own worktree.
-5. The team works, integrating through the commander's queue as they go
-6. The team despawns
-7. Automated checkers run. Failures return to the commander to reassign. Checkers may be failing for reasons the agents deliberately accept, so the commander can skip them. A skip applies to this turn only and never carries into future turns.
-8. Automated self-review runs, if enabled
-9. Auto squash or merge runs, if enabled
-10. The commander scans for artifacts
-11. Artifacts upload to the SDK, if the SDK wants them returned automatically
-12. Suggestions stage runs, if enabled
+2. Arsox provisions the workspace: clones repos and the [agents repo](#agents-repo), prefetches [issues and tickets](#issue-and-ticket-prefetch), assembles `AGENTS.md`, and runs setup commands
+3. A turn starts (SDK call)
+4. If plan mode is enabled, a plan agent works through a plan and awaits review. It may also decide no plan is needed and skip this step.
+5. A commander is spawned, ingests the job, and spawns its team. Each member receives its own worktree.
+6. The team works, integrating through the commander's queue as they go. [Services](#services-and-long-running-processes) start lazily here, on first use.
+7. The team despawns
+8. Automated checkers run. Failures return to the commander to reassign. Checkers may be failing for reasons the agents deliberately accept, so the commander can skip them. A skip applies to this turn only and never carries into future turns.
+9. Automated self-review runs, if enabled
+10. Auto squash or merge runs, if enabled
+11. The commander scans for artifacts
+12. Artifacts upload to the SDK, if the SDK wants them returned automatically
+13. Suggestions stage runs, if enabled
+14. [PR watching](#watching-pull-requests) begins, if enabled. The turn ends; the thread stays alive until the watch resolves.
 
 **A new turn on an existing thread:**
 1. A turn starts (SDK call)
 2. A plan agent is created with fresh context and analyzes the turn plus history. It decides whether a plan is needed, and creates one if so.
 3. The commander is spawned with its previous context intact and spawns its team. The commander chooses per member whether that member starts with a clean slate or with its previous context.
-4. The team works, integrating as before
+4. The team works, integrating as before. Services already running from a prior turn are reused rather than restarted.
 5. The team despawns
 6. Automated checkers run, as above
 7. Automated self-review runs, if enabled
@@ -985,6 +1280,11 @@ Each turn runs through a fixed stack.
 9. The commander scans for artifacts
 10. Artifacts upload to the SDK, if requested
 11. Suggestions stage runs, if enabled
+12. PR watching begins, if enabled
+
+Workspace provisioning happens once, at thread creation. Later turns inherit the clones, the prefetched issues, and the assembled `AGENTS.md` rather than redoing them.
+
+A [watch-triggered turn](#watching-pull-requests) is the one case where the satellite starts the stack itself. It enters at step 3 of the existing-thread stack, skipping plan mode, and is otherwise identical.
 
 The SDK can destroy threads directly, or let them expire through their idle TTL.
 

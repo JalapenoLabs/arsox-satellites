@@ -18,7 +18,11 @@ import { Satellite } from '@arsox/sdk'
 import {
   Harness,
   MergeMethod,
+  PrefetchInjection,
   RedactionMode,
+  ServiceIsolation,
+  Viewport,
+  WatchTrigger,
   WebAccess
 } from '@arsox/sdk'
 
@@ -34,6 +38,22 @@ const satellite = new Satellite({
   url: 'https://satellite-01.internal.jalapenolabs.io',
   secret: arsoxSecret
 })
+
+// Stand-in for your own durable sink: a table, a message bus, a log file.
+const auditLog = {
+  write(entry: unknown): void {
+    console.debug(JSON.stringify(entry))
+  }
+}
+
+// Stand-ins for your own issue tracker. `alreadyFiled` holds the suggestion
+// fingerprints you have seen before, which is what stops the same finding
+// becoming a new ticket on every turn.
+const alreadyFiled = new Set<string>()
+
+async function openIssue(title: string, body: string): Promise<void> {
+  console.log(`would file: ${title}\n${body}`)
+}
 
 
 // ///////////////////////////// //
@@ -56,6 +76,16 @@ const settings: ThreadSettings = {
   },
 
   harness: Harness.Claude,
+
+  // Your own agent configuration: CLAUDE.md, docs, custom skills. Cloned once
+  // into .agents, then materialized into .claude and .codex. Pin `ref` to a tag
+  // or a commit. A floating branch here changes agent behavior between two
+  // threads you believed were identical.
+  agentsRepo: {
+    url: 'git@github.com:navarrotech/agents.git',
+    ref: 'v2.4.0',
+    auth: { sshPrivateKey: process.env.AGENTS_DEPLOY_KEY }
+  },
 
   // Ordered failover. The satellite walks this list top to bottom on failure,
   // so put the cheapest and most reliable endpoint first: moving to the next
@@ -111,9 +141,30 @@ const settings: ThreadSettings = {
     enabled: true
   },
 
+  suggestions: {
+    enabled: true,
+    // Any real codebase yields fifty findings. Fifty per turn is noise that
+    // teaches you to ignore the feature, so the cap forces ranking.
+    maxSuggestionsPerCategory: 5
+  },
+
   pullRequests: {
     allowAgentMerge: false,
     allowedMergeMethods: [ MergeMethod.Squash ]
+  },
+
+  // The satellite starts turns on its own here, which nothing else in Arsox
+  // does. maxAttempts is the control that matters: fix, fail, fix, fail has no
+  // floor without it.
+  watchPullRequests: {
+    enabled: true,
+    maxAttempts: 3,
+    watchWindowMinutes: 240,
+    pollIntervalSeconds: 20,
+    // Only react to check runs on commits the satellite itself pushed. `Any`
+    // also reacts to human pushes, which is usually two parties editing the
+    // same branch at cross purposes.
+    reactTo: WatchTrigger.SatelliteCommits
   },
 
   repos: [
@@ -133,7 +184,19 @@ const settings: ThreadSettings = {
         'yarn typecheck',
         'yarn generate && yarn build',
         '; yarn deploy --dry-run'
-      ].join('\n')
+      ].join('\n'),
+      // Started once per thread, not once per member, and lazily on first use.
+      // Every member gets ARSOX_SERVICE_WEB_URL rather than assuming a port,
+      // which is what stops three agents racing to bind 3000.
+      services: [
+        {
+          name: 'web',
+          command: 'yarn dev',
+          port: 3000,
+          readyWhen: { httpGet: '/health', timeoutSeconds: 120 },
+          isolation: ServiceIsolation.Shared
+        }
+      ]
     }
   ],
 
@@ -147,6 +210,19 @@ const settings: ThreadSettings = {
     baseUrl: 'https://jalapenolabs.atlassian.net',
     allowStatusTransitions: true,
     allowComments: true
+  },
+
+  // Fetched deterministically before the turn, off the model's clock. Jira
+  // comes back raw so custom fields survive; a PR brings its diff, reviews,
+  // conversation, and check status. Attachments from the item and from every
+  // comment land alongside it.
+  prefetch: {
+    jira: [ 'BUG-123', 'PLAT-456' ],
+    github: [ 11, 12, 13 ],
+    // One line per item in AGENTS.md pointing at issues/<id>/. Summary inlines
+    // every rendered issue, which is the token cost this feature exists to
+    // avoid. Let the agent read what it needs.
+    injection: PrefetchInjection.Index
   },
 
   // `isSecret` defaults to true when omitted, because defaulting to secret
@@ -195,6 +271,16 @@ const settings: ThreadSettings = {
       headers: { Authorization: `Bearer ${process.env.INTERNAL_MCP_TOKEN}` }
     }
   ],
+
+  // Headless Chrome for members that need to see what they built. Each member
+  // gets its own browser context, not its own process, and points at the
+  // ARSOX_SERVICE_* addresses above. Traffic still goes through the egress
+  // proxy: navigating to a URL is a network request wearing a hat.
+  virtualBrowser: {
+    enabled: true,
+    allowedRoles: [ 'Frontend', 'QA' ],
+    viewports: [ Viewport.Mobile, Viewport.Tablet, Viewport.Desktop ]
+  },
 
   // Opt out of the noisy ones. Statistics are off by default because they
   // change on every token.
@@ -257,6 +343,27 @@ function attachHandlers(thread: Thread): void {
 
   thread.on('artifact.created', (event) => {
     console.log(`artifact ${event.path} (${event.sizeBytes} bytes)`)
+  })
+
+  // Every failure at every severity arrives here, and this is the one event
+  // type that cannot be switched off. `recovered` and `blocked` are the ones
+  // worth watching: a failover that keeps working looks like success, and a
+  // permission denial the agent quietly routed around looks like nothing at
+  // all.
+  thread.on('incident', (event) => {
+    console.warn(`[${event.disposition}] ${event.code}: ${event.message}`)
+  })
+
+  // The wildcard. Fires for every event that reaches the client, in sequence
+  // order, in addition to any typed handler above. Both run.
+  //
+  // Its real job is forward compatibility: event types are additive within a
+  // proto major, so a newer satellite sends types this SDK version has no name
+  // for. A typed handler cannot subscribe to a type it has never heard of.
+  // This one gets them anyway, which makes it the correct hook for audit logs
+  // and bus forwarding.
+  thread.on('all', (event) => {
+    auditLog.write({ sequence: event.sequence, type: event.type, event })
   })
 
   // Plans and questions answer back over HTTP, not up the socket, which is
@@ -356,6 +463,10 @@ async function consumeEvents(thread: Thread, fromSequence?: number): Promise<voi
         console.log(`artifact ${event.path} (${event.sizeBytes} bytes)`)
         break
 
+      case 'incident':
+        console.warn(`[${event.disposition}] ${event.code}: ${event.message}`)
+        break
+
       case 'turn.completed':
         console.log(`turn finished: ${event.status}`)
         break
@@ -391,11 +502,43 @@ async function main(): Promise<void> {
   console.log(result.summary)
   console.log(`${result.tokens.total} tokens, $${result.cost.toFixed(2)}`)
 
+  // Counts by disposition ride along on the report, so the common case needs
+  // no query at all. Query when you want the detail.
+  console.log(result.incidentCounts)
+
+  const problems = await thread.incidents.list({
+    disposition: [ 'fatal', 'degraded' ],
+    turnId: turn.id
+  })
+  for (const incident of problems) {
+    console.warn(`${incident.code} (${incident.disposition}): ${incident.message}`)
+  }
+
+  // `fingerprint` is the field that makes this an issue pipeline rather than a
+  // report. Suppress the ones you have already filed or you will open the same
+  // ticket again on every turn.
+  for (const suggestion of result.suggestions.techDebt) {
+    if (alreadyFiled.has(suggestion.fingerprint)) {
+      continue
+    }
+    await openIssue(suggestion.title, suggestion.body)
+    alreadyFiled.add(suggestion.fingerprint)
+  }
+
+  // The agent's proposed setup script is inert data. Arsox never adopts it,
+  // never writes it, never runs it. Adopting it is this line, and it is yours.
+  const setup = result.suggestions.setupScript
+  if (setup?.proposedSetupCommands) {
+    console.log(`proposed setup change:\n${setup.proposedSetupCommands}`)
+  }
+
   for (const artifact of await thread.artifacts.list()) {
     await thread.artifacts.download(artifact.path, `./out/${artifact.name}`)
   }
 
-  // Or leave it to expire through the idle TTL.
+  // Or leave it to expire through the idle TTL. Incidents survive either way,
+  // on their own retention, because "why did last night go wrong" is asked
+  // after the workspace is gone.
   await thread.destroy()
 }
 

@@ -15,6 +15,7 @@ import sys
 
 from arsox import Satellite, Thread
 from arsox.settings import (
+    AgentsRepoSettings,
     BudgetSettings,
     CustomEnvVar,
     GithubSettings,
@@ -25,21 +26,46 @@ from arsox.settings import (
     ModelAuth,
     PermissionSettings,
     PlanModeSettings,
+    PrefetchSettings,
     PullRequestSettings,
     RedactionSettings,
     RepoAuth,
     RepoSettings,
     RetryPolicy,
     SelfReviewSettings,
+    ServiceSettings,
+    ServiceReadyWhen,
     StreamSettings,
+    SuggestionSettings,
     TeamModeSettings,
     ThreadSettings,
+    VirtualBrowserSettings,
+    WatchPullRequestSettings,
 )
-from arsox.enums import Harness, MergeMethod, RedactionMode, WebAccess
+from arsox.enums import (
+    Harness,
+    MergeMethod,
+    PrefetchInjection,
+    RedactionMode,
+    ServiceIsolation,
+    Viewport,
+    WatchTrigger,
+    WebAccess,
+)
 from arsox.events import TurnEvent
 from arsox.questions import QuestionAnswer
 
 logger = logging.getLogger(__name__)
+
+# Stand-in for your own issue tracker. `already_filed` holds the suggestion
+# fingerprints you have seen before, which is what stops the same finding
+# becoming a new ticket on every turn.
+already_filed: set[str] = set()
+
+
+async def open_issue(title: str, body: str) -> None:
+    """Create a tracker issue from a suggestion."""
+    logger.info(f"would file: {title}\n{body}")
 
 
 # ####################### #
@@ -64,6 +90,15 @@ def build_settings() -> ThreadSettings:
             max_wall_clock_per_turn="unlimited",
         ),
         harness=Harness.CLAUDE,
+        # Your own agent configuration: CLAUDE.md, docs, custom skills. Cloned
+        # once into .agents, then materialized into .claude and .codex. Pin
+        # `ref` to a tag or a commit. A floating branch here changes agent
+        # behavior between two threads you believed were identical.
+        agents_repo=AgentsRepoSettings(
+            url="git@github.com:navarrotech/agents.git",
+            ref="v2.4.0",
+            auth=RepoAuth(ssh_private_key=os.environ.get("AGENTS_DEPLOY_KEY")),
+        ),
         # Ordered failover. The satellite walks this list top to bottom on
         # failure, so put the cheapest and most reliable endpoint first: moving
         # to the next endpoint discards the cached prompt prefix and the next
@@ -108,9 +143,28 @@ def build_settings() -> ThreadSettings:
             question_timeout_minutes=30,
         ),
         self_review=SelfReviewSettings(enabled=True),
+        suggestions=SuggestionSettings(
+            enabled=True,
+            # Any real codebase yields fifty findings. Fifty per turn is noise
+            # that teaches you to ignore the feature, so the cap forces ranking.
+            max_suggestions_per_category=5,
+        ),
         pull_requests=PullRequestSettings(
             allow_agent_merge=False,
             allowed_merge_methods=[MergeMethod.SQUASH],
+        ),
+        # The satellite starts turns on its own here, which nothing else in
+        # Arsox does. max_attempts is the control that matters: fix, fail, fix,
+        # fail has no floor without it.
+        watch_pull_requests=WatchPullRequestSettings(
+            enabled=True,
+            max_attempts=3,
+            watch_window_minutes=240,
+            poll_interval_seconds=20,
+            # Only react to check runs on commits the satellite itself pushed.
+            # ANY also reacts to human pushes, which is usually two parties
+            # editing the same branch at cross purposes.
+            react_to=WatchTrigger.SATELLITE_COMMITS,
         ),
         repos=[
             RepoSettings(
@@ -131,6 +185,22 @@ def build_settings() -> ThreadSettings:
                     "yarn generate && yarn build\n"
                     "; yarn deploy --dry-run"
                 ),
+                # Started once per thread, not once per member, and lazily on
+                # first use. Every member gets ARSOX_SERVICE_WEB_URL rather
+                # than assuming a port, which is what stops three agents racing
+                # to bind 3000.
+                services=[
+                    ServiceSettings(
+                        name="web",
+                        command="yarn dev",
+                        port=3000,
+                        ready_when=ServiceReadyWhen(
+                            http_get="/health",
+                            timeout_seconds=120,
+                        ),
+                        isolation=ServiceIsolation.SHARED,
+                    ),
+                ],
             ),
         ],
         github=GithubSettings(
@@ -142,6 +212,18 @@ def build_settings() -> ThreadSettings:
             base_url="https://jalapenolabs.atlassian.net",
             allow_status_transitions=True,
             allow_comments=True,
+        ),
+        # Fetched deterministically before the turn, off the model's clock.
+        # Jira comes back raw so custom fields survive; a PR brings its diff,
+        # reviews, conversation, and check status. Attachments from the item
+        # and from every comment land alongside it.
+        prefetch=PrefetchSettings(
+            jira=["BUG-123", "PLAT-456"],
+            github=[11, 12, 13],
+            # One line per item in AGENTS.md pointing at issues/<id>/. SUMMARY
+            # inlines every rendered issue, which is the token cost this
+            # feature exists to avoid. Let the agent read what it needs.
+            injection=PrefetchInjection.INDEX,
         ),
         # is_secret defaults to True when omitted, because defaulting to secret
         # fails safe. Spelling it out here for clarity.
@@ -192,6 +274,16 @@ def build_settings() -> ThreadSettings:
                 headers={"Authorization": f"Bearer {os.environ.get('INTERNAL_MCP_TOKEN')}"},
             ),
         ],
+        # Headless Chrome for members that need to see what they built. Each
+        # member gets its own browser context, not its own process, and points
+        # at the ARSOX_SERVICE_* addresses above. Traffic still goes through
+        # the egress proxy: navigating to a URL is a network request wearing
+        # a hat.
+        virtual_browser=VirtualBrowserSettings(
+            enabled=True,
+            allowed_roles=["Frontend", "QA"],
+            viewports=[Viewport.MOBILE, Viewport.TABLET, Viewport.DESKTOP],
+        ),
         # Opt out of the noisy ones. Statistics are off by default because they
         # change on every token.
         stream=StreamSettings(
@@ -259,6 +351,32 @@ async def on_budget_warning(event: TurnEvent) -> None:
 async def on_artifact_created(event: TurnEvent) -> None:
     """Log a newly produced artifact."""
     logger.info(f"artifact {event.path} ({event.size_bytes} bytes)")
+
+
+async def on_incident(event: TurnEvent) -> None:
+    """Log a failure at any severity.
+
+    This is the one event type that cannot be switched off. RECOVERED and
+    BLOCKED are the ones worth watching: a failover that keeps working looks
+    like success, and a permission denial the agent quietly routed around
+    looks like nothing at all.
+    """
+    logger.warning(f"[{event.disposition}] {event.code}: {event.message}")
+
+
+async def on_any_event(event: TurnEvent) -> None:
+    """Mirror every event to a durable sink.
+
+    Fires for every event that reaches the client, in sequence order, in
+    addition to any typed handler. Both run.
+
+    Its real job is forward compatibility: event types are additive within a
+    proto major, so a newer satellite sends types this SDK version has no name
+    for. A typed handler cannot subscribe to a type it has never heard of.
+    This one gets them anyway, which makes it the correct hook for audit logs
+    and bus forwarding.
+    """
+    logger.debug(f"{event.sequence} {event.type}")
 
 
 def build_plan_handler(thread: Thread):
@@ -355,6 +473,9 @@ async def consume_events(thread: Thread, from_sequence: int | None = None) -> No
             case "artifact.created":
                 logger.info(f"artifact {event.path} ({event.size_bytes} bytes)")
 
+            case "incident":
+                await on_incident(event)
+
             case "turn.completed":
                 logger.info(f"turn finished: {event.status}")
 
@@ -413,6 +534,8 @@ async def main() -> None:
         thread.on("checker.result", on_checker_result)
         thread.on("budget.warning", on_budget_warning)
         thread.on("artifact.created", on_artifact_created)
+        thread.on("incident", on_incident)
+        thread.on("all", on_any_event)
 
         # Plans and questions answer back over HTTP, not up the socket, which is
         # unidirectional. Both live on the thread because only one plan and one
@@ -431,10 +554,41 @@ async def main() -> None:
         logger.info(result.summary)
         logger.info(f"{result.tokens.total} tokens, ${result.cost:.2f}")
 
+        # Counts by disposition ride along on the report, so the common case
+        # needs no query at all. Query when you want the detail.
+        logger.info(result.incident_counts)
+
+        problems = await thread.incidents.list(
+            disposition=["fatal", "degraded"],
+            turn_id=turn.id,
+        )
+        for incident in problems:
+            logger.warning(
+                f"{incident.code} ({incident.disposition}): {incident.message}"
+            )
+
+        # fingerprint is the field that makes this an issue pipeline rather
+        # than a report. Suppress the ones you have already filed or you will
+        # open the same ticket again on every turn.
+        for suggestion in result.suggestions.tech_debt:
+            if suggestion.fingerprint in already_filed:
+                continue
+            await open_issue(suggestion.title, suggestion.body)
+            already_filed.add(suggestion.fingerprint)
+
+        # The agent's proposed setup script is inert data. Arsox never adopts
+        # it, never writes it, never runs it. Adopting it is this line, and it
+        # is yours.
+        setup = result.suggestions.setup_script
+        if setup and setup.proposed_setup_commands:
+            logger.info(f"proposed setup change:\n{setup.proposed_setup_commands}")
+
         for artifact in await thread.artifacts.list():
             await thread.artifacts.download(artifact.path, f"./out/{artifact.name}")
 
-        # Or leave it to expire through the idle TTL.
+        # Or leave it to expire through the idle TTL. Incidents survive either
+        # way, on their own retention, because "why did last night go wrong" is
+        # asked after the workspace is gone.
         await thread.destroy()
 
 

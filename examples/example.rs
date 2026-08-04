@@ -7,20 +7,34 @@
 //!
 //! Run with: `cargo run --example example`
 
+use std::collections::HashSet;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use futures::StreamExt;
 
-use arsox::enums::{Harness, MergeMethod, RedactionMode, WebAccess};
+use arsox::enums::{
+    Disposition, Harness, MergeMethod, PrefetchInjection, RedactionMode, ServiceIsolation, Viewport,
+    WatchTrigger, WebAccess,
+};
 use arsox::events::TurnEvent;
 use arsox::questions::QuestionAnswer;
 use arsox::settings::{
-    Budget, Ceiling, CustomEnvVar, GithubSettings, HumanInTheLoop, JiraSettings, McpServer,
-    ModelAuth, ModelEndpoint, Permissions, PlanMode, PullRequests, Redaction, RepoAuth,
-    RepoSettings, RetryPolicy, SelfReview, StreamSettings, TeamMode, ThreadDeps, ThreadSettings,
+    AgentsRepo, Budget, Ceiling, CustomEnvVar, GithubSettings, HumanInTheLoop, JiraSettings,
+    McpServer, ModelAuth, ModelEndpoint, Permissions, PlanMode, Prefetch, PullRequests, Redaction,
+    RepoAuth, RepoSettings, RetryPolicy, SelfReview, Service, ServiceReadyWhen, StreamSettings,
+    Suggestions, TeamMode, ThreadDeps, ThreadSettings, VirtualBrowser, WatchPullRequests,
 };
+use arsox::incidents::IncidentQuery;
 use arsox::{Satellite, Thread, ThreadAttached, ThreadCreated, TurnStarted};
+
+/// Creates a tracker issue from a suggestion.
+///
+/// Stand-in for your own issue tracker integration.
+async fn open_issue(title: &str, body: &str) -> Result<()> {
+    tracing::info!("would file: {title}\n{body}");
+    Ok(())
+}
 
 /// How long a thread may sit untouched before the satellite collects it.
 ///
@@ -48,6 +62,16 @@ fn build_settings() -> Result<ThreadSettings> {
     })
     .delete_on_complete(false)
     .harness(Harness::Claude)
+    // Your own agent configuration: CLAUDE.md, docs, custom skills. Cloned once
+    // into .agents, then materialized into .claude and .codex. Pin `ref` to a
+    // tag or a commit. A floating branch here changes agent behavior between
+    // two threads you believed were identical.
+    .agents_repo(
+        AgentsRepo::builder("git@github.com:navarrotech/agents.git")
+            .git_ref("v2.4.0")
+            .auth(RepoAuth::ssh_private_key(std::env::var("AGENTS_DEPLOY_KEY")?))
+            .build(),
+    )
     // Ordered failover. The satellite walks this list top to bottom on failure,
     // so put the cheapest and most reliable endpoint first: moving to the next
     // endpoint discards the cached prompt prefix and the next request pays full
@@ -92,10 +116,33 @@ fn build_settings() -> Result<ThreadSettings> {
             .build(),
     )
     .self_review(SelfReview::builder().enabled(true).build())
+    .suggestions(
+        Suggestions::builder()
+            .enabled(true)
+            // Any real codebase yields fifty findings. Fifty per turn is noise
+            // that teaches you to ignore the feature, so the cap forces ranking.
+            .max_suggestions_per_category(5)
+            .build(),
+    )
     .pull_requests(
         PullRequests::builder()
             .allow_agent_merge(false)
             .allowed_merge_methods([MergeMethod::Squash])
+            .build(),
+    )
+    // The satellite starts turns on its own here, which nothing else in Arsox
+    // does. `max_attempts` is the control that matters: fix, fail, fix, fail has
+    // no floor without it.
+    .watch_pull_requests(
+        WatchPullRequests::builder()
+            .enabled(true)
+            .max_attempts(3)
+            .watch_window(Duration::from_secs(240 * 60))
+            .poll_interval(Duration::from_secs(20))
+            // Only react to check runs on commits the satellite itself pushed.
+            // `Any` also reacts to human pushes, which is usually two parties
+            // editing the same branch at cross purposes.
+            .react_to(WatchTrigger::SatelliteCommits)
             .build(),
     )
     .repos([RepoSettings::builder("api", "git@github.com:JalapenoLabs/arsox-satellites.git")
@@ -113,6 +160,19 @@ fn build_settings() -> Result<ThreadSettings> {
              yarn generate && yarn build\n\
              ; yarn deploy --dry-run",
         )
+        // Started once per thread, not once per member, and lazily on first
+        // use. Every member gets ARSOX_SERVICE_WEB_URL rather than assuming a
+        // port, which is what stops three agents racing to bind 3000.
+        .services([Service::builder("web", "yarn dev")
+            .port(3000)
+            .ready_when(
+                ServiceReadyWhen::builder()
+                    .http_get("/health")
+                    .timeout(Duration::from_secs(120))
+                    .build(),
+            )
+            .isolation(ServiceIsolation::Shared)
+            .build()])
         .build()])
     .github(
         GithubSettings::builder(std::env::var("GITHUB_PAT")?)
@@ -124,6 +184,20 @@ fn build_settings() -> Result<ThreadSettings> {
             .base_url("https://jalapenolabs.atlassian.net")
             .allow_status_transitions(true)
             .allow_comments(true)
+            .build(),
+    )
+    // Fetched deterministically before the turn, off the model's clock. Jira
+    // comes back raw so custom fields survive; a PR brings its diff, reviews,
+    // conversation, and check status. Attachments from the item and from every
+    // comment land alongside it.
+    .prefetch(
+        Prefetch::builder()
+            .jira(["BUG-123", "PLAT-456"])
+            .github([11, 12, 13])
+            // One line per item in AGENTS.md pointing at issues/<id>/. `Summary`
+            // inlines every rendered issue, which is the token cost this feature
+            // exists to avoid. Let the agent read what it needs.
+            .injection(PrefetchInjection::Index)
             .build(),
     )
     // `is_secret` defaults to true, because defaulting to secret fails safe.
@@ -173,6 +247,17 @@ fn build_settings() -> Result<ThreadSettings> {
             format!("Bearer {}", std::env::var("INTERNAL_MCP_TOKEN")?),
         )
         .build()])
+    // Headless Chrome for members that need to see what they built. Each member
+    // gets its own browser context, not its own process, and points at the
+    // ARSOX_SERVICE_* addresses above. Traffic still goes through the egress
+    // proxy: navigating to a URL is a network request wearing a hat.
+    .virtual_browser(
+        VirtualBrowser::builder()
+            .enabled(true)
+            .allowed_roles(["Frontend", "QA"])
+            .viewports([Viewport::Mobile, Viewport::Tablet, Viewport::Desktop])
+            .build(),
+    )
     // Opt out of the noisy ones. Statistics are off by default because they
     // change on every token.
     .stream(
@@ -220,6 +305,21 @@ async fn handle_event(thread: &Thread, event: TurnEvent) -> Result<()> {
         }
         TurnEvent::TurnCompleted { status, .. } => {
             tracing::info!(status = %status, "turn finished");
+        }
+        // Every failure at every severity lands here, and this is the one event
+        // type that cannot be switched off. `Recovered` and `Blocked` are the
+        // ones worth watching: a failover that keeps working looks like success,
+        // and a permission denial the agent quietly routed around looks like
+        // nothing at all.
+        TurnEvent::Incident { disposition, code, message, .. } => {
+            match disposition {
+                Disposition::Fatal | Disposition::Degraded => {
+                    tracing::warn!(code = %code, ?disposition, "{message}");
+                }
+                Disposition::Recovered | Disposition::Blocked => {
+                    tracing::info!(code = %code, ?disposition, "{message}");
+                }
+            }
         }
         // Plans and questions answer back over HTTP, not up the socket, which is
         // unidirectional. Both live on the thread because only one plan and one
@@ -298,6 +398,10 @@ async fn main() -> Result<()> {
     let ThreadCreated { thread, .. } = satellite.threads().create(build_settings()?).await?;
     tracing::info!(thread = %thread.id(), "thread created");
 
+    // Suggestion fingerprints already turned into tickets. Without this, the
+    // same finding opens a new issue on every turn.
+    let mut already_filed: HashSet<String> = HashSet::new();
+
     // Events belong to the thread, not to a turn: one socket per thread,
     // carrying every turn that runs on it. Each event carries `turn_id` if you
     // need to attribute it.
@@ -308,6 +412,11 @@ async fn main() -> Result<()> {
     // is the non-blocking shape the Node and Python SDKs get from `on()`.
     // `Thread` is Clone with shared-ownership semantics, so the clone is a
     // handle, not a copy.
+    //
+    // The stream is also Rust's `on("all")`. It carries every event that
+    // reaches the client, including types this SDK version has no variant for,
+    // which arrive in the catch-all arm of `handle_event`. That makes this loop
+    // the right place to hang an audit log or a bus forwarder.
     let pump_thread = thread.clone();
     let pump = tokio::spawn(async move {
         let mut events = pump_thread.events();
@@ -330,6 +439,47 @@ async fn main() -> Result<()> {
         cost = result.cost(),
         "turn accounting"
     );
+
+    // Counts by disposition ride along on the report, so the common case needs
+    // no query at all. Query when you want the detail.
+    tracing::info!(?result.incident_counts(), "incidents");
+
+    let problems = thread
+        .incidents()
+        .list(
+            IncidentQuery::builder()
+                .disposition([Disposition::Fatal, Disposition::Degraded])
+                .turn_id(turn.id())
+                .build(),
+        )
+        .await?;
+    for incident in problems {
+        tracing::warn!(
+            code = %incident.code(),
+            disposition = ?incident.disposition(),
+            "{}",
+            incident.message()
+        );
+    }
+
+    // `fingerprint` is the field that makes this an issue pipeline rather than a
+    // report. Suppress the ones you have already filed or you will open the same
+    // ticket again on every turn.
+    for suggestion in result.suggestions().tech_debt() {
+        if already_filed.contains(suggestion.fingerprint()) {
+            continue;
+        }
+        open_issue(suggestion.title(), suggestion.body()).await?;
+        already_filed.insert(suggestion.fingerprint().to_owned());
+    }
+
+    // The agent's proposed setup script is inert data. Arsox never adopts it,
+    // never writes it, never runs it. Adopting it is this line, and it is yours.
+    if let Some(setup) = result.suggestions().setup_script() {
+        if let Some(commands) = setup.proposed_setup_commands() {
+            tracing::info!("proposed setup change:\n{commands}");
+        }
+    }
 
     for artifact in thread.artifacts().list().await? {
         thread
