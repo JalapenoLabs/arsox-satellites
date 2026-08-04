@@ -1,0 +1,443 @@
+"""End to end example of driving an Arsox satellite from Python.
+
+Creates a thread with the full settings surface, runs a turn, consumes the
+normalized event stream, answers the agent's questions, and collects artifacts.
+
+Run with: python examples/example.py
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import os
+import sys
+
+from arsox import Satellite, Thread
+from arsox.settings import (
+    BudgetSettings,
+    CustomEnvVar,
+    GithubSettings,
+    HumanInTheLoopSettings,
+    JiraSettings,
+    McpServer,
+    ModelEndpoint,
+    ModelAuth,
+    PermissionSettings,
+    PlanModeSettings,
+    PullRequestSettings,
+    RedactionSettings,
+    RepoAuth,
+    RepoSettings,
+    RetryPolicy,
+    SelfReviewSettings,
+    StreamSettings,
+    TeamModeSettings,
+    ThreadSettings,
+)
+from arsox.enums import Harness, MergeMethod, RedactionMode, WebAccess
+from arsox.events import TurnEvent
+from arsox.questions import QuestionAnswer
+
+logger = logging.getLogger(__name__)
+
+
+# ####################### #
+#        SETTINGS         #
+# ####################### #
+
+
+def build_settings() -> ThreadSettings:
+    """Build the full thread settings for this run."""
+    return ThreadSettings(
+        # The satellite collects the workspace after this much inactivity. The
+        # clock resets on every turn, so a thread working for three days is
+        # never collected. Required, always, as the safety net against
+        # forgotten workspaces.
+        idle_ttl_minutes=120,
+        delete_on_complete=False,
+        # Required. "unlimited" is accepted but has to be typed out, so an
+        # unbounded spend is always a decision rather than an oversight.
+        budget=BudgetSettings(
+            max_tokens_per_turn=8_000_000,
+            max_cost_per_thread=40.0,
+            max_wall_clock_per_turn="unlimited",
+        ),
+        harness=Harness.CLAUDE,
+        # Ordered failover. The satellite walks this list top to bottom on
+        # failure, so put the cheapest and most reliable endpoint first: moving
+        # to the next endpoint discards the cached prompt prefix and the next
+        # request pays full price for the whole history.
+        models=[
+            ModelEndpoint(
+                name="primary-subscription",
+                model="claude-opus-5[1m]",
+                auth=ModelAuth(subscription_token=os.environ.get("ANTHROPIC_OAUTH_TOKEN")),
+                retry=RetryPolicy(
+                    max_attempts=10,
+                    initial_backoff_seconds=5,
+                    max_backoff_seconds=60,
+                    retry_on_status=[429, 529],
+                ),
+            ),
+            ModelEndpoint(
+                name="fallback-api-key",
+                model="claude-sonnet-5",
+                auth=ModelAuth(api_key=os.environ.get("ANTHROPIC_API_KEY")),
+                retry=RetryPolicy(max_attempts=3),
+            ),
+            ModelEndpoint(
+                name="self-hosted-azure",
+                model="claude-opus-5",
+                base_url="https://arsox-models.openai.azure.com/anthropic/v1",
+                auth=ModelAuth(api_key=os.environ.get("AZURE_ANTHROPIC_KEY")),
+            ),
+        ],
+        team_mode=TeamModeSettings(
+            enabled=True,
+            max_members=6,
+            # Added to the commander's suggestion list, not a fixed roster. The
+            # commander still picks who it actually needs.
+            suggested_roles=["Backend", "Frontend", "Unit test", "Doc writer"],
+        ),
+        plan_mode=PlanModeSettings(enabled=True, auto_approve=False),
+        human_in_the_loop=HumanInTheLoopSettings(
+            enabled=True,
+            # Past this, the turn ends with the questions recorded in the report
+            # rather than hanging forever.
+            question_timeout_minutes=30,
+        ),
+        self_review=SelfReviewSettings(enabled=True),
+        pull_requests=PullRequestSettings(
+            allow_agent_merge=False,
+            allowed_merge_methods=[MergeMethod.SQUASH],
+        ),
+        repos=[
+            RepoSettings(
+                name="api",
+                url="git@github.com:JalapenoLabs/arsox-satellites.git",
+                base_branch="develop",
+                auth=RepoAuth(
+                    ssh_private_key=os.environ.get("DEPLOY_KEY"),
+                    ssh_public_key=os.environ.get("DEPLOY_KEY_PUB"),
+                ),
+                setup_commands="yarn install --immutable",
+                # Semicolons are barriers, newlines run in parallel without
+                # failing fast.
+                checker=(
+                    "yarn install;\n"
+                    "yarn lint\n"
+                    "yarn typecheck\n"
+                    "yarn generate && yarn build\n"
+                    "; yarn deploy --dry-run"
+                ),
+            ),
+        ],
+        github=GithubSettings(
+            token=os.environ.get("GITHUB_PAT"),
+            allow_merge=False,
+        ),
+        jira=JiraSettings(
+            token=os.environ.get("JIRA_PAT"),
+            base_url="https://jalapenolabs.atlassian.net",
+            allow_status_transitions=True,
+            allow_comments=True,
+        ),
+        # is_secret defaults to True when omitted, because defaulting to secret
+        # fails safe. Spelling it out here for clarity.
+        env=[
+            CustomEnvVar(key="DEPLOY_TARGET", value="staging", is_secret=False),
+            CustomEnvVar(
+                key="DATABASE_URL",
+                value=os.environ.get("STAGING_DATABASE_URL"),
+                is_secret=True,
+            ),
+        ],
+        redaction=RedactionSettings(
+            mode=RedactionMode.POSTFIX_SHOWN,
+            # Six stars regardless of the secret's real length. Set to -1 to
+            # mirror the length, which leaks the length and is why it is not
+            # the default.
+            star_count=6,
+            # The kill switch. False unregisters the override_redaction tool
+            # entirely, so no agent in this thread can reach it no matter what
+            # it is told.
+            allow_redaction_override=False,
+        ),
+        permissions=PermissionSettings(
+            # `web` picks the base list. PRESET is the curated set the harnesses
+            # already reach for (npmjs.org, pypi.org, crates.io, and friends).
+            # CUSTOM starts from nothing.
+            web=WebAccess.PRESET,
+            # Always additive on top of `web`, so this never silently drops
+            # the preset.
+            additional_domains=["docs.anthropic.com", "jalapenolabs.atlassian.net"],
+            allow_git_push=True,
+            protected_branches=["main", "develop"],
+            # Omit to inherit the preset allowlist. An explicit list replaces it.
+            allowed_commands=["git", "yarn", "python3", "rg", "gh"],
+        ),
+        # Written to /workspace/<thread-id>/AGENTS.md, below the Arsox header.
+        # Advisory: it shapes behavior but never constrains it. Anything that
+        # must hold belongs in `permissions` above.
+        prompt=(
+            "This repo is public and open source. The develop branch is the working branch.\n"
+            "Never use em dashes in user-facing text.\n"
+            "Update docs/ in the same change as the code."
+        ),
+        mcp_servers=[
+            McpServer(
+                name="internal-search",
+                url="https://mcp.internal.jalapenolabs.io/sse",
+                headers={"Authorization": f"Bearer {os.environ.get('INTERNAL_MCP_TOKEN')}"},
+            ),
+        ],
+        # Opt out of the noisy ones. Statistics are off by default because they
+        # change on every token.
+        stream=StreamSettings(
+            include_statistics=False,
+            include_agent_thinking=True,
+            include_tool_calls=True,
+            include_team_chat=True,
+        ),
+    )
+
+
+# ############################# #
+#   STYLE 1: THE EVENT EMITTER  #
+# ############################# #
+#
+# Events belong to the thread, not to a turn: one socket per thread, carrying
+# every turn that runs on it. Each event carries turn_id if you need to
+# attribute it.
+#
+# Handlers fire concurrently and never block delivery, which is what makes this
+# the right default. A slow handler (a human answering a question, a database
+# write) holds up nothing behind it.
+
+
+async def on_agent_message(event: TurnEvent) -> None:
+    """Log an agent's message."""
+    logger.info(f"[{event.author}] {event.text}")
+
+
+async def on_tool_started(event: TurnEvent) -> None:
+    """Log the start of a tool call."""
+    logger.debug(f"[{event.author}] {event.tool_name}")
+
+
+async def on_member_spawned(event: TurnEvent) -> None:
+    """Log a newly spawned team member."""
+    logger.info(f"+ {event.role} ({event.member_id})")
+
+
+async def on_team_chat(event: TurnEvent) -> None:
+    """Log a message on the team channel."""
+    logger.info(f"[team] {event.author}: {event.text}")
+
+
+async def on_integration_landed(event: TurnEvent) -> None:
+    """Log a member branch merging cleanly into the integration branch."""
+    logger.info(f"merged {event.member_id} into {event.branch}")
+
+
+async def on_integration_conflict(event: TurnEvent) -> None:
+    """Log a conflict handed back to the member that caused it."""
+    logger.warning(f"conflict from {event.member_id}, returned for resolution")
+
+
+async def on_checker_result(event: TurnEvent) -> None:
+    """Log the exit code of a finished checker command."""
+    logger.info(f"checker {event.command} exited {event.exit_code}")
+
+
+async def on_budget_warning(event: TurnEvent) -> None:
+    """Warn as a budget ceiling approaches."""
+    logger.warning(f"budget at {event.percent_used}% of {event.ceiling}")
+
+
+async def on_artifact_created(event: TurnEvent) -> None:
+    """Log a newly produced artifact."""
+    logger.info(f"artifact {event.path} ({event.size_bytes} bytes)")
+
+
+def build_plan_handler(thread: Thread):
+    """Build a plan handler bound to the given thread."""
+
+    async def on_plan_proposed(event: TurnEvent) -> None:
+        logger.info(event.plan)
+        await thread.approve_plan()
+
+    return on_plan_proposed
+
+
+def build_question_handler(thread: Thread):
+    """Build a question handler bound to the given thread."""
+
+    async def on_question_asked(event: TurnEvent) -> None:
+        # The whole set is answered in one call. Individual answers may be an
+        # option, freeform text, or a decline, but partial submission is not a
+        # thing: all of them go back together.
+        answers: list[QuestionAnswer] = []
+        for question in event.questions:
+            recommended = next(
+                (option for option in question.options if option.is_recommended),
+                None,
+            )
+            if recommended:
+                answers.append(
+                    QuestionAnswer(question_id=question.id, option_id=recommended.id)
+                )
+            else:
+                answers.append(
+                    QuestionAnswer(
+                        question_id=question.id,
+                        text="Use your best judgement.",
+                    )
+                )
+        await thread.answer_questions(answers)
+
+    return on_question_asked
+
+
+# ############################## #
+#   STYLE 2: THE ASYNC ITERATOR  #
+# ############################## #
+
+
+async def consume_events(thread: Thread, from_sequence: int | None = None) -> None:
+    """Pull events off the same socket with an async iterator and a match.
+
+    The match keeps every case in one place, which reads better than scattered
+    handlers when the dispatch itself is the interesting part. In exchange the
+    loop body is serial: anything slow inside it stalls every event behind it,
+    and the satellite eventually closes the socket with STREAM_CONSUMER_LAGGED.
+    Reach for this when you actually want that backpressure, or when you are
+    resuming and want to drive the replay yourself.
+
+    Args:
+        thread: the thread whose stream to consume.
+        from_sequence: resume point, or None to start from the live edge.
+    """
+    async for event in thread.events(from_sequence=from_sequence):
+        match event.type:
+            case "agent.message":
+                logger.info(f"[{event.author}] {event.text}")
+
+            case "tool.started":
+                logger.debug(f"[{event.author}] {event.tool_name}")
+
+            case "team.member_spawned":
+                logger.info(f"+ {event.role} ({event.member_id})")
+
+            case "team.chat":
+                logger.info(f"[team] {event.author}: {event.text}")
+
+            case "integration.landed":
+                logger.info(f"merged {event.member_id} into {event.branch}")
+
+            case "integration.conflict":
+                logger.warning(f"conflict from {event.member_id}, returned for resolution")
+
+            case "checker.result":
+                logger.info(f"checker {event.command} exited {event.exit_code}")
+
+            case "budget.warning":
+                logger.warning(f"budget at {event.percent_used}% of {event.ceiling}")
+
+            case "plan.proposed":
+                logger.info(event.plan)
+                await thread.approve_plan()
+
+            case "question.asked":
+                await build_question_handler(thread)(event)
+
+            case "artifact.created":
+                logger.info(f"artifact {event.path} ({event.size_bytes} bytes)")
+
+            case "turn.completed":
+                logger.info(f"turn finished: {event.status}")
+
+            # Codes and event types are additive within a proto major, so a
+            # newer satellite can send something this SDK version has never
+            # heard of. Log it, never raise on it.
+            case _:
+                logger.debug(f"unhandled event type {event.type}: {event}")
+
+
+async def resume(satellite: Satellite, thread_id: str, last_seen_sequence: int) -> None:
+    """Pick a thread back up from a different process.
+
+    A thread lives entirely on the satellite, so any process holding the URL,
+    the secret, and the thread ID can attach. This is how a horizontally scaled
+    host application survives a replica dying mid-turn: persist the thread ID
+    and the last sequence you saw, and whichever replica comes up next resumes
+    from there without losing an event.
+    """
+    attached = await satellite.threads.attach(thread_id)
+    await consume_events(attached.thread, from_sequence=last_seen_sequence)
+
+
+# ####################### #
+#        EXECUTION        #
+# ####################### #
+
+
+async def main() -> None:
+    """Run one turn on a fresh thread and collect its artifacts."""
+    # Environment variables cross a runtime boundary, so they get a real check.
+    arsox_secret = os.environ.get("ARSOX_SECRET")
+    if not arsox_secret:
+        logger.error("ARSOX_SECRET is not set, refusing to start")
+        sys.exit(1)
+
+    async with Satellite(
+        url="https://satellite-01.internal.jalapenolabs.io",
+        secret=arsox_secret,
+    ) as satellite:
+        # Create returns a response object so the shape can grow without
+        # breaking callers.
+        created = await satellite.threads.create(build_settings())
+        thread = created.thread
+        logger.info(f"Thread {thread.id} created")
+
+        # Events belong to the thread, not to a turn: one socket per thread,
+        # carrying every turn that runs on it. Each event carries turn_id if you
+        # need to attribute it. Handlers fire without blocking the stream.
+        thread.on("agent.message", on_agent_message)
+        thread.on("tool.started", on_tool_started)
+        thread.on("team.member_spawned", on_member_spawned)
+        thread.on("team.chat", on_team_chat)
+        thread.on("integration.landed", on_integration_landed)
+        thread.on("integration.conflict", on_integration_conflict)
+        thread.on("checker.result", on_checker_result)
+        thread.on("budget.warning", on_budget_warning)
+        thread.on("artifact.created", on_artifact_created)
+
+        # Plans and questions answer back over HTTP, not up the socket, which is
+        # unidirectional. Both live on the thread because only one plan and one
+        # question set can ever be outstanding at a time.
+        thread.on("plan.proposed", build_plan_handler(thread))
+        thread.on("question.asked", build_question_handler(thread))
+
+        started = await thread.start_turn(
+            prompt="Add per-endpoint rate limiting to the public API and open a PR against develop.",
+        )
+        turn = started.turn
+
+        # Resolves when this turn reaches a terminal state. Handlers above keep
+        # firing the whole time.
+        result = await turn.result()
+        logger.info(result.summary)
+        logger.info(f"{result.tokens.total} tokens, ${result.cost:.2f}")
+
+        for artifact in await thread.artifacts.list():
+            await thread.artifacts.download(artifact.path, f"./out/{artifact.name}")
+
+        # Or leave it to expire through the idle TTL.
+        await thread.destroy()
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
+    asyncio.run(main())
