@@ -24,14 +24,18 @@ plugins:
   # Rust: prost. tonic is deliberately absent. Arsox serves protobuf over
   # ordinary HTTP rather than gRPC, so there are no service definitions to
   # generate stubs from.
+  #
+  # Output lands inside the SDK crate rather than under gen/ with the others,
+  # because `cargo publish` only packages files beneath the crate directory. A
+  # published crate that reached outside itself with `include!` would build
+  # locally and fail for every consumer.
   - remote: buf.build/community/neoeinstein-prost:v0.5.0
-    out: ../gen/rust/src
+    out: ../crates/arsox-sdk/src/generated
 
   # prost emits one flat file per package and no module tree. This writes the
-  # `mod.rs` wiring that turns those files into a crate the Rust SDK can
-  # actually depend on.
+  # `mod.rs` wiring that turns those files into a module the SDK can declare.
   - remote: buf.build/community/neoeinstein-prost-crate:v0.5.0
-    out: ../gen/rust/src
+    out: ../crates/arsox-sdk/src/generated
     opt:
       - no_features
 

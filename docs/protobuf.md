@@ -21,7 +21,7 @@ proto/
   buf.yaml                            module, lint, and breaking config
   buf.gen.yaml                        codegen targets for all three languages
   arsox/
-    common/v1/     common              Timestamp, Duration, Money, ceilings, paging
+    common/v1/     common              Timestamp, Duration, Money, Secret, ceilings
     error/v1/      error               ErrorCode, Error
     incident/v1/   incident            Disposition, Incident, incident queries
     usage/v1/      usage               TokenUsage, CostEstimate, lifetime statistics
@@ -191,17 +191,26 @@ buf format --diff --exit-code
 buf generate
 ```
 
-Output lands in `gen/`, one directory per language, and is committed. A
-published Rust crate must carry pre-generated `.rs` rather than force downstream
-consumers to install `protoc`, and the same reasoning keeps the TypeScript and
-Python artifacts here. `.gitattributes` marks the whole tree generated so a
+Output is committed rather than produced by a build script. A published Rust
+crate must carry pre-generated `.rs` rather than force downstream consumers to
+install `protoc`, and the same reasoning keeps the TypeScript and Python
+artifacts checked in. `.gitattributes` marks both output roots generated so a
 contract change reads as the `.proto` diff it actually is.
 
 | Language | Plugin | Output |
 |---|---|---|
 | TypeScript | `bufbuild/es` | `gen/ts` |
-| Rust | `community/neoeinstein-prost` plus `neoeinstein-prost-crate` | `gen/rust/src` |
+| Rust | `community/neoeinstein-prost` plus `neoeinstein-prost-crate` | `crates/arsox-sdk/src/generated` |
 | Python | `protocolbuffers/python` plus `pyi` | `gen/python` |
+
+**Rust is the exception to `gen/`,** and it is forced rather than chosen.
+`arsox-sdk` publishes to crates.io, and `cargo publish` only packages files
+beneath the crate directory. A crate that reached outside itself with `include!`
+would build locally and fail for every consumer, so the Rust output lands inside
+the crate. `cargo package` in CI proves the generated files actually ship.
+
+The directory is named `generated` rather than `gen`, which edition 2024 reserves
+as a keyword.
 
 Plugin versions are pinned in `buf.gen.yaml` for the same reason every other
 tool version is pinned: a floating plugin silently changes generated code
@@ -214,7 +223,7 @@ Each gets one **entry point**, not one file.
 
 | Language | Files emitted | Entry point |
 |---|---|---|
-| Rust | one per **package** | `gen/rust/src/mod.rs` |
+| Rust | one per **package** | `crates/arsox-sdk/src/generated/mod.rs` |
 | TypeScript | one per **proto file** | package `index.ts` barrel |
 | Python | one per **proto file** | PEP 420 namespace packages |
 

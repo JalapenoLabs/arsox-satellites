@@ -1,0 +1,10 @@
+# Copyright © 2026 Jalapeno Labs
+
+# Pinned exactly, like every other tool in this repo. A floating channel means a
+# compiler upgrade lands on a developer's machine and in CI on different days,
+# and the resulting lint or codegen difference is attributed to whatever change
+# happened to be in flight.
+[toolchain]
+channel = "1.96.0"
+components = [ "rustfmt", "clippy" ]
+profile = "minimal"

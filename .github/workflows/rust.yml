@@ -1,0 +1,85 @@
+# Copyright © 2026 Jalapeno Labs
+
+# The satellite and the Rust SDK. Formatting, lints, and tests all gate, because
+# a warning nobody is forced to read is a warning nobody reads.
+name: Rust
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/rust.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/rust.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: rust-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Fail the build on any warning. The workspace already denies a long list of
+  # lints; letting them through as warnings would make the list decorative.
+  RUSTFLAGS: '-D warnings'
+
+jobs:
+  rust:
+    name: Format, lint, and test
+    runs-on: [ linux, fedora, flagship, earthly, docker ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # rustup reads rust-toolchain.toml and installs the exact pinned version,
+      # so the toolchain is pinned in one place rather than here and there.
+      - name: Install the pinned toolchain
+        run: |
+          set -euo pipefail
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
+
+      # Formatting first: it is the fastest check and the least interesting
+      # failure to discover after waiting through a compile.
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # `--all-targets` covers tests and benches, which are exactly where lint
+      # debt accumulates when only the library is checked.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace --all-features
+
+      # The satellite ships as a release binary in a container, and release-only
+      # failures are real: different lints fire, and `lto` plus `codegen-units`
+      # exercise code paths a debug build never links.
+      - name: Build release
+        run: cargo build --workspace --release
+
+      # The SDK is published to crates.io, so it must build without the client
+      # feature that the satellite turns off. A default-features-only CI would
+      # never notice the types accidentally depending on the client.
+      - name: Build the SDK without default features
+        run: cargo build -p arsox-sdk --no-default-features
+
+      # Catches a crate that cannot actually be published: files reached outside
+      # the package directory, missing metadata, a path dependency with no
+      # version. Cheaper to learn here than at release time.
+      - name: Verify the SDK is publishable
+        run: cargo package -p arsox-sdk --no-verify --allow-dirty

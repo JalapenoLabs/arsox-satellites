@@ -1,0 +1,87 @@
+# Copyright © 2026 Jalapeno Labs
+
+[workspace]
+resolver = "3"
+members = [ "crates/*" ]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96"
+license = "Apache-2.0"
+repository = "https://github.com/JalapenoLabs/arsox-satellites"
+homepage = "https://github.com/JalapenoLabs/arsox-satellites"
+authors = [ "Jalapeno Labs" ]
+
+[workspace.dependencies]
+arsox-sdk = { version = "0.1.0", path = "crates/arsox-sdk", default-features = false }
+
+# Generated protobuf types. `prost-types` carries the well-known types, which
+# the contract uses for `google.protobuf.Struct` in error and incident details.
+prost = "0.14"
+prost-types = "0.14"
+
+anyhow = "1"
+thiserror = "2"
+tokio = { version = "1", features = [ "rt-multi-thread", "macros", "signal" ] }
+axum = "0.8"
+subtle = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = [ "env-filter", "json" ] }
+
+# Lints are defined once here and inherited by every crate with
+# `[lints] workspace = true`, so a new crate cannot quietly opt out.
+[workspace.lints.rust]
+ambiguous_negative_literals = "warn"
+missing_debug_implementations = "warn"
+redundant_imports = "warn"
+redundant_lifetimes = "warn"
+trivial_numeric_casts = "warn"
+unsafe_op_in_unsafe_fn = "warn"
+unused_lifetimes = "warn"
+
+[workspace.lints.clippy]
+cargo = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+correctness = { level = "warn", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+perf = { level = "warn", priority = -1 }
+style = { level = "warn", priority = -1 }
+suspicious = { level = "warn", priority = -1 }
+
+# From the `restriction` group. These prevent specific constructs rather than
+# catching bugs, and exist to drive up consistency and reviewability.
+allow_attributes_without_reason = "warn"
+as_pointer_underscore = "warn"
+assertions_on_result_states = "warn"
+clone_on_ref_ptr = "warn"
+deref_by_slicing = "warn"
+disallowed_script_idents = "warn"
+empty_drop = "warn"
+empty_enum_variants_with_brackets = "warn"
+empty_structs_with_brackets = "warn"
+fn_to_numeric_cast_any = "warn"
+if_then_some_else_none = "warn"
+map_err_ignore = "warn"
+redundant_type_annotations = "warn"
+renamed_function_params = "warn"
+semicolon_outside_block = "warn"
+undocumented_unsafe_blocks = "warn"
+unnecessary_safety_comment = "warn"
+unnecessary_safety_doc = "warn"
+unneeded_field_pattern = "warn"
+unused_result_ok = "warn"
+
+# Fires on two `syn` majors pulled in transitively by proc-macro dependencies,
+# which nothing in this workspace can resolve. Revisit once the ecosystem converges.
+multiple_crate_versions = "allow"
+
+# Would fight the message-template style that M-LOG-STRUCTURED asks for.
+literal_string_with_formatting_args = "allow"
+
+# The satellite is a long-running server, so a release build should trade
+# compile time for the runtime it spends the rest of its life in.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

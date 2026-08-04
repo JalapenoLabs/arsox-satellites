@@ -7,3 +7,8 @@
 # statistics, so a contract change reads as the .proto diff it actually is.
 gen/** linguist-generated=true
 gen/** -diff
+
+# Rust generates into the SDK crate rather than gen/, because `cargo publish`
+# only packages files beneath the crate directory.
+crates/arsox-sdk/src/generated/** linguist-generated=true
+crates/arsox-sdk/src/generated/** -diff

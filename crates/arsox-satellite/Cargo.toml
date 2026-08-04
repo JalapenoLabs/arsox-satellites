@@ -1,0 +1,36 @@
+# Copyright © 2026 Jalapeno Labs
+
+[package]
+name = "arsox-satellite"
+description = "The Arsox satellite: an HTTP and WebSocket API that runs agent harnesses and normalizes their output."
+keywords = [ "arsox", "agents", "satellite", "server" ]
+categories = [ "development-tools", "web-programming::http-server" ]
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+# Types only. The server has no use for the client half of the SDK, and linking
+# it would drag an HTTP stack into a process that is already serving one.
+arsox-sdk.workspace = true
+
+anyhow.workspace = true
+axum.workspace = true
+prost.workspace = true
+tokio.workspace = true
+subtle.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# Notably faster along allocating hot paths, which for this process means
+# request decoding and event fan-out. Per M-MIMALLOC-APPS.
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+mimalloc = "0.1"
+
+[lints]
+workspace = true

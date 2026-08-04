@@ -12,12 +12,14 @@ on:
     paths:
       - 'proto/**'
       - 'gen/**'
+      - 'crates/arsox-sdk/src/generated/**'
       - '.github/workflows/proto.yml'
   pull_request:
     branches: [ main, develop ]
     paths:
       - 'proto/**'
       - 'gen/**'
+      - 'crates/arsox-sdk/src/generated/**'
       - '.github/workflows/proto.yml'
   workflow_dispatch:
 
@@ -115,10 +117,15 @@ jobs:
       - name: Fail if codegen is stale
         run: |
           set -euo pipefail
-          if [ -n "$(git status --porcelain -- gen)" ]; then
+          # Both output roots. Rust generates into the SDK crate rather than
+          # gen/, because `cargo publish` only packages files beneath the crate
+          # directory. Checking only one root would silently stop covering the
+          # other the moment a target moves.
+          targets='gen crates/arsox-sdk/src/generated'
+          if [ -n "$(git status --porcelain -- ${targets})" ]; then
             echo "::error::Generated code is out of date. Run 'buf generate' in proto/ and commit the result."
-            git status --porcelain -- gen
-            git --no-pager diff -- gen
+            git status --porcelain -- ${targets}
+            git --no-pager diff -- ${targets}
             exit 1
           fi
           echo "Generated code matches the contract."

@@ -23,7 +23,8 @@ checksum-verified each run.
 
 | Workflow | File | Runs on |
 |---|---|---|
-| Proto | `.github/workflows/proto.yml` | pushes and PRs touching `proto/`, `gen/`, or the workflow itself |
+| Proto | `.github/workflows/proto.yml` | pushes and PRs touching `proto/` or either generated output root |
+| Rust | `.github/workflows/rust.yml` | pushes and PRs touching `crates/`, the workspace manifest, or the toolchain pin |
 
 Each workflow is path-filtered, so editing a README never queues a proto build.
 `workflow_dispatch` is enabled on all of them for manual runs, and
@@ -67,17 +68,45 @@ linting with a different ruleset.
 
 Codegen plugin versions are pinned separately, in `proto/buf.gen.yaml`.
 
+### Both output roots
+
+The staleness check covers `gen/` **and** `crates/arsox-sdk/src/generated/`.
+Rust generates into the SDK crate because `cargo publish` only packages files
+beneath the crate directory, and a check that watched one root would silently
+stop covering the other the moment a target moved.
+
 ### Network dependency
 
 `buf generate` resolves remote plugins from `buf.build`, so the codegen check
 needs egress to that host. If the runner pool loses it, the fix is vendoring the
 plugins locally rather than dropping the check.
 
+## Rust
+
+`rustup` reads `rust-toolchain.toml` and installs the exact pinned compiler, so
+the version lives in one place rather than being repeated in the workflow.
+
+Formatting runs first because it is the cheapest check and the least interesting
+failure to discover after a full compile. Clippy runs with `--all-targets`, since
+tests and benches are exactly where lint debt accumulates when only the library
+is checked, and with `-D warnings` because a warning nobody is forced to read is
+a warning nobody reads.
+
+Three checks then cover what a plain `cargo test` misses:
+
+- **Release build.** The satellite ships as a release binary. Different lints
+  fire there, and `lto` plus `codegen-units = 1` exercise code paths a debug
+  build never links.
+- **`--no-default-features` on the SDK.** The satellite consumes the crate with
+  its `client` feature off. Without this, the contract types could quietly grow a
+  dependency on the client and nobody would notice until a server build broke.
+- **`cargo package`.** Catches a crate that cannot be published: files reached
+  outside the package directory, missing metadata, a path dependency with no
+  version. It caught a declared-but-absent README the first time it ran.
+
 ## Roadmap
 
-- **Rust satellite**: `cargo build`, `cargo clippy -D warnings`, `cargo fmt
-  --check`, and `cargo test`, with the toolchain pinned in `rust-toolchain.toml`.
-- **SDK builds** for all three languages, each consuming `gen/` rather than
+- **SDK builds** for TypeScript and Python, each consuming `gen/` rather than
   regenerating it.
 - **Conformance suite** once harness mappers exist. That is the job that proves
   the normalization claim, so it belongs in CI from the day the first mapper

@@ -1,0 +1,32 @@
+# Copyright © 2026 Jalapeno Labs
+
+[package]
+name = "arsox-sdk"
+description = "Rust client and protobuf contract for Arsox satellites: one typed event stream, whichever harness runs underneath."
+keywords = [ "arsox", "agents", "protobuf", "sdk" ]
+categories = [ "api-bindings", "development-tools" ]
+readme = "README.md"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[features]
+# The client is on by default, because a client is what most consumers want.
+#
+# The satellite depends on this crate for the generated types alone and takes
+# `default-features = false`, so a server build never links an HTTP client it
+# will not use. Features stay additive: enabling `client` adds items and removes
+# nothing, per M-FEATURES-ADDITIVE.
+default = [ "client" ]
+client = [ ]
+
+[dependencies]
+prost.workspace = true
+prost-types.workspace = true
+
+[lints]
+workspace = true
