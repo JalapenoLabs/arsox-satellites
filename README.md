@@ -823,6 +823,51 @@ By default a human merges pull requests. Grant more autonomy and the commander m
 
 The commander still **chooses** whether to merge. You can also define which merge methods are permitted, such as squash versus rebase. The policy is enforced by the `gh` broker, not by asking nicely.
 
+## Post-task suggestions staging
+
+EXPERIMENTAL. Opt in, default off.
+
+This is a script that Arsox provides built-in.
+As a final last step, after the artifacts stage and everything else is completed then there is an optional suggestions stage.
+The commander can recommend suggestions for what could be improved upon next time back to the SDK.
+
+There are 3 categories of suggestions:
+1. Repo tech debt
+2. Repo improvements
+3. Setup script improvements
+
+### Repo tech debt
+
+This will report tech debt, things that exist today which regress the quality of the code base.
+
+This includes files that could be written better, duplicate functions, missing unit tests, security flaws, observations, gaps in production-grade code.
+
+This report comes in as a markdown string and a title string for each recommendation. It's designed to make it really easy to turn each one into a Jira/Github issue easily.
+
+### Repo improvements
+
+This will report things about the repo overall that could be upgraded, things that could exist to increase the quality of the code base.
+
+This includes CI recommendations, new infra, componentization, polymorphism, structure improvements, design improvements, developer UX, framework/infra upgrades, etc.
+
+This report comes in as a markdown string and a title string for each recommendation. It's designed to make it really easy to turn each one into a Jira/Github issue easily.
+
+### Setup script improvements
+
+This will report things about the workspace that could be improved, especially missing things that set back the agent on the satellite.
+The agent is given a copy of the existing setup script so that it knows exactly what exists already.
+
+Examples include:
+- missing a `npm install` step
+- missing golang as a language
+- missing apt/dnf packages
+- unable to use the docker engine to verify an image build step
+- permission denied to execute a custom CLI command
+
+The report comes in as a single markdown string of all of the issues, along with a single title.
+In addition, the agent can suggest a new setup script string with the issues fixed, if it feels necessary to get it.
+The agent will be informed fully about how the setup script works.
+
 ## Artifacts
 
 When a job completes, its artifacts are ready for you. A generated text report that was never committed to a repo is the typical case.
@@ -857,6 +902,7 @@ Each turn runs through a fixed stack.
 9. Auto squash or merge runs, if enabled
 10. The commander scans for artifacts
 11. Artifacts upload to the SDK, if the SDK wants them returned automatically
+12. Suggestions stage runs, if enabled
 
 **A new turn on an existing thread:**
 1. A turn starts (SDK call)
@@ -869,6 +915,7 @@ Each turn runs through a fixed stack.
 8. Auto squash or merge runs, if enabled
 9. The commander scans for artifacts
 10. Artifacts upload to the SDK, if requested
+11. Suggestions stage runs, if enabled
 
 The SDK can destroy threads directly, or let them expire through their idle TTL.
 
