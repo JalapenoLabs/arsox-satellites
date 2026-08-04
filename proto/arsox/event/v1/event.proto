@@ -1,0 +1,101 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+// The normalized event stream.
+//
+// This is the file the whole project exists for. Claude and Codex emit different
+// events with different shapes; both map into the payloads referenced below, so
+// an application is written once and never rewritten when the harness changes.
+// Content differs between harnesses. Shapes do not.
+//
+// Frames travel over a unidirectional WebSocket, server to client. Nothing is
+// ever sent up it: every command, starting a turn, answering questions,
+// approving a plan, cancelling, is an ordinary HTTP request. The socket only
+// tells you what happened.
+//
+// This file holds the envelope. Each family of payloads lives in its own file in
+// this package.
+package arsox.event.v1;
+
+import "arsox/common/v1/common.proto";
+import "arsox/event/v1/agent.proto";
+import "arsox/event/v1/integration.proto";
+import "arsox/event/v1/lifecycle.proto";
+import "arsox/event/v1/service.proto";
+import "arsox/event/v1/team.proto";
+import "arsox/incident/v1/incident.proto";
+
+// One event on a thread's stream.
+//
+// Persisted before it is sent, so reconnecting with `?from_sequence=<n>` replays
+// everything missed and a network blip costs nothing. Many consumers may read
+// the same stream, and each receives every event: a single-subscriber design
+// would force a horizontally scaled host application to designate one special
+// replica and fan out internally.
+message ThreadEvent {
+  // Monotonic per thread. The cursor for resumption.
+  uint64 sequence = 1;
+
+  string thread_id = 2;
+
+  // The turn this belongs to. Absent for events outside any turn, such as
+  // workspace provisioning.
+  optional string turn_id = 3;
+
+  arsox.common.v1.Timestamp occurred_at = 4;
+
+  // The event's stable wire name, e.g. "agent.message".
+  //
+  // Duplicated alongside `payload` on purpose. Event types are additive within a
+  // proto major, so a newer satellite will send arms an older SDK has never
+  // heard of, and an unknown oneof arm decodes to nothing. Carrying the name
+  // separately is what lets that SDK still name, log, and forward the event,
+  // which is what makes a wildcard subscription a real forward compatibility
+  // hook rather than a hole.
+  string type = 5;
+
+  oneof payload {
+    AgentMessage agent_message = 20;
+    AgentThinking agent_thinking = 21;
+
+    ToolStarted tool_started = 22;
+    ToolCompleted tool_completed = 23;
+
+    TeamMemberSpawned team_member_spawned = 24;
+    TeamMemberDespawned team_member_despawned = 25;
+    TeamChat team_chat = 26;
+    TeamDirectMessage team_direct_message = 27;
+
+    IntegrationRequested integration_requested = 28;
+    IntegrationLanded integration_landed = 29;
+    IntegrationConflict integration_conflict = 30;
+
+    CheckerResultEvent checker_result = 31;
+
+    ServiceStarted service_started = 32;
+    ServiceLog service_log = 33;
+
+    BudgetWarning budget_warning = 34;
+
+    PlanProposed plan_proposed = 35;
+    PlanDecided plan_decided = 36;
+
+    QuestionAsked question_asked = 37;
+    QuestionAnswered question_answered = 38;
+
+    ArtifactCreated artifact_created = 39;
+
+    RedactionOverridden redaction_overridden = 40;
+
+    TurnStarted turn_started = 41;
+    TurnCompleted turn_completed = 42;
+
+    StatisticsUpdated statistics_updated = 43;
+
+    // Every failure, at every severity. The one event type that cannot be
+    // switched off: a stream that can be configured to hide failures is worse
+    // than no stream.
+    arsox.incident.v1.Incident incident = 44;
+  }
+}

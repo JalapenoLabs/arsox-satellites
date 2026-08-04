@@ -1,0 +1,27 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.settings.v1;
+
+// Opt in to a commander with a team of peer agents.
+//
+// Default off, deliberately. With it off the satellite behaves like a standard
+// single-agent session, which is the right default: a first task should not
+// silently spawn nine LLM contexts and the bill that comes with them.
+//
+// With it on, a root commander owns the task and decides each turn which members
+// it needs. These are not the harness's built-in sub-agents, they are peer LLM
+// team members with their own context windows and their own worktrees. The
+// commander watches communication between the team rather than the work itself,
+// which is what keeps its context from reconverging into one window.
+message TeamMode {
+  bool enabled = 1;
+
+  // Absent uses 8.
+  optional uint32 max_members = 2;
+
+  // Added to the commander's suggestion list, never a fixed roster. The
+  // commander still picks who it actually needs.
+  repeated string suggested_roles = 3;
+}

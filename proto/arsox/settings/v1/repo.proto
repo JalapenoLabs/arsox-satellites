@@ -1,0 +1,81 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.settings.v1;
+
+import "arsox/settings/v1/service.proto";
+
+// Credentials for reaching a git remote.
+message GitAuth {
+  oneof credential {
+    SshKeyPair ssh_key = 1;
+    string personal_access_token = 2;
+  }
+}
+
+message SshKeyPair {
+  string private_key = 1;
+
+  // Absent is fine for most remotes, which derive the public key from the
+  // private one.
+  optional string public_key = 2;
+}
+
+// Bring your own agent configuration: CLAUDE.md, docs, custom skills.
+//
+// Cloned once into .agents, then materialized into .claude and .codex. Arsox
+// copies rather than symlinks, because agents write into .claude at runtime and
+// those writes must not mutate the clone.
+//
+// A skill from this repo is not a permission escape. Its scripts run under the
+// same exec allowlist, egress proxy, filesystem scope, and branch protections as
+// anything else. The agents repo shapes what agents know and prefer. It does not
+// shape what they are allowed to do.
+message AgentsRepo {
+  string url = 1;
+
+  // A tag or a commit SHA. Absent resolves to the repo's default branch, and
+  // the resolved SHA appears in the turn report either way.
+  //
+  // Pin this. A floating branch changes agent behavior between two threads you
+  // believed were identical, which is the hardest class of bug to notice and
+  // the hardest to reproduce.
+  optional string ref = 2;
+
+  optional GitAuth auth = 3;
+}
+
+// A repository to work in.
+//
+// Cloned exactly once into repos/<name>. In team mode every member gets a git
+// worktree of that clone rather than a clone of its own: a worktree shares the
+// object store but has its own working directory, index, and HEAD, so disk cost
+// is one working copy per member and git itself refuses to check out the same
+// branch twice.
+message Repo {
+  // Directory name under repos/ and the key used in service addresses.
+  string name = 1;
+
+  // HTTPS or SSH. Cloned with submodules.
+  string url = 2;
+
+  // Absent uses the remote's default branch. Never checked out for work: it is
+  // the untouched reference the integration branch is cut from.
+  optional string base_branch = 3;
+
+  // Absent works only if the repo and every submodule are public.
+  optional GitAuth auth = 4;
+
+  // Run once at thread creation, in the commander's checkout. Semicolons are
+  // barriers that fail fast, newlines run in parallel.
+  string setup_commands = 5;
+
+  // Run after the agents decide their work is complete. Same separator rules as
+  // `setup_commands`. A nonzero exit wakes the agents back up to fix it or to
+  // justify ignoring it, which is what turns "the agent said it was done" into
+  // verification.
+  string checker = 6;
+
+  repeated Service services = 7;
+}

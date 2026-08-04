@@ -1,0 +1,60 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.settings.v1;
+
+import "arsox/common/v1/common.proto";
+
+// Which event types reach the socket.
+//
+// Incidents are absent from this list on purpose and cannot be switched off. A
+// stream that can be configured to hide failures is worse than no stream. Filter
+// them client-side if they are noisy; they are in the database regardless of
+// what the socket carries, so muting the channel would not suppress the record
+// anyway.
+message StreamSettings {
+  // Default off. Statistics change on every token, which is far too fast to be
+  // useful as a push event. Fetch them instead.
+  bool include_statistics = 1;
+
+  // Absent means included.
+  optional bool include_agent_thinking = 2;
+  optional bool include_tool_calls = 3;
+  optional bool include_team_chat = 4;
+  optional bool include_service_logs = 5;
+}
+
+// Ceilings that keep one thread from taking down the satellite.
+//
+// An agent with a shell can fill a disk. These are enforced, not suggested.
+// Per-satellite memory and CPU are the container's, set at the docker level with
+// --memory and --cpus: team mode runs several harness processes at once and each
+// one is a real memory consumer.
+message ResourceLimits {
+  // The thread's workspace subtree. Exceeding it fails the turn rather than
+  // taking down the satellite. Absent uses 10 GiB.
+  optional uint64 workspace_quota_bytes = 1;
+
+  // Total artifact bytes per thread, to keep a runaway log out of your artifact
+  // download. Absent uses 100 MiB.
+  optional uint64 artifact_cap_bytes = 2;
+}
+
+// Bounds on the operations that can otherwise hang forever.
+//
+// The turn wall clock bound lives in Budget rather than here, because exceeding
+// it is a budget outcome rather than a hung operation.
+message Timeouts {
+  // One exec command. On expiry the command is killed and the output returns to
+  // the agent as a failure. Absent uses 30 minutes.
+  optional arsox.common.v1.Duration exec_command = 1;
+
+  // One LLM request. On expiry it counts as an endpoint failure and triggers the
+  // retry or failover policy. Absent uses 10 minutes.
+  optional arsox.common.v1.Duration llm_request = 2;
+
+  // No output at all from the harness. On expiry it is considered hung and
+  // restarted once. Absent uses 15 minutes.
+  optional arsox.common.v1.Duration harness_idle = 3;
+}

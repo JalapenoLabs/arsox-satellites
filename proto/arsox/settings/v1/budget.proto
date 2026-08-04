@@ -1,0 +1,28 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.settings.v1;
+
+import "arsox/common/v1/common.proto";
+
+// Ceilings the LLM proxy enforces, not advice the agents are asked to follow.
+//
+// Every model request traverses the proxy, so the proxy counts tokens and
+// refuses further completions once a ceiling is reached. An agent cannot talk
+// its way past it. At 80% of any ceiling a budget warning is emitted so the
+// host application can react before the wall.
+//
+// Both token and cost ceilings are required at thread creation. Team mode can
+// run nine LLM contexts for days, so an unbounded spend has to be typed out as
+// `Unlimited` rather than defaulted into.
+message Budget {
+  // Required. One turn, every agent in it combined.
+  arsox.common.v1.TokenCeiling max_tokens_per_turn = 1;
+
+  // Required. The thread's entire life.
+  arsox.common.v1.CostCeiling max_cost_per_thread = 2;
+
+  // Absent leaves the turn unbounded in wall clock time.
+  optional arsox.common.v1.DurationCeiling max_wall_clock_per_turn = 3;
+}

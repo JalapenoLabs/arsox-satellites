@@ -1,0 +1,57 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.event.v1;
+
+import "arsox/turn/v1/turn.proto";
+
+// A member asked for its branch to be merged into the integration branch.
+//
+// Members never merge into it themselves. They request it, and Arsox serializes
+// the requests so exactly one merge runs at a time. Because merges are
+// serialized and conflicts are pushed back to the member that caused them, the
+// integration branch is always buildable and the commander never has to
+// arbitrate a three-way conflict it did not create.
+message IntegrationRequested {
+  string member_id = 1;
+  string repo = 2;
+  string branch = 3;
+  string summary = 4;
+}
+
+// A merge landed cleanly.
+//
+// Every other member receives this and merges the integration branch back into
+// its own worktree to pick up the new work.
+message IntegrationLanded {
+  string member_id = 1;
+  string repo = 2;
+
+  // The integration branch, arsox/<thread-id>. The only branch ever pushed.
+  string branch = 3;
+
+  string summary = 4;
+}
+
+// A merge conflicted and was aborted.
+//
+// The conflicting hunks go back to the requesting member, which merges the
+// integration branch into its own branch, resolves in its own worktree, and
+// requests again. The integration branch is never left in a conflicted state.
+message IntegrationConflict {
+  string member_id = 1;
+  string repo = 2;
+  string branch = 3;
+
+  // Paths with conflicting hunks.
+  repeated string conflicting_paths = 4;
+}
+
+// A checker command finished.
+//
+// Failure is a normal outcome routed back to the commander, not a crash.
+message CheckerResultEvent {
+  string repo = 1;
+  arsox.turn.v1.CheckerResult result = 2;
+}

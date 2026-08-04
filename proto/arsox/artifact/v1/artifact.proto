@@ -1,0 +1,74 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+// Files a turn produced, and the workspace they came out of.
+//
+// The agents decide what counts as an artifact. Artifacts are moved up from the
+// repo level into the thread's artifacts/ directory, because repo directories
+// are the most ephemeral part of the workspace and are frequently torn down or
+// recreated, while artifacts should outlive them.
+package arsox.artifact.v1;
+
+import "arsox/common/v1/common.proto";
+
+// A file an agent promoted to an artifact.
+message Artifact {
+  // Base name, for saving locally.
+  string name = 1;
+
+  // Path relative to the thread's artifacts/ directory.
+  string path = 2;
+
+  uint64 size_bytes = 3;
+
+  // Best-effort content type. Absent when the satellite could not determine
+  // one, never that the file is empty.
+  optional string content_type = 4;
+
+  // Hex-encoded SHA-256 of the contents, so a download can be verified.
+  string sha256 = 5;
+
+  arsox.common.v1.Timestamp created_at = 6;
+
+  // Which member produced it, when attributable.
+  optional string member_id = 7;
+}
+
+// Any file in the thread's workspace, artifact or not.
+message WorkspaceFile {
+  // Path relative to the thread's workspace root.
+  string path = 1;
+
+  uint64 size_bytes = 2;
+
+  // Whether an agent promoted this file to artifacts/.
+  bool is_artifact = 3;
+
+  arsox.common.v1.Timestamp modified_at = 4;
+}
+
+message ListArtifactsRequest {
+  string thread_id = 1;
+  arsox.common.v1.PageRequest page = 2;
+}
+
+message ListArtifactsResponse {
+  repeated Artifact artifacts = 1;
+  arsox.common.v1.PageResponse page = 2;
+}
+
+message ListWorkspaceFilesRequest {
+  string thread_id = 1;
+
+  // Restrict to files under this workspace-relative prefix. Empty lists
+  // everything.
+  string path_prefix = 2;
+
+  arsox.common.v1.PageRequest page = 3;
+}
+
+message ListWorkspaceFilesResponse {
+  repeated WorkspaceFile files = 1;
+  arsox.common.v1.PageResponse page = 2;
+}

@@ -1,0 +1,52 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.turn.v1;
+
+import "arsox/turn/v1/turn.proto";
+
+// What happened during the turn, handed to the suggestions agent so it is not
+// starting blind.
+//
+// A clean context window is not an empty one. An agent that knows nothing about
+// the turn has to cold-search the repo: slow, expensive, and blind to the most
+// valuable signal available, which is the work that just happened. The brief is
+// small, typically a few thousand tokens against a window measured in hundreds
+// of thousands, and the agent spends the rest of that window on the repo.
+//
+// The brief carries evidence, not conclusions. It says what happened, not what
+// the commander thought about the code. That line is the entire reason for a
+// fresh agent: import the commander's opinions and you have re-imported the bias
+// you spawned a new context to escape. Diffs, exit codes, and "this took four
+// attempts" are evidence. "The auth module is a mess" is a conclusion, and it
+// belongs in the commander's own report.
+//
+// The brief orients, it does not scope. The agent starts where the turn was and
+// is explicitly free to range outward. Point an agent at the diff and stop, and
+// it will review the diff, which is automated self-review built a second time.
+message TurnBrief {
+  string task = 1;
+
+  // Absent when plan mode was off, or the planning agent decided no plan was
+  // needed.
+  optional string plan = 2;
+
+  string summary = 3;
+
+  repeated TeamMember members = 4;
+  repeated ChangedFile changed_files = 5;
+  repeated IntegrationRecord integrations = 6;
+  repeated CheckerResult checker_results = 7;
+
+  // Where the team got stuck: what took three attempts, what two members had to
+  // coordinate around, what somebody worked around instead of fixing. The
+  // commander writes it as its last act, because it is the one agent that read
+  // every message on the team chat and every DM. With team mode off, the single
+  // agent writes it from its own run.
+  //
+  // The field that earns the feature. Friction is the best available predictor
+  // of debt: a module three members had to negotiate around is telling you
+  // something no static sweep will find.
+  repeated string friction = 8;
+}

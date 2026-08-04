@@ -1,0 +1,90 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+// Token accounting and lifetime statistics.
+//
+// This is the file where the normalization claim is most easily broken and
+// hardest to notice. Every harness reports usage differently, and a mapper that
+// silently drops a field looks correct until somebody reconciles a bill against
+// it. The conformance suite exists for exactly this contract.
+package arsox.usage.v1;
+
+import "arsox/common/v1/common.proto";
+
+// Tokens consumed, in one canonical shape.
+//
+// One message per concept. There is deliberately no ClaudeTokenUsage and no
+// CodexTokenUsage: a consumer written against a per-harness message has to be
+// rewritten to switch harnesses, which is the cost Arsox exists to remove.
+//
+// Counts are 64 bit. A single turn fits comfortably in 32, but lifetime totals
+// accumulate across every turn a satellite ever ran, and varint encoding makes
+// the wider type free for small values.
+message TokenUsage {
+  uint64 input_tokens = 1;
+  uint64 output_tokens = 2;
+  uint64 total_tokens = 3;
+
+  // Absent when the harness does not report cache accounting. Zero means it
+  // reported a genuine zero.
+  //
+  // Getting this distinction wrong turns "this harness has no cache
+  // accounting" into "this run read nothing from cache", which is a silent
+  // defect in a billing-adjacent number.
+  optional uint64 cache_read_tokens = 4;
+  optional uint64 cache_write_tokens = 5;
+}
+
+// What the satellite computed the tokens cost.
+//
+// An estimate, always. Providers bill on their own schedule and their own
+// rounding, and a model with no published pricing produces no estimate at all
+// rather than a confident zero.
+message CostEstimate {
+  // Absent when no endpoint in the run published pricing for its model.
+  optional arsox.common.v1.Money amount = 1;
+
+  // True when some but not all of the underlying requests could be priced, so
+  // `amount` is a floor rather than a total.
+  bool is_partial = 2;
+}
+
+// Totals for one model, across the satellite's lifetime.
+message ModelStatistics {
+  // The model identifier as configured, e.g. "claude-opus-5[1m]".
+  string model = 1;
+
+  TokenUsage tokens = 2;
+  CostEstimate cost = 3;
+}
+
+// Totals for one thread, across its lifetime.
+message ThreadStatistics {
+  string thread_id = 1;
+  TokenUsage tokens = 2;
+  CostEstimate cost = 3;
+}
+
+// Everything the satellite has ever spent.
+//
+// Outlives the threads it describes, on its own retention, alongside incidents.
+message LifetimeStatistics {
+  repeated ModelStatistics by_model = 1;
+  repeated ThreadStatistics by_thread = 2;
+
+  TokenUsage total = 3;
+  CostEstimate total_cost = 4;
+
+  arsox.common.v1.Timestamp collected_at = 5;
+}
+
+message GetStatisticsRequest {
+  // Restrict to these threads. Empty returns every thread the satellite still
+  // has records for.
+  repeated string thread_ids = 1;
+}
+
+message GetStatisticsResponse {
+  LifetimeStatistics statistics = 1;
+}

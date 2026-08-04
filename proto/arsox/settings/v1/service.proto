@@ -1,0 +1,59 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.settings.v1;
+
+import "arsox/common/v1/common.proto";
+
+// Where a service instance lives.
+enum ServiceIsolation {
+  SERVICE_ISOLATION_UNSPECIFIED = 0;
+
+  // One instance per thread, reference counted across every member. The
+  // default, and the reason three agents do not race to bind port 3000: the
+  // second one is never started.
+  SERVICE_ISOLATION_SHARED = 1;
+
+  // One instance per member, each in its own network namespace, so hardcoded
+  // ports stop mattering. The escape hatch, not the default: it costs N copies
+  // of your dev server. Reach for it when instances must not share state, such
+  // as a test suite that truncates a database on boot.
+  SERVICE_ISOLATION_PER_MEMBER = 2;
+}
+
+// A long-running process the agents need rather than a command they run.
+//
+// Three members each running `yarn dev` is not a port conflict, it is a
+// duplicate nobody wanted. They do not each need a dev server, they need one
+// dev server they can both reach, and declaring it here makes that the only
+// outcome available.
+//
+// Started lazily on first use, so a turn that never touches the frontend never
+// pays for a dev server. Every member receives the address as
+// ARSOX_SERVICE_<NAME>_URL and is told to use it rather than assume a port.
+message Service {
+  string name = 1;
+
+  string command = 2;
+
+  // The port the service listens on inside the container.
+  optional uint32 port = 3;
+
+  ReadinessProbe ready_when = 4;
+
+  ServiceIsolation isolation = 5;
+}
+
+// How Arsox decides the service is up before handing its address to an agent.
+//
+// If the probe never passes, the member that asked gets a failure carrying the
+// log tail rather than a timeout with no explanation.
+message ReadinessProbe {
+  // Path polled on the service's port until it answers 2xx. Absent probes a
+  // successful TCP connect to `port` instead.
+  optional string http_get = 1;
+
+  // How long to keep probing. Absent uses the satellite's default.
+  optional arsox.common.v1.Duration timeout = 2;
+}

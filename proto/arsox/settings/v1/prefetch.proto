@@ -1,0 +1,57 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.settings.v1;
+
+// How much of a prefetched item reaches the prompt.
+enum PrefetchInjection {
+  PREFETCH_INJECTION_UNSPECIFIED = 0;
+
+  // A one-line entry per item in AGENTS.md pointing at its directory. The
+  // default, because inlining twenty tickets into every agent's context is
+  // precisely the cost this feature exists to avoid. The agent reads what it
+  // needs.
+  PREFETCH_INJECTION_INDEX = 1;
+
+  // The rendered issue.md of every item is inlined.
+  PREFETCH_INJECTION_SUMMARY = 2;
+
+  // Files on disk, nothing in the prompt.
+  PREFETCH_INJECTION_NONE = 3;
+}
+
+// Fetch tickets, issues, and pull requests deterministically before the turn.
+//
+// An agent that discovers it needs a ticket spends a tool call, a CLI round
+// trip, and a large unfiltered payload in context to get it. Arsox fetches the
+// same thing once, off the model's clock, in a shape you control. It is also
+// more reliable: the fetch either succeeds or is reported, rather than depending
+// on an agent choosing to look.
+//
+// An item that 404s or is permission-denied is recorded and skipped, never
+// fatal. One bad ID in a list of twenty should not kill a turn that had nineteen
+// good ones.
+//
+// Prefetched content is untrusted input. Tickets carry pasted logs and logs
+// carry credentials. Everything under issues/ is scanned on the way out like any
+// other content, but treat the directory as a place secrets arrive rather than a
+// place they cannot.
+message Prefetch {
+  // Jira keys, e.g. "BUG-123". Fetched raw, so every custom field the instance
+  // defines survives rather than being flattened away.
+  repeated string jira = 1;
+
+  // GitHub issue or pull request numbers. Which one each is gets resolved
+  // automatically, and a pull request additionally brings its diff, its review
+  // comments, its conversation, and its current check status.
+  repeated uint32 github = 2;
+
+  PrefetchInjection injection = 3;
+
+  // Per-item ceiling on attachment bytes. An attachment that would breach the
+  // thread's disk quota is skipped with a note rather than filling the volume,
+  // because a heap dump on a ticket is a real thing that happens. Absent uses
+  // the satellite's default.
+  optional uint64 max_attachment_bytes_per_item = 4;
+}

@@ -1,0 +1,37 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.event.v1;
+
+import "arsox/event/v1/author.proto";
+
+message TeamMemberSpawned {
+  string member_id = 1;
+  string role = 2;
+
+  // Whether this member started from its previous context rather than a clean
+  // slate. The commander chooses per member on every turn after the first.
+  bool resumed_context = 3;
+}
+
+message TeamMemberDespawned {
+  string member_id = 1;
+  string role = 2;
+}
+
+// A message on the shared team chat.
+//
+// One of the few things the commander sees in full, along with direct messages,
+// integration outcomes, checker results, and deliberate escalations.
+message TeamChat {
+  Author author = 1;
+  string text = 2;
+}
+
+// A direct message between two members. The commander sees these too.
+message TeamDirectMessage {
+  Author author = 1;
+  string to_member_id = 2;
+  string text = 3;
+}

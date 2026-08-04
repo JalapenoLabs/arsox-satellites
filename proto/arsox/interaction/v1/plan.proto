@@ -1,0 +1,46 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.interaction.v1;
+
+import "arsox/common/v1/common.proto";
+
+// A plan drafted before any work begins.
+//
+// Produced by a dedicated agent with a clean context window, even in team mode.
+// Where the harness has no native plan mode Arsox supplies a skill fallback, and
+// the output is normalized to this shape either way.
+message Plan {
+  string plan_id = 1;
+
+  // Markdown.
+  string body = 2;
+
+  arsox.common.v1.Timestamp proposed_at = 3;
+}
+
+enum PlanDecision {
+  PLAN_DECISION_UNSPECIFIED = 0;
+  PLAN_DECISION_APPROVED = 1;
+  PLAN_DECISION_REJECTED = 2;
+}
+
+// POST /v1/threads/{thread_id}/plan
+//
+// Like answering questions, deciding is not idempotent: a second decision on the
+// same plan is rejected with PLAN_ALREADY_DECIDED.
+message DecidePlanRequest {
+  string thread_id = 1;
+  string plan_id = 2;
+
+  PlanDecision decision = 3;
+
+  // What to change. Carried back to the planning agent on a rejection.
+  optional string feedback = 4;
+}
+
+message DecidePlanResponse {
+  Plan plan = 1;
+  PlanDecision decision = 2;
+}

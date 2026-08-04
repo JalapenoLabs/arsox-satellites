@@ -1,0 +1,95 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+// Questions the agents ask a human, and the answers that come back.
+//
+// Only the commander asks. Team members escalate to it, and it decides whether a
+// question is worth your attention. Without that funnel, eight members would
+// each queue their own.
+package arsox.interaction.v1;
+
+import "arsox/common/v1/common.proto";
+
+// One option a question offers.
+message QuestionOption {
+  string option_id = 1;
+
+  string title = 2;
+
+  // Absent when the title says everything.
+  optional string description = 3;
+
+  // The commander's own preference. Advisory: answering is still yours.
+  bool is_recommended = 4;
+}
+
+// One question, with up to 5 options.
+message Question {
+  string question_id = 1;
+
+  string title = 2;
+
+  // Context the title cannot carry on its own.
+  optional string detail = 3;
+
+  // Up to 5. Empty means the question expects freeform text.
+  repeated QuestionOption options = 4;
+
+  // Whether text is accepted in place of choosing an option.
+  bool allow_freeform = 5;
+}
+
+// A set of 1 to 5 questions, answered together.
+//
+// There is never a second set queued behind the first, and never ten questions
+// waiting. One set at a time per thread, answered once.
+message QuestionSet {
+  string question_set_id = 1;
+
+  repeated Question questions = 2;
+
+  arsox.common.v1.Timestamp asked_at = 3;
+
+  // When the question timeout elapses and the turn moves on without an answer.
+  // Absent when the thread has no question timeout configured.
+  optional arsox.common.v1.Timestamp expires_at = 4;
+}
+
+// Refusing to answer one question, which is different from not answering it.
+message Declined {}
+
+// One answer within a set.
+message QuestionAnswer {
+  string question_id = 1;
+
+  oneof answer {
+    string option_id = 2;
+    string text = 3;
+    Declined declined = 4;
+  }
+}
+
+// POST /v1/threads/{thread_id}/questions/{question_set_id}
+//
+// The whole set is answered at once. Individual answers may differ in kind, and
+// any of them may be declined, but answering three now and two later is not a
+// thing the shape allows.
+//
+// Answering is not idempotent. If two replicas of a scaled host application
+// answer the same set, the first write wins and the second is rejected with
+// QUESTION_SET_ALREADY_ANSWERED, so coordinate on your side which replica speaks
+// for the human.
+message AnswerQuestionsRequest {
+  string thread_id = 1;
+  string question_set_id = 2;
+
+  // Must cover every question in the set. A partial response is rejected with
+  // QUESTION_ANSWER_INCOMPLETE.
+  repeated QuestionAnswer answers = 3;
+}
+
+message AnswerQuestionsResponse {
+  QuestionSet question_set = 1;
+  repeated QuestionAnswer answers = 2;
+}

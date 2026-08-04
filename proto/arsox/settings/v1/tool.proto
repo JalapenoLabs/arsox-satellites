@@ -1,0 +1,48 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.settings.v1;
+
+// A server whose tools the agents may use.
+//
+// Arsox provides its own MCP tools alongside these, including team spawn and
+// despawn, request_integration, and override_redaction.
+message McpServer {
+  string name = 1;
+  string url = 2;
+
+  // Sent on every request to the server. Values here are treated as secrets and
+  // redacted like any other.
+  map<string, string> headers = 3;
+}
+
+enum Viewport {
+  VIEWPORT_UNSPECIFIED = 0;
+  VIEWPORT_MOBILE = 1;
+  VIEWPORT_TABLET = 2;
+  VIEWPORT_DESKTOP = 3;
+}
+
+// Headless Chrome, so frontend and QA work is not done blind.
+//
+// EXPERIMENTAL. Opt in, default off. Each member gets its own browser context
+// rather than its own browser process: contexts are isolated in cookies,
+// storage, and session while sharing one Chrome, which keeps memory sane when
+// several members are looking at pages at once. Chrome is memory-hungry, which
+// is part of why this is off by default.
+//
+// The browser points at declared services through the same ARSOX_SERVICE_*
+// addresses, so "run the app and look at it" is two features composing rather
+// than one reimplementing the other.
+//
+// Screenshots are for an agent to look at and a human to review. Do not diff
+// them byte for byte: font rendering and compositing vary between runs.
+message VirtualBrowser {
+  bool enabled = 1;
+
+  // Roles permitted to drive it. Empty permits every member.
+  repeated string allowed_roles = 2;
+
+  repeated Viewport viewports = 3;
+}

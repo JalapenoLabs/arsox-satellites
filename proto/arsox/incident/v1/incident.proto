@@ -1,0 +1,112 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+// The record of everything that went wrong without ending a request.
+//
+// Returned errors answer "why did my call fail". Most things that go wrong are
+// not that: a prefetched ticket 404s, a checker exits nonzero, an endpoint
+// fails and the next one covers, a command hits the exec allowlist. The turn
+// continues and nothing is returned to the caller. Incidents are where those
+// go, so that nothing in Arsox fails silently.
+package arsox.incident.v1;
+
+import "arsox/common/v1/common.proto";
+import "arsox/error/v1/error.proto";
+import "google/protobuf/struct.proto";
+
+// What the failure did to the work in flight.
+//
+// Incidents reuse the error code namespace rather than defining a parallel
+// taxonomy. The same code means the same thing in both positions. What differs
+// is the disposition.
+enum Disposition {
+  DISPOSITION_UNSPECIFIED = 0;
+
+  // Ended the turn.
+  DISPOSITION_FATAL = 1;
+
+  // Failed, then succeeded. The one people forget, and the one that pays for
+  // the feature: a failover that works looks exactly like success, so an
+  // endpoint rejecting every request stays invisible until it shows up in a
+  // bill.
+  DISPOSITION_RECOVERED = 2;
+
+  // Work continued, something is missing. A prefetched ticket that 404s.
+  DISPOSITION_DEGRADED = 3;
+
+  // A permission gate closed as designed. Not a malfunction: the system worked.
+  // But an agent that tried something, was denied, and quietly worked around it
+  // almost always means the allowlist or the setup script is wrong, and these
+  // are the receipts behind setup script suggestions.
+  DISPOSITION_BLOCKED = 4;
+}
+
+// One recorded failure.
+//
+// Written to the database, emitted on the thread stream, and queryable
+// afterward. Incidents outlive their thread on their own retention, because
+// "why did last night's run go wrong" is asked after the workspace is gone.
+message Incident {
+  string incident_id = 1;
+
+  // Position in the thread's event stream, so an incident read from the
+  // database can be located in the stream and vice versa.
+  uint64 sequence = 2;
+
+  string thread_id = 3;
+
+  // The turn this happened during. Absent for failures outside any turn, such
+  // as workspace provisioning at thread creation.
+  optional string turn_id = 4;
+
+  // Which agent caused it, when attributable. Absent for satellite-level
+  // failures and for anything the commander did directly.
+  optional string member_id = 5;
+
+  // The same enum returned errors use.
+  arsox.error.v1.ErrorCode code = 6;
+
+  Disposition disposition = 7;
+
+  bool retryable = 8;
+
+  string message = 9;
+
+  // Same per-code key set as arsox.error.v1.Error.details.
+  google.protobuf.Struct details = 10;
+
+  arsox.common.v1.Timestamp occurred_at = 11;
+}
+
+// How many of each disposition a turn produced.
+//
+// Rides along on every turn report so the common case needs no query at all.
+message IncidentCounts {
+  uint32 fatal = 1;
+  uint32 recovered = 2;
+  uint32 degraded = 3;
+  uint32 blocked = 4;
+}
+
+// GET /v1/incidents, and the thread-scoped equivalent.
+//
+// Every filter is a repeated field, and an empty one means "do not filter on
+// this" rather than "match nothing".
+message ListIncidentsRequest {
+  repeated string thread_ids = 1;
+  repeated string turn_ids = 2;
+  repeated string member_ids = 3;
+  repeated arsox.error.v1.ErrorCode codes = 4;
+  repeated Disposition dispositions = 5;
+
+  optional arsox.common.v1.Timestamp occurred_after = 6;
+  optional arsox.common.v1.Timestamp occurred_before = 7;
+
+  arsox.common.v1.PageRequest page = 8;
+}
+
+message ListIncidentsResponse {
+  repeated Incident incidents = 1;
+  arsox.common.v1.PageResponse page = 2;
+}

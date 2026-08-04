@@ -1,0 +1,64 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.settings.v1;
+
+// The base network egress policy.
+enum WebAccess {
+  WEB_ACCESS_UNSPECIFIED = 0;
+
+  // The curated set the harnesses already reach for.
+  WEB_ACCESS_PRESET = 1;
+
+  WEB_ACCESS_ALL = 2;
+  WEB_ACCESS_NONE = 3;
+
+  // Start from nothing and use `additional_domains` alone.
+  WEB_ACCESS_CUSTOM = 4;
+}
+
+// The base shell exec policy.
+enum ExecAccess {
+  EXEC_ACCESS_UNSPECIFIED = 0;
+
+  // The curated set of commands the harnesses already reach for.
+  EXEC_ACCESS_PRESET = 1;
+
+  EXEC_ACCESS_NONE = 2;
+
+  // Start from nothing and use `allowed_commands` alone.
+  EXEC_ACCESS_CUSTOM = 3;
+}
+
+// Deterministic controls, enforced by infrastructure the agent cannot reach.
+//
+// A permission written into a prompt is a suggestion, and an agent under
+// pressure will route around a suggestion. Instructions in AGENTS.md are
+// advisory and always will be: they shape behavior, they do not constrain it.
+// Everything here is different. Agents run as an unprivileged user and every
+// enforcement point below is owned by root.
+message Permissions {
+  WebAccess web = 1;
+
+  // Always additive on top of `web`, so setting this never silently drops the
+  // preset. The egress proxy enforces the resulting list, and the container has
+  // no default route around it. The virtual browser goes through the same
+  // allowlist: navigating to a URL is a network request wearing a different hat.
+  repeated string additional_domains = 2;
+
+  ExecAccess exec = 3;
+
+  // Additive on top of `exec`. Harness shell calls are brokered by Arsox and
+  // rejected by exact argv match, and the binaries are not on the agent's PATH.
+  repeated string allowed_commands = 4;
+
+  // Absent means allowed. Enforced by a root-owned pre-push hook installed
+  // through core.hooksPath outside every worktree, plus a git credential helper
+  // that refuses to release credentials for a denied push.
+  optional bool allow_git_push = 5;
+
+  // Refs no agent may push to. Same hook and credential helper, so no refspec,
+  // config edit, or clever remote gets around it.
+  repeated string protected_branches = 6;
+}

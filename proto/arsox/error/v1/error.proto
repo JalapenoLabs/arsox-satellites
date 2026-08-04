@@ -1,0 +1,146 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+// The one error taxonomy, shared by returned errors and recorded incidents.
+//
+// Codes are specific on purpose. A caller should never have to read a message
+// string, reproduce a failure, or open a support ticket to learn which of six
+// things went wrong. If two failures need different handling they get different
+// codes. Match on the code, never on the message.
+package arsox.error.v1;
+
+import "google/protobuf/struct.proto";
+
+// Every failure Arsox can name.
+//
+// Values are grouped by domain and numbered in blocks of 100, so a whole family
+// can be matched on a range and a new code never has to be squeezed between two
+// existing ones. Numbers within a block are permanent; a retired code keeps its
+// number reserved.
+//
+// The `ERROR_CODE_` prefix is required by protobuf enum scoping rules and is
+// stripped by every SDK, so the code a client matches on is the bare
+// `AUTH_HEADER_MISSING` documented in the README.
+//
+// New codes are additive within a proto major version, so an SDK will meet
+// codes it has never heard of. Fall back to the `retryable` flag, which is
+// always populated, and log the raw code so the specificity survives the trip.
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+
+  // Auth.
+  ERROR_CODE_AUTH_HEADER_MISSING = 100;
+  ERROR_CODE_AUTH_SCHEME_UNSUPPORTED = 101;
+  ERROR_CODE_AUTH_SECRET_INVALID = 102;
+
+  // Request shape and protocol.
+  ERROR_CODE_REQUEST_BODY_MALFORMED = 200;
+  ERROR_CODE_REQUEST_CONTENT_TYPE_UNSUPPORTED = 201;
+  ERROR_CODE_REQUEST_ACCEPT_UNSUPPORTED = 202;
+  ERROR_CODE_REQUEST_FIELD_MISSING = 203;
+  ERROR_CODE_REQUEST_FIELD_INVALID = 204;
+  ERROR_CODE_PROTO_VERSION_UNSUPPORTED = 205;
+
+  // Thread lifecycle.
+  ERROR_CODE_THREAD_NOT_FOUND = 300;
+  ERROR_CODE_THREAD_EXPIRED = 301;
+  ERROR_CODE_THREAD_DESTROYED = 302;
+  ERROR_CODE_THREAD_LIMIT_REACHED = 303;
+
+  // Turns and the queue.
+  ERROR_CODE_TURN_NOT_FOUND = 400;
+  ERROR_CODE_TURN_ALREADY_RUNNING = 401;
+  ERROR_CODE_TURN_QUEUE_FULL = 402;
+  ERROR_CODE_TURN_CANCELLED = 403;
+  ERROR_CODE_TURN_INTERRUPTED = 404;
+
+  // Human in the loop.
+  ERROR_CODE_QUESTION_SET_NOT_FOUND = 500;
+  ERROR_CODE_QUESTION_SET_ALREADY_ANSWERED = 501;
+  ERROR_CODE_QUESTION_ANSWER_INCOMPLETE = 502;
+  ERROR_CODE_QUESTION_ANSWER_UNKNOWN_ID = 503;
+  ERROR_CODE_QUESTION_SET_TIMED_OUT = 504;
+  ERROR_CODE_PLAN_NOT_AWAITING_REVIEW = 505;
+  ERROR_CODE_PLAN_ALREADY_DECIDED = 506;
+
+  // Budgets and resources.
+  ERROR_CODE_BUDGET_TOKENS_EXHAUSTED = 600;
+  ERROR_CODE_BUDGET_COST_EXHAUSTED = 601;
+  ERROR_CODE_BUDGET_WALL_CLOCK_EXHAUSTED = 602;
+  ERROR_CODE_DISK_QUOTA_EXCEEDED = 603;
+  ERROR_CODE_ARTIFACT_TOO_LARGE = 604;
+
+  // Permissions. Each control gets its own code, because "denied" without
+  // saying which gate closed is exactly the vagueness this list exists to
+  // avoid.
+  ERROR_CODE_PERMISSION_COMMAND_DENIED = 700;
+  ERROR_CODE_PERMISSION_DOMAIN_DENIED = 701;
+  ERROR_CODE_PERMISSION_PUSH_DENIED = 702;
+  ERROR_CODE_PERMISSION_BRANCH_PROTECTED = 703;
+  ERROR_CODE_PERMISSION_MERGE_DENIED = 704;
+  ERROR_CODE_PERMISSION_PATH_DENIED = 705;
+  ERROR_CODE_REDACTION_OVERRIDE_DISABLED = 706;
+  ERROR_CODE_SECRET_IN_PUSH_BLOCKED = 707;
+
+  // Repos and integration.
+  ERROR_CODE_REPO_AUTH_FAILED = 800;
+  ERROR_CODE_REPO_CLONE_FAILED = 801;
+  ERROR_CODE_REPO_SETUP_FAILED = 802;
+  ERROR_CODE_WORKTREE_CREATE_FAILED = 803;
+  ERROR_CODE_INTEGRATION_CONFLICT = 804;
+  ERROR_CODE_CHECKER_FAILED = 805;
+
+  // LLM endpoints.
+  ERROR_CODE_LLM_ENDPOINT_UNAUTHORIZED = 900;
+  ERROR_CODE_LLM_ENDPOINT_RATE_LIMITED = 901;
+  ERROR_CODE_LLM_ENDPOINT_TIMEOUT = 902;
+  ERROR_CODE_LLM_MODEL_UNKNOWN = 903;
+  ERROR_CODE_LLM_CONTEXT_EXCEEDED = 904;
+  ERROR_CODE_LLM_ALL_ENDPOINTS_EXHAUSTED = 905;
+
+  // Harness.
+  ERROR_CODE_HARNESS_LAUNCH_FAILED = 1000;
+  ERROR_CODE_HARNESS_CRASHED = 1001;
+  ERROR_CODE_HARNESS_IDLE_TIMEOUT = 1002;
+
+  // Streaming.
+  ERROR_CODE_STREAM_CONSUMER_LAGGED = 1100;
+  ERROR_CODE_STREAM_SEQUENCE_EXPIRED = 1101;
+  ERROR_CODE_STREAM_SUBPROTOCOL_UNSUPPORTED = 1102;
+
+  // Internal. A satellite bug. `details.trace_id` identifies the run.
+  ERROR_CODE_INTERNAL = 1200;
+}
+
+// The single error shape, on every transport.
+//
+// An HTTP response, a JSON body, and a recorded incident all carry this. There
+// is no second error type anywhere in Arsox.
+message Error {
+  // What went wrong. Never `ERROR_CODE_UNSPECIFIED` on a real error.
+  ErrorCode code = 1;
+
+  // Human readable, for logs and for people. Never parse it: the wording may
+  // change within a major version, the code may not.
+  string message = 2;
+
+  // Whether retrying the same request could plausibly succeed. Always
+  // populated, which is what lets a client handle a code it has never seen.
+  bool retryable = 3;
+
+  // Structured context, keyed per code. The error table documents which keys
+  // each code carries: `field` and `reason` for a validation failure, `argv`
+  // for a denied command, `host` for a denied domain, `attempts` for an
+  // exhausted endpoint list.
+  //
+  // Deliberately a Struct rather than a oneof of per-code detail messages.
+  // Detail keys are additive metadata, and a typed variant per code would turn
+  // every new code into a breaking change for consumers that only ever read
+  // `code` and `retryable`.
+  google.protobuf.Struct details = 4;
+
+  // Correlates this failure with the satellite's own logs. Present on
+  // ERROR_CODE_INTERNAL and absent on errors that are the caller's to fix.
+  optional string trace_id = 5;
+}

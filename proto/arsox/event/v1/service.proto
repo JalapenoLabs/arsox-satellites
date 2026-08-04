@@ -1,0 +1,38 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.event.v1;
+
+message ServiceStarted {
+  string repo = 1;
+  string service_name = 2;
+
+  // The address handed to members as ARSOX_SERVICE_<NAME>_URL.
+  string url = 3;
+
+  // True when the exec broker promoted an undeclared long-running command to a
+  // service rather than the thread declaring it. The first member to run the
+  // command gets a process, and every later member running the same command gets
+  // this URL instead of a second process. No coordination, no negotiation, and
+  // no port collision, because the second server is never started.
+  bool auto_promoted = 4;
+
+  // Absent for a shared service. Present when isolation is per-member.
+  optional string member_id = 5;
+}
+
+// Which pipe a line came out of.
+enum LogChannel {
+  LOG_CHANNEL_UNSPECIFIED = 0;
+  LOG_CHANNEL_STDOUT = 1;
+  LOG_CHANNEL_STDERR = 2;
+}
+
+// A line of service output, so an agent debugging a failed request can read the
+// server's side of it.
+message ServiceLog {
+  string service_name = 1;
+  LogChannel channel = 2;
+  string line = 3;
+}

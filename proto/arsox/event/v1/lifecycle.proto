@@ -1,0 +1,94 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.event.v1;
+
+import "arsox/artifact/v1/artifact.proto";
+import "arsox/event/v1/author.proto";
+import "arsox/interaction/v1/plan.proto";
+import "arsox/interaction/v1/question.proto";
+import "arsox/turn/v1/result.proto";
+import "arsox/turn/v1/turn.proto";
+import "arsox/usage/v1/usage.proto";
+
+// Which ceiling is being approached.
+enum Ceiling {
+  CEILING_UNSPECIFIED = 0;
+  CEILING_TOKENS_PER_TURN = 1;
+  CEILING_COST_PER_THREAD = 2;
+  CEILING_WALL_CLOCK_PER_TURN = 3;
+}
+
+// Emitted at 80% of any ceiling, so the host application can react before the
+// wall rather than after it.
+message BudgetWarning {
+  Ceiling ceiling = 1;
+
+  // Percentage of the ceiling consumed, 0 to 100.
+  uint32 percent_used = 2;
+}
+
+message PlanProposed {
+  arsox.interaction.v1.Plan plan = 1;
+}
+
+message PlanDecided {
+  string plan_id = 1;
+  arsox.interaction.v1.PlanDecision decision = 2;
+
+  // True when nobody decided and the plan was treated as approved because human
+  // in the loop is off or auto-approval is on.
+  bool auto_approved = 3;
+}
+
+message QuestionAsked {
+  arsox.interaction.v1.QuestionSet question_set = 1;
+}
+
+message QuestionAnswered {
+  string question_set_id = 1;
+  repeated arsox.interaction.v1.QuestionAnswer answers = 2;
+
+  // True when the question timeout elapsed and the turn moved on unanswered.
+  bool timed_out = 3;
+}
+
+message ArtifactCreated {
+  arsox.artifact.v1.Artifact artifact = 1;
+}
+
+// An agent used the override_redaction tool.
+//
+// High priority, emitted the moment it happens. Whether to override is the
+// agent's decision made in response to an explicit human instruction, never an
+// SDK toggle, and every override is scoped to one secret and one operation,
+// never blanket and never persistent. The justification the agent gave is
+// carried here and into the turn report, so the guardrail can move but nothing
+// moves quietly.
+message RedactionOverridden {
+  Author author = 1;
+
+  // The env var key whose redaction was overridden. Never the value.
+  string secret_key = 2;
+
+  // What the agent said to justify it, in writing.
+  string justification = 3;
+
+  // What the override applied to, e.g. the file path being committed.
+  string operation = 4;
+}
+
+message TurnStarted {
+  arsox.turn.v1.Turn turn = 1;
+}
+
+message TurnCompleted {
+  arsox.turn.v1.TurnResult result = 1;
+}
+
+// Opt in through stream settings. Off by default because these change on every
+// token, which is far too fast to be useful as a push event.
+message StatisticsUpdated {
+  arsox.usage.v1.LifetimeStatistics statistics = 1;
+}

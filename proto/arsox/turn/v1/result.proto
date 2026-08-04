@@ -1,0 +1,120 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.turn.v1;
+
+import "arsox/artifact/v1/artifact.proto";
+import "arsox/error/v1/error.proto";
+import "arsox/incident/v1/incident.proto";
+import "arsox/interaction/v1/question.proto";
+import "arsox/suggestion/v1/suggestion.proto";
+import "arsox/turn/v1/turn.proto";
+import "arsox/usage/v1/usage.proto";
+
+// A stage of the per-turn stack.
+enum Stage {
+  STAGE_UNSPECIFIED = 0;
+  STAGE_PLAN = 1;
+  STAGE_TEAM_WORK = 2;
+  STAGE_CHECKERS = 3;
+  STAGE_SELF_REVIEW = 4;
+  STAGE_MERGE = 5;
+  STAGE_ARTIFACTS = 6;
+  STAGE_SUGGESTIONS = 7;
+  STAGE_PULL_REQUEST_WATCH = 8;
+}
+
+enum StageDisposition {
+  STAGE_DISPOSITION_UNSPECIFIED = 0;
+  STAGE_DISPOSITION_RAN = 1;
+  STAGE_DISPOSITION_SKIPPED = 2;
+  STAGE_DISPOSITION_FAILED = 3;
+}
+
+// What each stage of the stack actually did.
+//
+// Post-turn stages cost tokens, so an exhausted budget skips self-review and
+// suggestions rather than breaching the ceiling you set. Recording the skip is
+// what stops "the budget ran out" reading as "there was nothing to suggest".
+// Artifact scanning and upload still run, because losing work you already paid
+// for to save a few tokens is the wrong trade.
+message StageOutcome {
+  Stage stage = 1;
+  StageDisposition disposition = 2;
+
+  // Why it was skipped or how it failed. Absent when it simply ran.
+  optional string reason = 3;
+}
+
+// How a pull request watch window resolved.
+message PullRequestWatchReport {
+  uint32 pull_request_number = 1;
+
+  // How many times the team was put back to work on a failing check run.
+  uint32 attempts_used = 2;
+
+  // Whether checks were green when watching stopped.
+  bool checks_passed = 3;
+
+  // Plain language: passed, attempts exhausted, budget exhausted, PR merged or
+  // closed, window elapsed, or cancelled. Always populated, because the reason
+  // is in the report every time.
+  string termination_reason = 4;
+}
+
+// Everything one turn produced.
+message TurnResult {
+  string turn_id = 1;
+  string thread_id = 2;
+
+  TurnStatus status = 3;
+
+  // The commander's account of what it did, in markdown.
+  string summary = 4;
+
+  arsox.usage.v1.TokenUsage tokens = 5;
+  arsox.usage.v1.CostEstimate cost = 6;
+
+  // Why the turn ended early. Absent on a turn that completed.
+  optional arsox.error.v1.Error error = 7;
+
+  // Counts by disposition, so the common case needs no incident query at all.
+  arsox.incident.v1.IncidentCounts incident_counts = 8;
+
+  repeated TeamMember members = 9;
+  repeated ChangedFile changed_files = 10;
+  repeated IntegrationRecord integrations = 11;
+  repeated CheckerResult checker_results = 12;
+
+  repeated arsox.artifact.v1.Artifact artifacts = 13;
+
+  // Empty when the suggestions stage was off or skipped. `stages` says which.
+  arsox.suggestion.v1.SuggestionReport suggestions = 14;
+
+  // What every stage of the stack did, including the ones that did nothing.
+  repeated StageOutcome stages = 15;
+
+  // Questions the commander asked that nobody answered before the timeout. The
+  // turn ends with them recorded here rather than hanging forever.
+  repeated arsox.interaction.v1.QuestionSet unanswered_questions = 16;
+
+  // Present when pull request watching ran.
+  optional PullRequestWatchReport watch = 17;
+
+  // The agents repo commit this turn actually ran against, resolved from `ref`.
+  // Absent when no agents repo was configured.
+  optional string agents_repo_commit = 18;
+}
+
+message GetTurnRequest {
+  string thread_id = 1;
+  string turn_id = 2;
+}
+
+message GetTurnResponse {
+  Turn turn = 1;
+
+  // Absent until the turn reaches a terminal state.
+  optional TurnResult result = 2;
+}

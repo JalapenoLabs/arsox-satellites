@@ -1,0 +1,9 @@
+# Copyright © 2026 Jalapeno Labs
+
+# Generated protobuf output is checked in on purpose: a published Rust crate
+# must carry pre-generated .rs rather than force downstream consumers to install
+# protoc, and the same reasoning keeps the TypeScript and Python artifacts here.
+# Marking them generated collapses them in review and keeps them out of language
+# statistics, so a contract change reads as the .proto diff it actually is.
+gen/** linguist-generated=true
+gen/** -diff

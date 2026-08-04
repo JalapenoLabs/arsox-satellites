@@ -1,0 +1,117 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+// What could be better next time, returned as structured data rather than prose.
+//
+// EXPERIMENTAL. Opt in, default off.
+//
+// This package deliberately imports nothing. Suggestions are produced from a
+// turn but describe the repository and the satellite, so keeping the dependency
+// pointing one way (turn imports suggestion, never the reverse) is what stops
+// the two domains fusing.
+package arsox.suggestion.v1;
+
+enum SuggestionCategory {
+  SUGGESTION_CATEGORY_UNSPECIFIED = 0;
+
+  // Something that exists today and is wrong: duplicated functions, missing
+  // tests, security flaws, gaps in production-grade code.
+  SUGGESTION_CATEGORY_TECH_DEBT = 1;
+
+  // Something that does not exist and should: CI, componentization,
+  // polymorphism, framework upgrades.
+  //
+  // One rule separates this from tech debt: does the thing already exist? A
+  // duplicated function is debt. An absent CI pipeline is an improvement.
+  SUGGESTION_CATEGORY_IMPROVEMENT = 2;
+
+  // Something about this satellite's workspace that set the agent back.
+  SUGGESTION_CATEGORY_SETUP_SCRIPT = 3;
+}
+
+// Exists because a security flaw and a naming nit cannot share a queue.
+enum Severity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_LOW = 1;
+  SEVERITY_MEDIUM = 2;
+  SEVERITY_HIGH = 3;
+  SEVERITY_CRITICAL = 4;
+}
+
+// Where in the repo a finding lives.
+//
+// Exists because a ticket reading "duplicated functions" with no paths is not
+// actionable.
+message SourceLocation {
+  string path = 1;
+
+  // Absent when the finding is about the file as a whole.
+  optional uint32 line = 2;
+}
+
+// One finding about the repository.
+message Suggestion {
+  // Stable across turns. Hashed over what is being reported (path, kind,
+  // symbol) and deliberately not over the prose, so a reworded description of
+  // the same problem still collides.
+  //
+  // This is what makes suggestions an issue pipeline instead of a report.
+  // Without it the second turn on a thread reports the same twelve findings and
+  // the host application files twelve duplicate tickets. Store the fingerprints
+  // you have filed and suppress them on the way in.
+  string fingerprint = 1;
+
+  SuggestionCategory category = 2;
+  Severity severity = 3;
+
+  string title = 4;
+
+  // Markdown.
+  string body = 5;
+
+  repeated SourceLocation locations = 6;
+}
+
+// A command the agent ran and what it got back.
+message CommandEvidence {
+  string command = 1;
+  int32 exit_code = 2;
+  string output = 3;
+}
+
+// Something about the workspace that got in the agent's way.
+//
+// The strongest of the three categories, because it is the only one where the
+// agent has evidence rather than an opinion: it hit the failure itself. So it
+// carries the evidence.
+message SetupScriptSuggestion {
+  string title = 1;
+
+  // Markdown.
+  string body = 2;
+
+  repeated CommandEvidence evidence = 3;
+
+  // Inert. Data returned to the SDK and nothing else. Arsox never adopts it,
+  // never writes it to disk, and never runs it. Applying it means your
+  // application explicitly setting it on a future thread, exactly like any
+  // other setting.
+  //
+  // An agent proposing commands that will execute on a later satellite is a
+  // permission decision, and permission decisions are never the agent's to
+  // make.
+  optional string proposed_setup_commands = 4;
+}
+
+// Everything the suggestions stage produced for one turn.
+//
+// Tech debt and improvements come from a dedicated agent with a clean context
+// window. Setup script findings come from the commander, because it is the
+// agent that actually watched the install fail and a fresh agent would have to
+// re-derive that from logs, badly.
+message SuggestionReport {
+  repeated Suggestion tech_debt = 1;
+  repeated Suggestion improvements = 2;
+  repeated SetupScriptSuggestion setup_script = 3;
+}

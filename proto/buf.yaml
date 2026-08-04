@@ -1,0 +1,22 @@
+# Copyright © 2026 Jalapeno Labs
+
+# The single protobuf module for Arsox. Everything the satellite, the three
+# SDKs, and the CLI speak is defined under this one root.
+version: v2
+
+modules:
+  - path: .
+
+lint:
+  use:
+    - STANDARD
+  # A lint failure is a contract problem, so it may not be waved through with a
+  # comment in the file that caused it.
+  disallow_comment_ignores: true
+
+breaking:
+  # FILE is the strictest option and the one that matches the promise in the
+  # README: within a major version the contract only ever grows. Field numbers
+  # are permanent, deleted fields stay reserved, and messages never move files.
+  use:
+    - FILE

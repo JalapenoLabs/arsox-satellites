@@ -1,0 +1,68 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+// Which CLI drives the agent, and what that CLI can actually do.
+//
+// The harness axis and the model axis are independent. The harness decides how
+// an agent thinks, plans, uses tools, and reports what it did. The model
+// decides who answers. They compose freely, which is why they are named
+// separately rather than folded into one setting.
+package arsox.harness.v1;
+
+// The CLI that runs the agent.
+//
+// Adding one is a satellite-side change: write the mapper from its native
+// events into the canonical shapes and pass the conformance suite. Nothing in a
+// consumer application changes, and no SDK release is required.
+enum Harness {
+  HARNESS_UNSPECIFIED = 0;
+  HARNESS_CLAUDE = 1;
+  HARNESS_CODEX = 2;
+}
+
+// What a harness supports, reported rather than inferred.
+//
+// Shapes are not the whole contract. A harness might have no plan mode and no
+// sub-agents, and a consumer that swapped harnesses would otherwise discover
+// that by absence, three turns into a run. This is also the honest place to say
+// "this harness cannot do that" rather than accepting a setting and quietly
+// emitting nothing.
+message HarnessCapabilities {
+  Harness harness = 1;
+
+  // The CLI's own version, as the satellite resolved it at boot.
+  string cli_version = 2;
+
+  // The harness has a native plan mode. False does not mean plan mode is
+  // unavailable: Arsox supplies a skill fallback, and the plan output is
+  // normalized to the same shape either way.
+  bool supports_native_plan_mode = 3;
+
+  // The harness can spawn its own sub-agents beneath a team member, making the
+  // three tiers of commander, member, and sub-agent.
+  bool supports_subagents = 4;
+
+  // The harness emits reasoning separately from its messages, so
+  // `include_agent_thinking` has something to carry.
+  bool supports_thinking_events = 5;
+
+  // The harness can fork a conversation from a frozen context.
+  bool supports_context_fork = 6;
+
+  // The harness can host MCP servers, which is what makes the Arsox tools and
+  // any servers you configure reachable from inside it.
+  bool supports_mcp = 7;
+
+  // The harness reports cache accounting, so TokenUsage cache fields are
+  // populated rather than absent.
+  bool reports_cache_tokens = 8;
+}
+
+// GET /v1/harness
+message GetHarnessResponse {
+  repeated HarnessCapabilities harnesses = 1;
+
+  // The harness used when a thread does not name one.
+  Harness default_harness = 2;
+}

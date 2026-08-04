@@ -1,0 +1,98 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+// Everything a host application decides about a thread before it runs.
+//
+// This file holds only the root message. Each group of settings lives in its own
+// file in this package, so `ThreadSettings` reads as an index into the surface
+// rather than as the surface itself.
+//
+// Two conventions hold across all of them.
+//
+// **Booleans encode their documented default.** A flag whose default is off is a
+// bare `bool`, because proto3's zero value already means off. A flag whose
+// default is on is an `optional bool`, because a bare one would silently flip
+// the default to off for any client that did not set it. Absent means "use the
+// documented default", never "false".
+//
+// **Every time span is a Duration.** A bare integer of unstated units is the
+// ambiguity that produces a poll interval a thousand times too long.
+package arsox.settings.v1;
+
+import "arsox/common/v1/common.proto";
+import "arsox/harness/v1/harness.proto";
+import "arsox/settings/v1/budget.proto";
+import "arsox/settings/v1/integration.proto";
+import "arsox/settings/v1/limits.proto";
+import "arsox/settings/v1/model.proto";
+import "arsox/settings/v1/permission.proto";
+import "arsox/settings/v1/prefetch.proto";
+import "arsox/settings/v1/pull_request.proto";
+import "arsox/settings/v1/repo.proto";
+import "arsox/settings/v1/secret.proto";
+import "arsox/settings/v1/stages.proto";
+import "arsox/settings/v1/team.proto";
+import "arsox/settings/v1/tool.proto";
+
+// The full settings surface for one thread.
+message ThreadSettings {
+  // Required. The satellite collects the workspace after this much inactivity.
+  //
+  // Idle time, not wall clock from creation. The clock resets on every turn and
+  // on any SDK interaction with the thread, so a thread working for three days
+  // is never collected while the same thread sitting untouched past its TTL is.
+  // Wall clock from creation would delete long-running work mid-flight.
+  arsox.common.v1.Duration idle_ttl = 1;
+
+  // Destroy the thread the moment its turns complete, without waiting out the
+  // idle TTL.
+  bool delete_on_complete = 2;
+
+  // Required. See Budget.
+  Budget budget = 3;
+
+  // Which CLI drives the agents. Unspecified uses the satellite's default.
+  arsox.harness.v1.Harness harness = 4;
+
+  // Your own agent configuration, brought as a git repo.
+  optional AgentsRepo agents_repo = 5;
+
+  // Ordered failover. The satellite walks this list top to bottom and the order
+  // is followed strictly.
+  repeated ModelEndpoint models = 6;
+
+  TeamMode team_mode = 7;
+  PlanMode plan_mode = 8;
+  HumanInTheLoop human_in_the_loop = 9;
+  SelfReview self_review = 10;
+  SuggestionSettings suggestions = 11;
+  PullRequestPolicy pull_requests = 12;
+  WatchPullRequests watch_pull_requests = 13;
+
+  // Repos are not required to perform any work.
+  repeated Repo repos = 14;
+
+  optional GithubIntegration github = 15;
+  optional JiraIntegration jira = 16;
+  optional Prefetch prefetch = 17;
+
+  repeated EnvVar env = 18;
+
+  Redaction redaction = 19;
+  Permissions permissions = 20;
+
+  // Written into AGENTS.md below the Arsox header, which is not overridable, and
+  // above nothing: this is the most specific layer, so a thread can override its
+  // fleet's conventions.
+  //
+  // Advisory. It shapes agent behavior and never constrains it. Anything that
+  // must hold belongs in `permissions`.
+  string prompt = 21;
+
+  repeated McpServer mcp_servers = 22;
+  VirtualBrowser virtual_browser = 23;
+  StreamSettings stream = 24;
+  ResourceLimits resource_limits = 25;
+  Timeouts timeouts = 26;
+}

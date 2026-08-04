@@ -1,0 +1,158 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+// A single unit of work on a thread.
+//
+// Each thread processes exactly one turn at a time, forever, strictly FIFO. This
+// is not tunable, because a thread is a conversation and conversations are
+// sequential. Threads run concurrently with each other.
+//
+// This file holds the turn itself and the vocabulary its results are built from.
+// The results are in result.proto and the suggestions-stage input is in
+// brief.proto.
+package arsox.turn.v1;
+
+import "arsox/common/v1/common.proto";
+
+enum TurnStatus {
+  TURN_STATUS_UNSPECIFIED = 0;
+
+  // In the thread's queue, behind a turn that is already running.
+  TURN_STATUS_QUEUED = 1;
+
+  TURN_STATUS_RUNNING = 2;
+
+  // Reached the end of the stack. Says nothing about whether checkers passed.
+  TURN_STATUS_COMPLETED = 3;
+
+  // Ended early. The result's `error` says why.
+  TURN_STATUS_FAILED = 4;
+
+  TURN_STATUS_CANCELLED = 5;
+
+  // The satellite restarted mid-turn. The thread survived and everything already
+  // committed to a branch survived with it. By default the thread waits for you
+  // to decide whether to resume.
+  TURN_STATUS_INTERRUPTED = 6;
+
+  // The turn's work is done and a pull request watch window is open. The thread
+  // stays alive until the watch resolves, and the satellite may start further
+  // turns on its own while it does.
+  TURN_STATUS_WATCHING = 7;
+}
+
+// One turn's identity and lifecycle, without its results.
+message Turn {
+  string turn_id = 1;
+  string thread_id = 2;
+
+  TurnStatus status = 3;
+
+  // The instruction that started it. Empty for a turn the satellite started
+  // itself in response to a failing check run.
+  string prompt = 4;
+
+  // True when the satellite started this turn on its own rather than the SDK
+  // asking for it. The one case where that happens is a pull request watch.
+  bool satellite_initiated = 5;
+
+  arsox.common.v1.Timestamp queued_at = 6;
+
+  // Absent while still queued.
+  optional arsox.common.v1.Timestamp started_at = 7;
+
+  // Absent until the turn reaches a terminal state.
+  optional arsox.common.v1.Timestamp finished_at = 8;
+}
+
+// One member of the team, for reporting.
+message TeamMember {
+  string member_id = 1;
+  string role = 2;
+}
+
+// One file the turn touched.
+message ChangedFile {
+  string path = 1;
+  uint32 insertions = 2;
+  uint32 deletions = 3;
+}
+
+// One member branch landing on the integration branch.
+//
+// Members never merge into the integration branch themselves. They request it,
+// and Arsox serializes the requests so exactly one merge runs at a time. A
+// conflict is pushed back to the member that caused it, which is why the
+// integration branch is never left in a conflicted state.
+message IntegrationRecord {
+  string member_id = 1;
+  string repo = 2;
+
+  // The member branch that was merged.
+  string branch = 3;
+
+  string summary = 4;
+
+  arsox.common.v1.Timestamp landed_at = 5;
+}
+
+// One checker command and its outcome.
+//
+// Checker failure is a normal outcome routed back to the commander, not a crash.
+// Where a checker knows something deterministically, a suggestion cites this
+// rather than re-deriving it in prose.
+message CheckerResult {
+  string command = 1;
+  int32 exit_code = 2;
+  string output = 3;
+
+  // The commander chose to accept this failure. A skip applies to this turn only
+  // and never carries into future turns.
+  bool skipped_by_commander = 4;
+}
+
+// POST /v1/threads/{thread_id}/turns
+//
+// May be submitted while another turn is running. It joins the thread's queue
+// and the turn ID comes back immediately. Once the queue reaches its cap,
+// further submissions are rejected with TURN_QUEUE_FULL rather than accumulating
+// without bound.
+message StartTurnRequest {
+  string thread_id = 1;
+
+  string prompt = 2;
+
+  // Deduplicates retries of this call. A second request carrying a key the
+  // thread has already seen returns the original turn instead of queueing a
+  // second one, which is what makes a network timeout safe to retry.
+  optional string idempotency_key = 3;
+}
+
+message StartTurnResponse {
+  Turn turn = 1;
+}
+
+// POST /v1/threads/{thread_id}/turns/{turn_id}/cancel
+//
+// A running turn is asked to stop cooperatively first, then killed after a grace
+// period. Work already committed to a member branch survives.
+message CancelTurnRequest {
+  string thread_id = 1;
+  string turn_id = 2;
+}
+
+message CancelTurnResponse {
+  Turn turn = 1;
+}
+
+message ListTurnsRequest {
+  string thread_id = 1;
+  repeated TurnStatus statuses = 2;
+  arsox.common.v1.PageRequest page = 3;
+}
+
+message ListTurnsResponse {
+  repeated Turn turns = 1;
+  arsox.common.v1.PageResponse page = 2;
+}

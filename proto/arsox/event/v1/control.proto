@@ -1,0 +1,87 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.event.v1;
+
+import "arsox/common/v1/common.proto";
+import "arsox/event/v1/lifecycle.proto";
+import "arsox/thread/v1/thread.proto";
+
+// One event on the satellite's control stream.
+//
+// A separate message from ThreadEvent rather than a shared envelope with a
+// narrower payload set. The control socket carries satellite lifecycle only and
+// never thread content, and making that a structural property beats making it a
+// promise somebody has to keep.
+message ControlEvent {
+  // Monotonic per satellite, and unrelated to any thread's sequence.
+  uint64 sequence = 1;
+
+  arsox.common.v1.Timestamp occurred_at = 2;
+
+  // The event's stable wire name, e.g. "thread.created". Present for the same
+  // forward compatibility reason as on ThreadEvent.
+  string type = 3;
+
+  oneof payload {
+    ThreadCreated thread_created = 20;
+    ThreadStateChanged thread_state_changed = 21;
+    ThreadDestroyed thread_destroyed = 22;
+    QueueDepthChanged queue_depth_changed = 23;
+    HealthChanged health_changed = 24;
+    ControlBudgetWarning budget_warning = 25;
+  }
+}
+
+message ThreadCreated {
+  string thread_id = 1;
+}
+
+message ThreadStateChanged {
+  string thread_id = 1;
+  arsox.thread.v1.ThreadState previous = 2;
+  arsox.thread.v1.ThreadState current = 3;
+}
+
+// Reason a thread went away.
+enum ThreadEndReason {
+  THREAD_END_REASON_UNSPECIFIED = 0;
+
+  // The SDK asked for it.
+  THREAD_END_REASON_DESTROYED = 1;
+
+  // The idle TTL elapsed.
+  THREAD_END_REASON_EXPIRED = 2;
+
+  // `delete_on_complete` was set and the queue drained.
+  THREAD_END_REASON_COMPLETED = 3;
+}
+
+message ThreadDestroyed {
+  string thread_id = 1;
+  ThreadEndReason reason = 2;
+}
+
+message QueueDepthChanged {
+  string thread_id = 1;
+  uint32 queue_depth = 2;
+}
+
+message HealthChanged {
+  bool ready = 1;
+
+  // Which readiness check flipped, e.g. "llm_proxy".
+  string check_name = 2;
+
+  // Absent when the transition was back to healthy.
+  optional string detail = 3;
+}
+
+// Budget warnings reach the control stream without the thread content that the
+// thread-stream version carries alongside them.
+message ControlBudgetWarning {
+  string thread_id = 1;
+  Ceiling ceiling = 2;
+  uint32 percent_used = 3;
+}

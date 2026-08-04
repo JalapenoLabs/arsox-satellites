@@ -1,0 +1,69 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+// The satellite itself: version, health, and what it is currently doing.
+package arsox.satellite.v1;
+
+import "arsox/common/v1/common.proto";
+import "arsox/thread/v1/thread.proto";
+
+// GET /v1/version
+//
+// Unauthenticated, and exposes no thread content and no configuration. An
+// orchestrator needs these facts before it holds a credential.
+message GetVersionResponse {
+  // The satellite image's own version, e.g. "1.0.0".
+  string satellite_version = 1;
+
+  // The proto contract major version this satellite serves. An SDK refuses to
+  // talk to a higher major and says so clearly, rather than failing later with
+  // a confusing decode error.
+  uint32 proto_major = 2;
+
+  // The proto contract minor version. An SDK talking to a higher minor warns
+  // once and proceeds, ignoring additive fields it does not know about.
+  uint32 proto_minor = 3;
+}
+
+// One thing readiness depends on.
+message ReadinessCheck {
+  // "database", "workspace", "llm_proxy".
+  string name = 1;
+
+  bool passing = 2;
+
+  // Why it is failing. Absent when it passes.
+  optional string detail = 3;
+}
+
+// GET /readyz
+//
+// Database open, /workspace writable, LLM proxy reachable. Distinct from
+// /healthz, which is liveness only and never touches the database.
+message GetReadinessResponse {
+  bool ready = 1;
+  repeated ReadinessCheck checks = 2;
+}
+
+// GET /v1/status
+message GetStatusResponse {
+  string satellite_version = 1;
+
+  // ARSOX_MAX_CONCURRENT_THREADS. Team mode multiplies the real process count
+  // behind each one.
+  uint32 max_concurrent_threads = 2;
+
+  // Threads currently running a turn, against the cap above.
+  uint32 running_threads = 3;
+
+  // Every thread the satellite still holds, whatever its state.
+  repeated arsox.thread.v1.Thread threads = 4;
+
+  arsox.common.v1.Timestamp started_at = 5;
+
+  // Whether the satellite is running without a secret because
+  // ARSOX_ALLOW_INSECURE was set. Reported so an operator can see it from the
+  // API rather than only in the boot log.
+  bool insecure_mode = 6;
+}

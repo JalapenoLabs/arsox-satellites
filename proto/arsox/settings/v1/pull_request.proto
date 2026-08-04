@@ -1,0 +1,73 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.settings.v1;
+
+import "arsox/common/v1/common.proto";
+
+enum MergeMethod {
+  MERGE_METHOD_UNSPECIFIED = 0;
+  MERGE_METHOD_MERGE = 1;
+  MERGE_METHOD_SQUASH = 2;
+  MERGE_METHOD_REBASE = 3;
+}
+
+// Whether the commander may merge a pull request, and how.
+//
+// EXPERIMENTAL. Enforced by the `gh` broker, not by asking nicely. The commander
+// still chooses whether to merge even when permitted.
+message PullRequestPolicy {
+  // Default off. A human merges pull requests unless you grant otherwise.
+  bool allow_agent_merge = 1;
+
+  // Which methods the broker permits. Empty permits all three, and is only
+  // consulted when `allow_agent_merge` is true.
+  repeated MergeMethod allowed_merge_methods = 2;
+}
+
+// Whose failures the satellite reacts to when watching a pull request.
+enum WatchTrigger {
+  WATCH_TRIGGER_UNSPECIFIED = 0;
+
+  // Only check runs on commits the satellite itself pushed. The default, and
+  // usually what you want.
+  WATCH_TRIGGER_SATELLITE_COMMITS = 1;
+
+  // Also react when a human pushes to the PR. Occasionally what you want, more
+  // often two parties editing the same branch at cross purposes.
+  WATCH_TRIGGER_ANY = 2;
+}
+
+// Put the team back to work when CI goes red.
+//
+// EXPERIMENTAL. Opt in, default off. This inverts the thread lifecycle:
+// everywhere else the SDK starts turns and the satellite responds, and here the
+// satellite starts a turn on its own because CI failed while nobody was asking
+// it anything. Every control below exists to keep that inversion from running
+// away.
+//
+// Budget is shared rather than additional. Watch-triggered turns draw from the
+// same thread cost ceiling as everything else, so a watching thread cannot spend
+// past a limit you already set.
+message WatchPullRequests {
+  bool enabled = 1;
+
+  // The control that matters. CI fails, the team fixes, CI fails again: without
+  // a hard cap that loop has no floor and your budget is the only thing that
+  // stops it. On exhaustion the satellite stops, leaves the PR red, and reports.
+  // Absent uses 3.
+  optional uint32 max_attempts = 2;
+
+  // How long watching may stay open. Watching counts as activity, so the idle
+  // TTL does not run while a window is open and this is what bounds it instead.
+  // Absent uses the satellite's default.
+  optional arsox.common.v1.Duration watch_window = 3;
+
+  // Absent uses 20 seconds. Tuned against dead time rather than request cost:
+  // on a three-minute CI run a sixty-second interval burns a third of the run
+  // doing nothing. The ceiling is your GitHub rate limit, not the satellite.
+  optional arsox.common.v1.Duration poll_interval = 4;
+
+  WatchTrigger react_to = 5;
+}

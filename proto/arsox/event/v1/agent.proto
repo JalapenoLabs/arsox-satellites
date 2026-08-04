@@ -1,0 +1,57 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.event.v1;
+
+import "arsox/common/v1/common.proto";
+import "arsox/event/v1/author.proto";
+import "google/protobuf/struct.proto";
+
+// Something an agent said.
+message AgentMessage {
+  Author author = 1;
+
+  // Markdown.
+  string text = 2;
+}
+
+// An agent's reasoning, when the harness reports it separately from its
+// messages. Governed by `include_agent_thinking`, and absent entirely on a
+// harness whose capabilities report no thinking events.
+message AgentThinking {
+  Author author = 1;
+  string text = 2;
+}
+
+// An agent invoked a tool.
+//
+// The commander never sees these for its members: it watches communication
+// between the team rather than the work itself, which is what keeps all context
+// from reconverging into one window. The SDK sees everything regardless.
+message ToolStarted {
+  Author author = 1;
+
+  // Pairs this with its ToolCompleted.
+  string tool_call_id = 2;
+
+  string tool_name = 3;
+
+  // The arguments, in whatever shape the tool takes. A Struct because tool
+  // inputs are open-ended by nature, and redacted like any other content on the
+  // way out.
+  google.protobuf.Struct input = 4;
+}
+
+message ToolCompleted {
+  Author author = 1;
+  string tool_call_id = 2;
+  string tool_name = 3;
+
+  bool ok = 4;
+
+  // The head of the result, for display. Absent when the tool returned nothing.
+  optional string output_preview = 5;
+
+  arsox.common.v1.Duration elapsed = 6;
+}

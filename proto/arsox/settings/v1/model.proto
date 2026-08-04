@@ -1,0 +1,74 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+package arsox.settings.v1;
+
+import "arsox/common/v1/common.proto";
+
+// One place the satellite will try to get completions from.
+//
+// Endpoints are tried in the order given, strictly. Put the cheapest and most
+// reliable one first and treat later entries as genuine fallbacks rather than a
+// load-balancing pool.
+message ModelEndpoint {
+  // Your label for this endpoint. Appears in failover incidents, so two entries
+  // for the same provider can be told apart.
+  string name = 1;
+
+  // The model identifier this endpoint serves, e.g. "claude-opus-5[1m]".
+  string model = 2;
+
+  // Absent uses the provider's default base URL. Set it for self-hosted or
+  // proxied deployments such as Azure-hosted Anthropic models.
+  optional string base_url = 3;
+
+  LlmAuth auth = 4;
+
+  RetryPolicy retry = 5;
+}
+
+// Credentials for one endpoint.
+message LlmAuth {
+  oneof credential {
+    string api_key = 1;
+
+    // A long-lived token such as the one `claude setup-token` mints.
+    string subscription_token = 2;
+
+    // Subscription access and refresh tokens.
+    OAuthCredential oauth = 3;
+  }
+}
+
+message OAuthCredential {
+  string access_token = 1;
+
+  // Absent means the satellite cannot refresh, and the endpoint fails over once
+  // the access token expires.
+  optional string refresh_token = 2;
+
+  optional arsox.common.v1.Timestamp expires_at = 3;
+}
+
+// How hard to try one endpoint before moving to the next.
+//
+// Failover is correct but it is not free: the conversation is re-serialized
+// into the next provider's shape, tool-call IDs are rewritten, and the cached
+// prompt prefix at the old provider is gone, so the first request to the new
+// endpoint pays full price for the entire history. On a long thread that is a
+// real cost spike rather than a rounding error.
+message RetryPolicy {
+  // Absent uses 10. Zero disables retries and fails over immediately.
+  optional uint32 max_attempts = 1;
+
+  // Absent uses 5 seconds.
+  optional arsox.common.v1.Duration initial_backoff = 2;
+
+  // Absent uses 60 seconds.
+  optional arsox.common.v1.Duration max_backoff = 3;
+
+  // HTTP statuses that trigger a retry rather than a failover. Empty uses the
+  // default set of 429 and 529.
+  repeated uint32 retry_on_status = 4;
+}
