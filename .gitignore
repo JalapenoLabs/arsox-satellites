@@ -1,0 +1,15 @@
+# Copyright © 2026 Jalapeno Labs
+
+# Generated protobuf output under gen/ is deliberately committed. See
+# docs/protobuf.md. Only the byte-compiled artifacts of running it are ignored.
+__pycache__/
+*.py[cod]
+
+# Rust
+/target/
+
+# Node
+node_modules/
+
+# Local artifact downloads from the SDK examples
+/out/

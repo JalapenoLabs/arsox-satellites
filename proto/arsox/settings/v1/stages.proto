@@ -56,5 +56,5 @@ message SuggestionSettings {
   // Absent uses 5. Any real codebase can produce fifty findings, and fifty per
   // turn is noise that teaches your users to ignore the feature. The cap forces
   // the agent to rank rather than enumerate.
-  optional uint32 max_per_category = 2;
+  optional uint32 max_suggestions_per_category = 2;
 }

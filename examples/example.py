@@ -12,6 +12,7 @@ import asyncio
 import logging
 import os
 import sys
+from datetime import timedelta
 
 from arsox import Satellite, Thread
 from arsox.settings import (
@@ -24,6 +25,7 @@ from arsox.settings import (
     McpServer,
     ModelEndpoint,
     ModelAuth,
+    Money,
     PermissionSettings,
     PlanModeSettings,
     PrefetchSettings,
@@ -31,28 +33,34 @@ from arsox.settings import (
     RedactionSettings,
     RepoAuth,
     RepoSettings,
+    ResourceLimits,
     RetryPolicy,
     SelfReviewSettings,
     ServiceSettings,
     ServiceReadyWhen,
+    StarCount,
     StreamSettings,
     SuggestionSettings,
     TeamModeSettings,
     ThreadSettings,
+    TimeoutSettings,
     VirtualBrowserSettings,
     WatchPullRequestSettings,
+    UNLIMITED,
 )
 from arsox.enums import (
+    ExecAccess,
     Harness,
     MergeMethod,
     PrefetchInjection,
     RedactionMode,
     ServiceIsolation,
+    StageDisposition,
     Viewport,
     WatchTrigger,
     WebAccess,
 )
-from arsox.events import TurnEvent
+from arsox.events import ControlEvent, TurnEvent
 from arsox.questions import QuestionAnswer
 
 logger = logging.getLogger(__name__)
@@ -80,14 +88,22 @@ def build_settings() -> ThreadSettings:
         # clock resets on every turn, so a thread working for three days is
         # never collected. Required, always, as the safety net against
         # forgotten workspaces.
-        idle_ttl_minutes=120,
+        #
+        # Every time span in the contract is a Duration, so the SDK takes a
+        # timedelta and converts. No setting is ever a bare integer of unstated
+        # units.
+        idle_ttl=timedelta(minutes=120),
         delete_on_complete=False,
-        # Required. "unlimited" is accepted but has to be typed out, so an
-        # unbounded spend is always a decision rather than an oversight.
+        # Required. UNLIMITED is accepted but has to be typed out, so an
+        # unbounded spend is always a decision rather than an oversight. There
+        # is no sentinel: 0 does not mean unlimited, it means zero.
         budget=BudgetSettings(
             max_tokens_per_turn=8_000_000,
-            max_cost_per_thread=40.0,
-            max_wall_clock_per_turn="unlimited",
+            # Money on the wire, never a float. A single request can cost a
+            # fraction of a cent, and accumulating those in a float is how a
+            # ceiling drifts away from the invoice it was meant to predict.
+            max_cost_per_thread=Money.usd(40),
+            max_wall_clock_per_turn=UNLIMITED,
         ),
         harness=Harness.CLAUDE,
         # Your own agent configuration: CLAUDE.md, docs, custom skills. Cloned
@@ -110,8 +126,8 @@ def build_settings() -> ThreadSettings:
                 auth=ModelAuth(subscription_token=os.environ.get("ANTHROPIC_OAUTH_TOKEN")),
                 retry=RetryPolicy(
                     max_attempts=10,
-                    initial_backoff_seconds=5,
-                    max_backoff_seconds=60,
+                    initial_backoff=timedelta(seconds=5),
+                    max_backoff=timedelta(seconds=60),
                     retry_on_status=[429, 529],
                 ),
             ),
@@ -140,7 +156,7 @@ def build_settings() -> ThreadSettings:
             enabled=True,
             # Past this, the turn ends with the questions recorded in the report
             # rather than hanging forever.
-            question_timeout_minutes=30,
+            question_timeout=timedelta(minutes=30),
         ),
         self_review=SelfReviewSettings(enabled=True),
         suggestions=SuggestionSettings(
@@ -149,6 +165,8 @@ def build_settings() -> ThreadSettings:
             # that teaches you to ignore the feature, so the cap forces ranking.
             max_suggestions_per_category=5,
         ),
+        # The single place merging is decided. The `gh` broker enforces it, and
+        # the commander still chooses whether to merge even when permitted.
         pull_requests=PullRequestSettings(
             allow_agent_merge=False,
             allowed_merge_methods=[MergeMethod.SQUASH],
@@ -159,8 +177,8 @@ def build_settings() -> ThreadSettings:
         watch_pull_requests=WatchPullRequestSettings(
             enabled=True,
             max_attempts=3,
-            watch_window_minutes=240,
-            poll_interval_seconds=20,
+            watch_window=timedelta(minutes=240),
+            poll_interval=timedelta(seconds=20),
             # Only react to check runs on commits the satellite itself pushed.
             # ANY also reacts to human pushes, which is usually two parties
             # editing the same branch at cross purposes.
@@ -196,20 +214,22 @@ def build_settings() -> ThreadSettings:
                         port=3000,
                         ready_when=ServiceReadyWhen(
                             http_get="/health",
-                            timeout_seconds=120,
+                            timeout=timedelta(seconds=120),
                         ),
                         isolation=ServiceIsolation.SHARED,
                     ),
                 ],
             ),
         ],
-        github=GithubSettings(
-            token=os.environ.get("GITHUB_PAT"),
-            allow_merge=False,
-        ),
+        # Merge permission is not here. It lives in pull_requests above, so
+        # exactly one setting decides whether a merge may happen.
+        github=GithubSettings(token=os.environ.get("GITHUB_PAT")),
         jira=JiraSettings(
             token=os.environ.get("JIRA_PAT"),
             base_url="https://jalapenolabs.atlassian.net",
+            # Atlassian Cloud authenticates with an email plus an API token.
+            # Omit it for Data Center, which accepts the token alone.
+            email="automation@jalapenolabs.io",
             allow_status_transitions=True,
             allow_comments=True,
         ),
@@ -237,10 +257,11 @@ def build_settings() -> ThreadSettings:
         ],
         redaction=RedactionSettings(
             mode=RedactionMode.POSTFIX_SHOWN,
-            # Six stars regardless of the secret's real length. Set to -1 to
-            # mirror the length, which leaks the length and is why it is not
-            # the default.
-            star_count=6,
+            # Six stars regardless of the secret's real length.
+            # StarCount.mirror() instead mirrors the length, which leaks the
+            # length and is why it is not the default. A case rather than a
+            # magic -1, so -2 is unrepresentable.
+            star_count=StarCount.fixed(6),
             # The kill switch. False unregisters the override_redaction tool
             # entirely, so no agent in this thread can reach it no matter what
             # it is told.
@@ -254,10 +275,13 @@ def build_settings() -> ThreadSettings:
             # Always additive on top of `web`, so this never silently drops
             # the preset.
             additional_domains=["docs.anthropic.com", "jalapenolabs.atlassian.net"],
+            # Symmetric with `web`. PRESET inherits the curated command list,
+            # CUSTOM starts from nothing, NONE allows no commands at all, which
+            # an empty list could never say on its own.
+            exec=ExecAccess.PRESET,
+            allowed_commands=["git", "yarn", "python3", "rg", "gh"],
             allow_git_push=True,
             protected_branches=["main", "develop"],
-            # Omit to inherit the preset allowlist. An explicit list replaces it.
-            allowed_commands=["git", "yarn", "python3", "rg", "gh"],
         ),
         # Written to /workspace/<thread-id>/AGENTS.md, below the Arsox header.
         # Advisory: it shapes behavior but never constrains it. Anything that
@@ -284,15 +308,95 @@ def build_settings() -> ThreadSettings:
             allowed_roles=["Frontend", "QA"],
             viewports=[Viewport.MOBILE, Viewport.TABLET, Viewport.DESKTOP],
         ),
+        # An agent with a shell can fill a disk. These are enforced, not
+        # suggested.
+        resource_limits=ResourceLimits(
+            workspace_quota_bytes=10 * 1024**3,
+            artifact_cap_bytes=100 * 1024**2,
+        ),
+        # Bounds on the operations that can otherwise hang forever. The turn
+        # wall clock bound lives in `budget`, because exceeding it is a budget
+        # outcome rather than a hung operation.
+        timeouts=TimeoutSettings(
+            exec_command=timedelta(minutes=30),
+            llm_request=timedelta(minutes=10),
+            harness_idle=timedelta(minutes=15),
+        ),
         # Opt out of the noisy ones. Statistics are off by default because they
-        # change on every token.
+        # change on every token. Incidents are absent from this list and cannot
+        # be switched off: a stream you can configure to hide failures is worse
+        # than no stream.
         stream=StreamSettings(
             include_statistics=False,
             include_agent_thinking=True,
             include_tool_calls=True,
             include_team_chat=True,
+            include_service_logs=True,
         ),
     )
+
+
+# ####################### #
+#        PREFLIGHT        #
+# ####################### #
+
+
+async def preflight(satellite: Satellite, harness: Harness) -> None:
+    """Refuse a satellite this SDK cannot speak to, and report harness support.
+
+    Both checks are cheap and both fail loudly here rather than three turns into
+    a run. An SDK refuses a higher proto major outright rather than failing
+    later with a confusing decode error; a higher minor warns once and proceeds,
+    ignoring additive fields it does not know about.
+
+    Args:
+        satellite: the satellite to interrogate.
+        harness: the harness this run intends to use.
+    """
+    version = await satellite.version()
+    logger.info(
+        f"satellite {version.satellite_version}, "
+        f"proto v{version.proto_major}.{version.proto_minor}"
+    )
+
+    # Shapes are not the whole contract. A harness might have no plan mode and
+    # no sub-agents, and discovering that by absence three turns in is exactly
+    # what asking up front avoids.
+    reported = await satellite.harness()
+    logger.info(f"default harness: {reported.default_harness}")
+
+    for capabilities in reported.harnesses:
+        if capabilities.harness is not harness:
+            continue
+        if not capabilities.supports_native_plan_mode:
+            logger.debug("harness has no native plan mode, Arsox will use its skill fallback")
+        # Absent is not zero. A harness that reports no cache accounting leaves
+        # the cache token fields as None rather than 0, so a cost reconciliation
+        # can tell "not reported" from "read nothing from cache".
+        if not capabilities.reports_cache_tokens:
+            logger.debug("harness reports no cache accounting, cache token fields will be None")
+
+
+async def on_control_event(event: ControlEvent) -> None:
+    """Handle one event from the satellite's control stream.
+
+    One socket per satellite, carrying lifecycle only: threads created and
+    destroyed, queue depth, health transitions, budget warnings. It never
+    carries thread content, which is why it is a separate message type rather
+    than the thread stream with a filter applied.
+    """
+    match event.type:
+        case "thread.state_changed":
+            logger.debug(f"{event.thread_id}: {event.previous} -> {event.current}")
+
+        case "health.changed":
+            if event.ready:
+                logger.info(f"satellite ready again ({event.check_name})")
+            else:
+                logger.error(f"satellite not ready: {event.check_name} {event.detail or ''}")
+
+        case _:
+            logger.debug(f"control event {event.type}")
 
 
 # ############################# #
@@ -309,13 +413,18 @@ def build_settings() -> ThreadSettings:
 
 
 async def on_agent_message(event: TurnEvent) -> None:
-    """Log an agent's message."""
-    logger.info(f"[{event.author}] {event.text}")
+    """Log an agent's message.
+
+    `author` is a struct, not a display string: kind, member_id, role, and the
+    owning member for a sub-agent. That is what lets a client group a stream by
+    member without parsing names, which is the whole reason it is not a string.
+    """
+    logger.info(f"[{event.author.role or event.author.kind}] {event.text}")
 
 
 async def on_tool_started(event: TurnEvent) -> None:
     """Log the start of a tool call."""
-    logger.debug(f"[{event.author}] {event.tool_name}")
+    logger.debug(f"[{event.author.role or event.author.kind}] {event.tool_name}")
 
 
 async def on_member_spawned(event: TurnEvent) -> None:
@@ -325,7 +434,7 @@ async def on_member_spawned(event: TurnEvent) -> None:
 
 async def on_team_chat(event: TurnEvent) -> None:
     """Log a message on the team channel."""
-    logger.info(f"[team] {event.author}: {event.text}")
+    logger.info(f"[team] {event.author.role or event.author.kind}: {event.text}")
 
 
 async def on_integration_landed(event: TurnEvent) -> None:
@@ -340,7 +449,17 @@ async def on_integration_conflict(event: TurnEvent) -> None:
 
 async def on_checker_result(event: TurnEvent) -> None:
     """Log the exit code of a finished checker command."""
-    logger.info(f"checker {event.command} exited {event.exit_code}")
+    logger.info(f"checker {event.result.command} exited {event.result.exit_code}")
+
+
+async def on_service_started(event: TurnEvent) -> None:
+    """Log a service the exec broker promoted without the thread declaring it.
+
+    A member ran something long-lived that bound a port. Every later member
+    running the same command gets this URL rather than a second process.
+    """
+    if event.auto_promoted:
+        logger.info(f"auto-promoted {event.service_name} to a service at {event.url}")
 
 
 async def on_budget_warning(event: TurnEvent) -> None:
@@ -350,7 +469,19 @@ async def on_budget_warning(event: TurnEvent) -> None:
 
 async def on_artifact_created(event: TurnEvent) -> None:
     """Log a newly produced artifact."""
-    logger.info(f"artifact {event.path} ({event.size_bytes} bytes)")
+    logger.info(f"artifact {event.artifact.path} ({event.artifact.size_bytes} bytes)")
+
+
+async def on_redaction_overridden(event: TurnEvent) -> None:
+    """Log an agent overriding redaction for one secret and one operation.
+
+    High priority by design: the guardrail can move on an explicit human
+    instruction, but nothing moves quietly.
+    """
+    logger.warning(
+        f"redaction overridden for {event.secret_key} on {event.operation}: "
+        f"{event.justification}"
+    )
 
 
 async def on_incident(event: TurnEvent) -> None:
@@ -372,9 +503,10 @@ async def on_any_event(event: TurnEvent) -> None:
 
     Its real job is forward compatibility: event types are additive within a
     proto major, so a newer satellite sends types this SDK version has no name
-    for. A typed handler cannot subscribe to a type it has never heard of.
-    This one gets them anyway, which makes it the correct hook for audit logs
-    and bus forwarding.
+    for. A typed handler cannot subscribe to a type it has never heard of, and
+    an unknown payload decodes to nothing. The envelope carries `type` as a
+    plain string for exactly this reason, so an event can still be named,
+    logged, and forwarded even when its body cannot be read.
     """
     logger.debug(f"{event.sequence} {event.type}")
 
@@ -383,8 +515,8 @@ def build_plan_handler(thread: Thread):
     """Build a plan handler bound to the given thread."""
 
     async def on_plan_proposed(event: TurnEvent) -> None:
-        logger.info(event.plan)
-        await thread.approve_plan()
+        logger.info(event.plan.body)
+        await thread.approve_plan(event.plan.plan_id)
 
     return on_plan_proposed
 
@@ -397,23 +529,26 @@ def build_question_handler(thread: Thread):
         # option, freeform text, or a decline, but partial submission is not a
         # thing: all of them go back together.
         answers: list[QuestionAnswer] = []
-        for question in event.questions:
+        for question in event.question_set.questions:
             recommended = next(
                 (option for option in question.options if option.is_recommended),
                 None,
             )
             if recommended:
                 answers.append(
-                    QuestionAnswer(question_id=question.id, option_id=recommended.id)
+                    QuestionAnswer(
+                        question_id=question.question_id,
+                        option_id=recommended.option_id,
+                    )
                 )
             else:
                 answers.append(
                     QuestionAnswer(
-                        question_id=question.id,
+                        question_id=question.question_id,
                         text="Use your best judgement.",
                     )
                 )
-        await thread.answer_questions(answers)
+        await thread.answer_questions(event.question_set.question_set_id, answers)
 
     return on_question_asked
 
@@ -440,16 +575,16 @@ async def consume_events(thread: Thread, from_sequence: int | None = None) -> No
     async for event in thread.events(from_sequence=from_sequence):
         match event.type:
             case "agent.message":
-                logger.info(f"[{event.author}] {event.text}")
+                logger.info(f"[{event.author.role or event.author.kind}] {event.text}")
 
             case "tool.started":
-                logger.debug(f"[{event.author}] {event.tool_name}")
+                logger.debug(f"[{event.author.role or event.author.kind}] {event.tool_name}")
 
             case "team.member_spawned":
                 logger.info(f"+ {event.role} ({event.member_id})")
 
             case "team.chat":
-                logger.info(f"[team] {event.author}: {event.text}")
+                logger.info(f"[team] {event.author.role or event.author.kind}: {event.text}")
 
             case "integration.landed":
                 logger.info(f"merged {event.member_id} into {event.branch}")
@@ -458,26 +593,28 @@ async def consume_events(thread: Thread, from_sequence: int | None = None) -> No
                 logger.warning(f"conflict from {event.member_id}, returned for resolution")
 
             case "checker.result":
-                logger.info(f"checker {event.command} exited {event.exit_code}")
+                logger.info(f"checker {event.result.command} exited {event.result.exit_code}")
 
             case "budget.warning":
                 logger.warning(f"budget at {event.percent_used}% of {event.ceiling}")
 
             case "plan.proposed":
-                logger.info(event.plan)
-                await thread.approve_plan()
+                logger.info(event.plan.body)
+                await thread.approve_plan(event.plan.plan_id)
 
             case "question.asked":
                 await build_question_handler(thread)(event)
 
             case "artifact.created":
-                logger.info(f"artifact {event.path} ({event.size_bytes} bytes)")
+                logger.info(
+                    f"artifact {event.artifact.path} ({event.artifact.size_bytes} bytes)"
+                )
 
             case "incident":
                 await on_incident(event)
 
             case "turn.completed":
-                logger.info(f"turn finished: {event.status}")
+                logger.info(f"turn finished: {event.result.status}")
 
             # Codes and event types are additive within a proto major, so a
             # newer satellite can send something this SDK version has never
@@ -512,15 +649,30 @@ async def main() -> None:
         logger.error("ARSOX_SECRET is not set, refusing to start")
         sys.exit(1)
 
+    settings = build_settings()
+
     async with Satellite(
         url="https://satellite-01.internal.jalapenolabs.io",
         secret=arsox_secret,
     ) as satellite:
+        await preflight(satellite, settings.harness)
+        satellite.on("all", on_control_event)
+
         # Create returns a response object so the shape can grow without
         # breaking callers.
-        created = await satellite.threads.create(build_settings())
+        #
+        # The idempotency key is what makes a timed-out create safe to retry.
+        # Without it, a response lost in transit is indistinguishable from a
+        # thread that was never created, and the only safe move is to retry and
+        # leak a whole workspace. `deduplicated` tells you which happened.
+        created = await satellite.threads.create(
+            settings,
+            idempotency_key="rate-limiting-2026-08-04",
+        )
         thread = created.thread
-        logger.info(f"Thread {thread.id} created")
+        logger.info(
+            f"Thread {thread.id} {'reused' if created.deduplicated else 'created'}"
+        )
 
         # Events belong to the thread, not to a turn: one socket per thread,
         # carrying every turn that runs on it. Each event carries turn_id if you
@@ -532,8 +684,10 @@ async def main() -> None:
         thread.on("integration.landed", on_integration_landed)
         thread.on("integration.conflict", on_integration_conflict)
         thread.on("checker.result", on_checker_result)
+        thread.on("service.started", on_service_started)
         thread.on("budget.warning", on_budget_warning)
         thread.on("artifact.created", on_artifact_created)
+        thread.on("redaction.overridden", on_redaction_overridden)
         thread.on("incident", on_incident)
         thread.on("all", on_any_event)
 
@@ -545,6 +699,7 @@ async def main() -> None:
 
         started = await thread.start_turn(
             prompt="Add per-endpoint rate limiting to the public API and open a PR against develop.",
+            idempotency_key="rate-limiting-2026-08-04-turn-1",
         )
         turn = started.turn
 
@@ -552,20 +707,42 @@ async def main() -> None:
         # firing the whole time.
         result = await turn.result()
         logger.info(result.summary)
-        logger.info(f"{result.tokens.total} tokens, ${result.cost:.2f}")
+
+        # Cost comes back as an estimate, not a number. `amount` is None when no
+        # endpoint published pricing for its model, and is_partial means some
+        # requests could be priced and others could not. A confident zero would
+        # be a lie in both cases.
+        if result.cost.amount is None:
+            logger.info(f"{result.tokens.total_tokens} tokens, cost not priced")
+        else:
+            dollars = result.cost.amount.units + result.cost.amount.nanos / 1_000_000_000
+            qualifier = " (partial, some requests unpriced)" if result.cost.is_partial else ""
+            logger.info(f"{result.tokens.total_tokens} tokens, ${dollars:.2f}{qualifier}")
+
+        # Every stage of the stack reports what it did, including the ones that
+        # did nothing. This is what stops "the budget ran out before self-review"
+        # reading as "self-review found nothing".
+        for stage in result.stages:
+            if stage.disposition is StageDisposition.SKIPPED:
+                logger.warning(f"stage {stage.stage} skipped: {stage.reason}")
 
         # Counts by disposition ride along on the report, so the common case
         # needs no query at all. Query when you want the detail.
         logger.info(result.incident_counts)
 
         problems = await thread.incidents.list(
-            disposition=["fatal", "degraded"],
-            turn_id=turn.id,
+            dispositions=["fatal", "degraded"],
+            turn_ids=[turn.id],
         )
         for incident in problems:
             logger.warning(
                 f"{incident.code} ({incident.disposition}): {incident.message}"
             )
+
+        # Questions nobody answered before the timeout. The turn ended with them
+        # recorded here rather than hanging forever.
+        for question_set in result.unanswered_questions:
+            logger.warning(f"{len(question_set.questions)} questions went unanswered")
 
         # fingerprint is the field that makes this an issue pipeline rather
         # than a report. Suppress the ones you have already filed or you will
@@ -576,12 +753,17 @@ async def main() -> None:
             await open_issue(suggestion.title, suggestion.body)
             already_filed.add(suggestion.fingerprint)
 
-        # The agent's proposed setup script is inert data. Arsox never adopts
-        # it, never writes it, never runs it. Adopting it is this line, and it
-        # is yours.
-        setup = result.suggestions.setup_script
-        if setup and setup.proposed_setup_commands:
-            logger.info(f"proposed setup change:\n{setup.proposed_setup_commands}")
+        # The agent's proposed setup scripts are inert data. Arsox never adopts
+        # them, never writes them, never runs them. Adopting one is this line,
+        # and it is yours: commands that will execute on a later satellite are a
+        # permission decision, and permission decisions are never the agent's to
+        # make.
+        for setup in result.suggestions.setup_script:
+            logger.info(f"setup gap: {setup.title}")
+            for evidence in setup.evidence:
+                logger.info(f"  {evidence.command} exited {evidence.exit_code}")
+            if setup.proposed_setup_commands:
+                logger.info(f"  proposed:\n{setup.proposed_setup_commands}")
 
         for artifact in await thread.artifacts.list():
             await thread.artifacts.download(artifact.path, f"./out/{artifact.name}")

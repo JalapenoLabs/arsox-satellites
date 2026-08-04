@@ -16,11 +16,13 @@ import { Satellite } from '@arsox/sdk'
 
 // Misc
 import {
+  ExecAccess,
   Harness,
   MergeMethod,
   PrefetchInjection,
   RedactionMode,
   ServiceIsolation,
+  StageDisposition,
   Viewport,
   WatchTrigger,
   WebAccess
@@ -64,14 +66,21 @@ const settings: ThreadSettings = {
   // The satellite collects the workspace after this much inactivity. The clock
   // resets on every turn, so a thread working for three days is never collected.
   // Required, always, as the safety net against forgotten workspaces.
-  idleTtlMinutes: 120,
+  //
+  // Every time span in the contract is a Duration. The SDK accepts this object
+  // form and converts, so no setting is ever a bare integer of unstated units.
+  idleTtl: { minutes: 120 },
   deleteOnComplete: false,
 
   // Required. `unlimited` is accepted but has to be typed out, so an unbounded
-  // spend is always a decision rather than an oversight.
+  // spend is always a decision rather than an oversight. There is no sentinel:
+  // 0 does not mean unlimited, it means zero.
   budget: {
     maxTokensPerTurn: 8_000_000,
-    maxCostPerThread: 40.0,
+    // Money on the wire, never a float. A single request can cost a fraction of
+    // a cent, and accumulating those in a float is how a ceiling drifts away
+    // from the invoice it was meant to predict.
+    maxCostPerThread: { usd: 40 },
     maxWallClockPerTurn: 'unlimited'
   },
 
@@ -98,8 +107,8 @@ const settings: ThreadSettings = {
       auth: { subscriptionToken: process.env.ANTHROPIC_OAUTH_TOKEN },
       retry: {
         maxAttempts: 10,
-        initialBackoffSeconds: 5,
-        maxBackoffSeconds: 60,
+        initialBackoff: { seconds: 5 },
+        maxBackoff: { seconds: 60 },
         retryOnStatus: [ 429, 529 ]
       }
     },
@@ -134,7 +143,7 @@ const settings: ThreadSettings = {
     enabled: true,
     // Past this, the turn ends with the questions recorded in the report
     // rather than hanging forever.
-    questionTimeoutMinutes: 30
+    questionTimeout: { minutes: 30 }
   },
 
   selfReview: {
@@ -148,6 +157,8 @@ const settings: ThreadSettings = {
     maxSuggestionsPerCategory: 5
   },
 
+  // The single place merging is decided. The `gh` broker enforces it, and the
+  // commander still chooses whether to merge even when permitted.
   pullRequests: {
     allowAgentMerge: false,
     allowedMergeMethods: [ MergeMethod.Squash ]
@@ -159,8 +170,8 @@ const settings: ThreadSettings = {
   watchPullRequests: {
     enabled: true,
     maxAttempts: 3,
-    watchWindowMinutes: 240,
-    pollIntervalSeconds: 20,
+    watchWindow: { minutes: 240 },
+    pollInterval: { seconds: 20 },
     // Only react to check runs on commits the satellite itself pushed. `Any`
     // also reacts to human pushes, which is usually two parties editing the
     // same branch at cross purposes.
@@ -193,21 +204,25 @@ const settings: ThreadSettings = {
           name: 'web',
           command: 'yarn dev',
           port: 3000,
-          readyWhen: { httpGet: '/health', timeoutSeconds: 120 },
+          readyWhen: { httpGet: '/health', timeout: { seconds: 120 } },
           isolation: ServiceIsolation.Shared
         }
       ]
     }
   ],
 
+  // Merge permission is not here. It lives in `pullRequests` above, so exactly
+  // one setting decides whether a merge may happen.
   github: {
-    token: process.env.GITHUB_PAT,
-    allowMerge: false
+    token: process.env.GITHUB_PAT
   },
 
   jira: {
     token: process.env.JIRA_PAT,
     baseUrl: 'https://jalapenolabs.atlassian.net',
+    // Atlassian Cloud authenticates with an email plus an API token. Omit it
+    // for Data Center, which accepts the token alone.
+    email: 'automation@jalapenolabs.io',
     allowStatusTransitions: true,
     allowComments: true
   },
@@ -234,9 +249,10 @@ const settings: ThreadSettings = {
 
   redaction: {
     mode: RedactionMode.PostfixShown,
-    // Six stars regardless of the secret's real length. Set to -1 to mirror the
-    // length, which leaks the length and is why it is not the default.
-    starCount: 6,
+    // Six stars regardless of the secret's real length. `{ mirror: true }`
+    // instead mirrors the length, which leaks the length and is why it is not
+    // the default. A case rather than a magic -1, so -2 is unrepresentable.
+    starCount: { fixed: 6 },
     // The kill switch. False unregisters the override_redaction tool entirely,
     // so no agent in this thread can reach it no matter what it is told.
     allowRedactionOverride: false
@@ -249,10 +265,13 @@ const settings: ThreadSettings = {
     web: WebAccess.Preset,
     // Always additive on top of `web`, so this never silently drops the preset.
     additionalDomains: [ 'docs.anthropic.com', 'jalapenolabs.atlassian.net' ],
+    // Symmetric with `web`. Preset inherits the curated command list, Custom
+    // starts from nothing, None allows no commands at all, which an empty list
+    // could never say on its own.
+    exec: ExecAccess.Preset,
+    allowedCommands: [ 'git', 'yarn', 'node', 'rg', 'gh' ],
     allowGitPush: true,
-    protectedBranches: [ 'main', 'develop' ],
-    // Omit to inherit the preset allowlist. An explicit list replaces it.
-    allowedCommands: [ 'git', 'yarn', 'node', 'rg', 'gh' ]
+    protectedBranches: [ 'main', 'develop' ]
   },
 
   // Written to /workspace/<thread-id>/AGENTS.md, below the Arsox header.
@@ -282,14 +301,94 @@ const settings: ThreadSettings = {
     viewports: [ Viewport.Mobile, Viewport.Tablet, Viewport.Desktop ]
   },
 
+  // An agent with a shell can fill a disk. These are enforced, not suggested.
+  resourceLimits: {
+    workspaceQuotaBytes: 10 * 1024 ** 3,
+    artifactCapBytes: 100 * 1024 ** 2
+  },
+
+  // Bounds on the operations that can otherwise hang forever. The turn wall
+  // clock bound lives in `budget`, because exceeding it is a budget outcome
+  // rather than a hung operation.
+  timeouts: {
+    execCommand: { minutes: 30 },
+    llmRequest: { minutes: 10 },
+    harnessIdle: { minutes: 15 }
+  },
+
   // Opt out of the noisy ones. Statistics are off by default because they
-  // change on every token.
+  // change on every token. Incidents are absent from this list and cannot be
+  // switched off: a stream you can configure to hide failures is worse than no
+  // stream.
   stream: {
     includeStatistics: false,
     includeAgentThinking: true,
     includeToolCalls: true,
-    includeTeamChat: true
+    includeTeamChat: true,
+    includeServiceLogs: true
   }
+}
+
+
+// ///////////////////////////// //
+//           Preflight           //
+// ///////////////////////////// //
+
+/**
+ * Refuses to run against a satellite this SDK cannot speak to, and reports what
+ * the active harness actually supports.
+ *
+ * Both checks are cheap and both fail loudly here rather than three turns into
+ * a run. An SDK refuses a higher proto major outright rather than failing later
+ * with a confusing decode error; a higher minor warns once and proceeds,
+ * ignoring additive fields it does not know about.
+ */
+async function preflight(): Promise<void> {
+  const version = await satellite.version()
+  console.log(`satellite ${version.satelliteVersion}, proto v${version.protoMajor}.${version.protoMinor}`)
+
+  // Shapes are not the whole contract. A harness might have no plan mode and no
+  // sub-agents, and discovering that by absence three turns in is exactly what
+  // asking up front avoids.
+  const { harnesses, defaultHarness } = await satellite.harness()
+  console.log(`default harness: ${defaultHarness}`)
+
+  for (const capabilities of harnesses) {
+    if (capabilities.harness !== settings.harness) {
+      continue
+    }
+    if (!capabilities.supportsNativePlanMode) {
+      console.debug('harness has no native plan mode, Arsox will use its skill fallback')
+    }
+    // Absent is not zero. A harness that reports no cache accounting leaves the
+    // cache token fields undefined rather than setting them to 0, so a cost
+    // reconciliation can tell "not reported" from "read nothing from cache".
+    if (!capabilities.reportsCacheTokens) {
+      console.debug('harness reports no cache accounting, cache token fields will be absent')
+    }
+  }
+}
+
+/**
+ * Subscribes to the satellite's control stream.
+ *
+ * One socket per satellite, carrying lifecycle only: threads created and
+ * destroyed, queue depth, health transitions, budget warnings. It never carries
+ * thread content, which is why it is a separate message type rather than the
+ * thread stream with a filter applied.
+ */
+function watchSatellite(): void {
+  satellite.on('thread.state_changed', (event) => {
+    console.debug(`${event.threadId}: ${event.previous} -> ${event.current}`)
+  })
+
+  satellite.on('health.changed', (event) => {
+    if (event.ready) {
+      console.log(`satellite ready again (${event.checkName})`)
+      return
+    }
+    console.error(`satellite not ready: ${event.checkName} ${event.detail ?? ''}`)
+  })
 }
 
 
@@ -309,12 +408,15 @@ const settings: ThreadSettings = {
  * write) holds up nothing behind it.
  */
 function attachHandlers(thread: Thread): void {
+  // `author` is a struct, not a display string: kind, memberId, role, and the
+  // owning member for a sub-agent. That is what lets a client group a stream by
+  // member without parsing names, which is the whole reason it is not a string.
   thread.on('agent.message', (event) => {
-    console.log(`[${event.author}] ${event.text}`)
+    console.log(`[${event.author.role ?? event.author.kind}] ${event.text}`)
   })
 
   thread.on('tool.started', (event) => {
-    console.log(`[${event.author}] ${event.toolName}`)
+    console.log(`[${event.author.role ?? event.author.kind}] ${event.toolName}`)
   })
 
   thread.on('team.member_spawned', (event) => {
@@ -322,7 +424,7 @@ function attachHandlers(thread: Thread): void {
   })
 
   thread.on('team.chat', (event) => {
-    console.log(`[team] ${event.author}: ${event.text}`)
+    console.log(`[team] ${event.author.role ?? event.author.kind}: ${event.text}`)
   })
 
   thread.on('integration.landed', (event) => {
@@ -334,7 +436,16 @@ function attachHandlers(thread: Thread): void {
   })
 
   thread.on('checker.result', (event) => {
-    console.log(`checker ${event.command} exited ${event.exitCode}`)
+    console.log(`checker ${event.result.command} exited ${event.result.exitCode}`)
+  })
+
+  // A service the thread never declared, promoted by the exec broker because a
+  // member ran something long-lived that bound a port. Every later member
+  // running the same command gets this URL rather than a second process.
+  thread.on('service.started', (event) => {
+    if (event.autoPromoted) {
+      console.log(`auto-promoted ${event.serviceName} to a service at ${event.url}`)
+    }
   })
 
   thread.on('budget.warning', (event) => {
@@ -342,7 +453,14 @@ function attachHandlers(thread: Thread): void {
   })
 
   thread.on('artifact.created', (event) => {
-    console.log(`artifact ${event.path} (${event.sizeBytes} bytes)`)
+    console.log(`artifact ${event.artifact.path} (${event.artifact.sizeBytes} bytes)`)
+  })
+
+  // An agent overrode redaction for one secret and one operation. High priority
+  // by design: the guardrail can move on an explicit human instruction, but
+  // nothing moves quietly.
+  thread.on('redaction.overridden', (event) => {
+    console.warn(`redaction overridden for ${event.secretKey} on ${event.operation}: ${event.justification}`)
   })
 
   // Every failure at every severity arrives here, and this is the one event
@@ -359,9 +477,10 @@ function attachHandlers(thread: Thread): void {
   //
   // Its real job is forward compatibility: event types are additive within a
   // proto major, so a newer satellite sends types this SDK version has no name
-  // for. A typed handler cannot subscribe to a type it has never heard of.
-  // This one gets them anyway, which makes it the correct hook for audit logs
-  // and bus forwarding.
+  // for. A typed handler cannot subscribe to a type it has never heard of, and
+  // an unknown payload decodes to nothing. The envelope carries `type` as a
+  // plain string for exactly this reason, so an event can still be named,
+  // logged, and forwarded even when its body cannot be read.
   thread.on('all', (event) => {
     auditLog.write({ sequence: event.sequence, type: event.type, event })
   })
@@ -370,8 +489,8 @@ function attachHandlers(thread: Thread): void {
   // unidirectional. Both live on the thread because only one plan and one
   // question set can ever be outstanding at a time.
   thread.on('plan.proposed', async (event) => {
-    console.log(event.plan)
-    await thread.approvePlan()
+    console.log(event.plan.body)
+    await thread.approvePlan(event.plan.planId)
   })
 
   thread.on('question.asked', async (event) => {
@@ -379,12 +498,13 @@ function attachHandlers(thread: Thread): void {
     // option, freeform text, or a decline, but partial submission is not a
     // thing: all of them go back together.
     await thread.answerQuestions(
-      event.questions.map((question): QuestionAnswer => {
+      event.questionSet.questionSetId,
+      event.questionSet.questions.map((question): QuestionAnswer => {
         const preferredOption = question.options.find((option) => option.isRecommended)
         if (preferredOption) {
-          return { questionId: question.id, optionId: preferredOption.id }
+          return { questionId: question.questionId, optionId: preferredOption.optionId }
         }
-        return { questionId: question.id, text: 'Use your best judgement.' }
+        return { questionId: question.questionId, text: 'Use your best judgement.' }
       })
     )
   })
@@ -411,11 +531,11 @@ async function consumeEvents(thread: Thread, fromSequence?: number): Promise<voi
   for await (const event of thread.events({ fromSequence })) {
     switch (event.type) {
       case 'agent.message':
-        console.log(`[${event.author}] ${event.text}`)
+        console.log(`[${event.author.role ?? event.author.kind}] ${event.text}`)
         break
 
       case 'tool.started':
-        console.log(`[${event.author}] ${event.toolName}`)
+        console.log(`[${event.author.role ?? event.author.kind}] ${event.toolName}`)
         break
 
       case 'team.member_spawned':
@@ -423,7 +543,7 @@ async function consumeEvents(thread: Thread, fromSequence?: number): Promise<voi
         break
 
       case 'team.chat':
-        console.log(`[team] ${event.author}: ${event.text}`)
+        console.log(`[team] ${event.author.role ?? event.author.kind}: ${event.text}`)
         break
 
       case 'integration.landed':
@@ -435,7 +555,7 @@ async function consumeEvents(thread: Thread, fromSequence?: number): Promise<voi
         break
 
       case 'checker.result':
-        console.log(`checker ${event.command} exited ${event.exitCode}`)
+        console.log(`checker ${event.result.command} exited ${event.result.exitCode}`)
         break
 
       case 'budget.warning':
@@ -443,24 +563,25 @@ async function consumeEvents(thread: Thread, fromSequence?: number): Promise<voi
         break
 
       case 'plan.proposed':
-        console.log(event.plan)
-        await thread.approvePlan()
+        console.log(event.plan.body)
+        await thread.approvePlan(event.plan.planId)
         break
 
       case 'question.asked':
         await thread.answerQuestions(
-          event.questions.map((question): QuestionAnswer => {
+          event.questionSet.questionSetId,
+          event.questionSet.questions.map((question): QuestionAnswer => {
             const preferredOption = question.options.find((option) => option.isRecommended)
             if (preferredOption) {
-              return { questionId: question.id, optionId: preferredOption.id }
+              return { questionId: question.questionId, optionId: preferredOption.optionId }
             }
-            return { questionId: question.id, text: 'Use your best judgement.' }
+            return { questionId: question.questionId, text: 'Use your best judgement.' }
           })
         )
         break
 
       case 'artifact.created':
-        console.log(`artifact ${event.path} (${event.sizeBytes} bytes)`)
+        console.log(`artifact ${event.artifact.path} (${event.artifact.sizeBytes} bytes)`)
         break
 
       case 'incident':
@@ -468,7 +589,7 @@ async function consumeEvents(thread: Thread, fromSequence?: number): Promise<voi
         break
 
       case 'turn.completed':
-        console.log(`turn finished: ${event.status}`)
+        console.log(`turn finished: ${event.result.status}`)
         break
 
       // Codes and event types are additive within a proto major, so a newer
@@ -486,32 +607,71 @@ async function consumeEvents(thread: Thread, fromSequence?: number): Promise<voi
 // ///////////////////////////// //
 
 async function main(): Promise<void> {
+  await preflight()
+  watchSatellite()
+
   // Create returns an object so the shape can grow without breaking callers.
-  const { thread } = await satellite.threads.create(settings)
-  console.log(`Thread ${thread.id} created`)
+  //
+  // The idempotency key is what makes a timed-out create safe to retry. Without
+  // it, a response lost in transit is indistinguishable from a thread that was
+  // never created, and the only safe move is to retry and leak a whole
+  // workspace. `deduplicated` tells you which happened.
+  const { thread, deduplicated } = await satellite.threads.create(settings, {
+    idempotencyKey: 'rate-limiting-2026-08-04'
+  })
+  console.log(`Thread ${thread.id} ${deduplicated ? 'reused' : 'created'}`)
 
   attachHandlers(thread)
 
   const { turn } = await thread.startTurn({
-    prompt: 'Add per-endpoint rate limiting to the public API and open a PR against develop.'
+    prompt: 'Add per-endpoint rate limiting to the public API and open a PR against develop.',
+    idempotencyKey: 'rate-limiting-2026-08-04-turn-1'
   })
 
   // Resolves when this turn reaches a terminal state. Handlers keep firing the
   // whole time.
   const result = await turn.result()
   console.log(result.summary)
-  console.log(`${result.tokens.total} tokens, $${result.cost.toFixed(2)}`)
+
+  // Cost comes back as an estimate, not a number. `amount` is absent when no
+  // endpoint published pricing for its model, and `isPartial` means some
+  // requests could be priced and others could not. A confident zero would be a
+  // lie in both cases.
+  const { amount, isPartial } = result.cost
+  if (!amount) {
+    console.log(`${result.tokens.totalTokens} tokens, cost not priced`)
+  }
+  else {
+    const dollars = Number(amount.units) + amount.nanos / 1_000_000_000
+    const qualifier = isPartial ? ' (partial, some requests unpriced)' : ''
+    console.log(`${result.tokens.totalTokens} tokens, $${dollars.toFixed(2)}${qualifier}`)
+  }
+
+  // Every stage of the stack reports what it did, including the ones that did
+  // nothing. This is what stops "the budget ran out before self-review" reading
+  // as "self-review found nothing".
+  for (const stage of result.stages) {
+    if (stage.disposition === StageDisposition.Skipped) {
+      console.warn(`stage ${stage.stage} skipped: ${stage.reason}`)
+    }
+  }
 
   // Counts by disposition ride along on the report, so the common case needs
   // no query at all. Query when you want the detail.
   console.log(result.incidentCounts)
 
   const problems = await thread.incidents.list({
-    disposition: [ 'fatal', 'degraded' ],
-    turnId: turn.id
+    dispositions: [ 'fatal', 'degraded' ],
+    turnIds: [ turn.id ]
   })
   for (const incident of problems) {
     console.warn(`${incident.code} (${incident.disposition}): ${incident.message}`)
+  }
+
+  // Questions nobody answered before the timeout. The turn ended with them
+  // recorded here rather than hanging forever.
+  for (const questionSet of result.unansweredQuestions) {
+    console.warn(`${questionSet.questions.length} questions went unanswered`)
   }
 
   // `fingerprint` is the field that makes this an issue pipeline rather than a
@@ -525,11 +685,18 @@ async function main(): Promise<void> {
     alreadyFiled.add(suggestion.fingerprint)
   }
 
-  // The agent's proposed setup script is inert data. Arsox never adopts it,
-  // never writes it, never runs it. Adopting it is this line, and it is yours.
-  const setup = result.suggestions.setupScript
-  if (setup?.proposedSetupCommands) {
-    console.log(`proposed setup change:\n${setup.proposedSetupCommands}`)
+  // The agent's proposed setup scripts are inert data. Arsox never adopts them,
+  // never writes them, never runs them. Adopting one is this line, and it is
+  // yours: commands that will execute on a later satellite are a permission
+  // decision, and permission decisions are never the agent's to make.
+  for (const setup of result.suggestions.setupScript) {
+    console.log(`setup gap: ${setup.title}`)
+    for (const evidence of setup.evidence) {
+      console.log(`  ${evidence.command} exited ${evidence.exitCode}`)
+    }
+    if (setup.proposedSetupCommands) {
+      console.log(`  proposed:\n${setup.proposedSetupCommands}`)
+    }
   }
 
   for (const artifact of await thread.artifacts.list()) {
