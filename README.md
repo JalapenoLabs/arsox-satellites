@@ -313,6 +313,7 @@ Threads run concurrently with each other, bounded by `ARSOX_MAX_CONCURRENT_THREA
 | `GET /healthz` | none | liveness, always cheap, never touches the database |
 | `GET /readyz` | none | readiness: database open, `/workspace` writable, LLM proxy reachable |
 | `GET /v1/version` | none | satellite version and proto contract version |
+| `GET /v1/harness` | bearer | which harnesses this satellite offers and what each [supports](#harness-capabilities) |
 | `GET /v1/status` | bearer | full satellite state, thread list, queue depths |
 | `GET /metrics` | bearer | Prometheus metrics, opt in with `ARSOX_METRICS=true` |
 
@@ -330,12 +331,59 @@ An agent with a shell can fill a disk. These are enforced, not suggested.
 
 Protobuf definitions live in a single root `proto/` directory, package `arsox.<domain>.v1`, generated with `buf`. Field numbers are permanent and deleted fields are reserved, so the contract only ever grows within a major version.
 
+Generation happens at build time into strongly typed artifacts per language. Nothing reads a `.proto` at runtime. The contract is checked by the compiler, not discovered by the interpreter.
+
 - The satellite's proto major version is reported by `GET /v1/version`.
 - SDK major versions track proto major versions. An SDK 1.x talks to any satellite serving `arsox.*.v1`.
 - An SDK **refuses** to talk to a satellite with a higher proto major and says so clearly, rather than failing later with a confusing decode error.
 - An SDK talking to a satellite with a higher minor version warns once and proceeds. Additive fields it does not know about are ignored.
 
 Pin your image tag and your SDK version together.
+
+#### One canonical message per concept
+
+Normalization means one message per concept that every harness maps into. It does not mean one message that everything squeezes into, and it emphatically does not mean a message per harness.
+
+```proto
+// Right: one shape. Claude, Codex, and anything added later map into it.
+message TokenUsage { ... }
+
+// Wrong: the harness has leaked into the contract, and now every consumer
+// knows which CLI produced its data.
+message ClaudeTokenUsage { ... }
+message CodexTokenUsage { ... }
+```
+
+The second form defeats the entire project. A consumer written against `CodexTokenUsage` has to be rewritten to switch harnesses, which is the cost Arsox exists to remove.
+
+#### Absent is not zero
+
+Multi-harness normalization guarantees that some harnesses report fields others do not. In proto3 without explicit presence, a scalar that was never reported and a scalar that is genuinely zero are indistinguishable on the wire.
+
+**Any field a harness might not report is `optional`, and its doc comment says what absence means.** Fields every harness always reports stay bare.
+
+```proto
+message TokenUsage {
+  uint32 input_tokens = 1;
+  uint32 output_tokens = 2;
+  uint32 total_tokens = 3;
+
+  // Absent when the harness does not report cache accounting.
+  // Zero means it reported a genuine zero.
+  optional uint32 cache_read_tokens = 4;
+  optional uint32 cache_write_tokens = 5;
+}
+```
+
+Getting this wrong turns "this harness has no cache accounting" into "this run read nothing from cache," which is a silent defect in a billing-adjacent number and exactly the kind of bug that surfaces during a cost reconciliation months later.
+
+#### Conformance tests
+
+A mapping layer that silently drops a field looks correct until somebody reconciles a bill against it. So the mapping is tested rather than asserted.
+
+For every harness the repo carries a captured native transcript and the canonical output it must produce. Adding a harness means writing a mapper and passing the existing suite. A harness that cannot produce a valid canonical `TokenUsage` fails at build time rather than in production.
+
+This suite is the normalization claim expressed as tests. It is what makes "swap the harness, keep your code" a guarantee instead of an intention, and it is worth writing alongside the proto rather than after it.
 
 ### Errors
 
@@ -742,13 +790,31 @@ When a ceiling is hit, the turn ends with the code for the ceiling that was actu
 
 **Post-turn stages cost tokens too, so an exhausted turn skips them.** Automated self-review and post-task suggestions are both agent work, and running them past a spent budget would breach the ceiling you set. Each is skipped and recorded as skipped in the report rather than failing the turn. Artifact scanning and upload still run, because losing the work you already paid for to save a few tokens is the wrong trade.
 
-### LLM to use
+### Harness and model
+
+There are two independent axes here, and they are worth naming separately because "add Gemini" is ambiguous between them.
+
+**The harness axis** is which CLI drives the agent: Claude CLI, Codex CLI, and later others. The harness decides how the agent thinks, plans, uses tools, and reports what it did. Swapping it changes behavior and changes the native event shapes, which is what the [canonical proto contract](#one-canonical-message-per-concept) absorbs.
+
+**The model axis** is which model answers: an Anthropic model, an OpenAI model, Deepseek, something on Bedrock. Swapping it changes quality and cost.
+
+They compose freely, which is the interesting part. You can run an Anthropic model such as `Opus 5 [1m]` under the Codex CLI, or a Deepseek model under the Claude CLI.
+
+#### The harness axis
 
 Pick the Claude CLI harness or the Codex CLI harness. Claude is the default.
 
-The two are independent of the model, which is the interesting part. You can run an Anthropic model such as `Opus 5 [1m]` under the Codex CLI.
+Adding a harness is a satellite-side change: write the mapper from its native events into the canonical shapes and pass the [conformance suite](#conformance-tests). Nothing in your application changes, and no SDK release is required to make an existing consumer work with a new harness. Gemini CLI, Grok CLI, and Kimi CLI are all plausible additions on this axis, because each has behavior that makes it worth choosing for a given job.
 
-As we expand we plan to support more LLMs, including but not limited to:
+#### Harness capabilities
+
+Shapes are not the whole contract. A harness might have no plan mode, or no sub-agents, and a consumer that swapped harnesses would otherwise discover that by absence, three turns into a run.
+
+`GET /v1/harness` reports what the active harness actually supports, so the SDK can check up front instead of inferring from silence. It is also the honest place to say "this harness cannot do that," rather than accepting a setting and quietly emitting nothing.
+
+#### The model axis
+
+As we expand we plan to support more models, including but not limited to:
 - Deepseek
 - Bedrock
 <!-- TODO: Add others here! -->
