@@ -579,6 +579,8 @@ At 80% of any ceiling, a `budget_warning` event is emitted so your application c
 
 When a ceiling is hit, the turn ends with the code for the ceiling that was actually hit: `BUDGET_TOKENS_EXHAUSTED`, `BUDGET_COST_EXHAUSTED`, or `BUDGET_WALL_CLOCK_EXHAUSTED`. This is a graceful stop, not a kill: the commander is told the budget is gone, work already committed to branches survives, and artifacts already produced remain downloadable.
 
+**Post-turn stages cost tokens too, so an exhausted turn skips them.** Automated self-review and post-task suggestions are both agent work, and running them past a spent budget would breach the ceiling you set. Each is skipped and recorded as skipped in the report rather than failing the turn. Artifact scanning and upload still run, because losing the work you already paid for to save a few tokens is the wrong trade.
+
 ### LLM to use
 
 Pick the Claude CLI harness or the Codex CLI harness. Claude is the default.
@@ -647,6 +649,7 @@ Redaction applies to:
 - **file contents in commits, and commit messages**
 - **PR titles, bodies, and review comments, and Jira comments**
 - artifact contents, at upload time
+- suggestion bodies, their evidence output, and proposed setup scripts
 
 The `pre-push` hook is the hard gate for git. A push containing an unredacted secret is refused outright, so a leak requires a deliberate override rather than an oversight.
 
@@ -823,50 +826,116 @@ By default a human merges pull requests. Grant more autonomy and the commander m
 
 The commander still **chooses** whether to merge. You can also define which merge methods are permitted, such as squash versus rebase. The policy is enforced by the `gh` broker, not by asking nicely.
 
-## Post-task suggestions staging
+## Post-task suggestions
 
 EXPERIMENTAL. Opt in, default off.
 
-This is a script that Arsox provides built-in.
-As a final last step, after the artifacts stage and everything else is completed then there is an optional suggestions stage.
-The commander can recommend suggestions for what could be improved upon next time back to the SDK.
+Arsox provides a default skill for this. After artifacts are scanned and uploaded, and everything else in the turn has finished, an optional suggestions stage reports what could be better next time. Suggestions travel back to the SDK as structured data, not as artifacts.
 
-There are 3 categories of suggestions:
-1. Repo tech debt
-2. Repo improvements
-3. Setup script improvements
+There are three categories:
+
+1. **Repo tech debt**, something that exists today and is wrong
+2. **Repo improvements**, something that does not exist and should
+3. **Setup script improvements**, something that got in the agent's way on this satellite
+
+That one rule separates the first two: does the thing already exist? A duplicated function is debt. An absent CI pipeline is an improvement. Keep the rule in hand while reading the category descriptions, because plenty of real findings land in either bucket without it.
+
+### Who produces them
+
+Split by category, because the right context differs.
+
+**Setup script suggestions come from the commander.** It is the agent that actually watched `npm install` fail. A fresh agent would have to re-derive that from logs, badly.
+
+**Tech debt and repo improvements come from a dedicated agent with a clean context window**, the same way [automated self-review](#automated-self-review) works. The commander's context is saturated with the one task it just finished, so it would report the debt it happened to trip over and miss everything else. That is a biased sample presented as a sweep.
+
+With team mode off, the single agent takes the commander's role here.
+
+### The turn brief
+
+A clean context window is not an empty one. An agent that knows nothing about the turn has to cold-search the repo: slow, expensive, and blind to the most valuable signal available, which is the work that just happened.
+
+So the suggestions agent opens with a **turn brief**. Arsox assembles it from records that already exist, and it is small, typically a few thousand tokens against a window measured in the hundreds of thousands. The agent spends the rest of that window on the repo.
+
+```typescript
+type TurnBrief = {
+  task: string
+  plan?: string
+  summary: string
+  members: { memberId: string, role: string }[]
+  changedFiles: { path: string, insertions: number, deletions: number }[]
+  integrations: { memberId: string, branch: string, summary: string }[]
+  checkerResults: { command: string, exitCode: number, output: string }[]
+  friction: string[]
+}
+```
+
+**`friction` is the field that earns the feature.** It is an account of where the team got stuck: what took three attempts, what two members had to coordinate around, what somebody worked around instead of fixing. The commander writes it as its last act, because it is the one agent that read every message on the team chat and every DM. With team mode off, the single agent writes it from its own run.
+
+Friction is the best available predictor of debt. A module three members had to negotiate around is telling you something no static sweep will find.
+
+**The brief carries evidence, not conclusions.** It says what happened, not what the commander thought about the code. That line is the entire reason for a fresh agent: import the commander's opinions and you have re-imported the bias you spawned a new context to escape. Diffs, exit codes, and "this took four attempts" are evidence. "The auth module is a mess" is a conclusion, and it belongs in the commander's own report, not here.
+
+**The brief orients, it does not scope.** The agent starts where the turn was and is explicitly free to range outward. This matters more than it sounds: point an agent at the diff and stop, and it will review the diff, which is [automated self-review](#automated-self-review) built a second time. Suggestions exist to surface what the change revealed about the surrounding system, not to grade the change.
+
+Forking the commander's context at a freeze point is the other way to solve this, and it is worse on both axes. It inherits the saturation, and it spends most of the fresh window replaying history instead of reading the repo.
 
 ### Repo tech debt
 
-This will report tech debt, things that exist today which regress the quality of the code base.
+Things that exist today and regress the quality of the codebase: files that could be written better, duplicated functions, missing unit tests, security flaws, gaps in production-grade code.
 
-This includes files that could be written better, duplicate functions, missing unit tests, security flaws, observations, gaps in production-grade code.
-
-This report comes in as a markdown string and a title string for each recommendation. It's designed to make it really easy to turn each one into a Jira/Github issue easily.
+Where the [checker](#checkers) already knows something deterministically, suggestions cite its output rather than re-deriving it in prose. A failing `yarn lint` the commander chose to skip is tech debt the system can already prove.
 
 ### Repo improvements
 
-This will report things about the repo overall that could be upgraded, things that could exist to increase the quality of the code base.
+Things that do not exist and would raise the quality of the codebase: CI, new infrastructure, componentization, polymorphism, structural and design improvements, developer experience, framework and infrastructure upgrades.
 
-This includes CI recommendations, new infra, componentization, polymorphism, structure improvements, design improvements, developer UX, framework/infra upgrades, etc.
+### Suggestion shape
 
-This report comes in as a markdown string and a title string for each recommendation. It's designed to make it really easy to turn each one into a Jira/Github issue easily.
+Both of the above return the same shape:
+
+```typescript
+type Suggestion = {
+  // Stable across turns. Hashed over what is being reported (path, kind,
+  // symbol) and deliberately not over the prose, so a reworded description
+  // of the same problem still collides.
+  fingerprint: string
+  category: SuggestionCategory
+  severity: Severity
+  title: string
+  body: string
+  locations: { path: string, line?: number }[]
+}
+```
+
+**`fingerprint` is what makes this an issue pipeline instead of a report.** Without it, the second turn on a thread reports the same twelve findings and your application files twelve duplicate tickets. By turn five there are sixty. Store the fingerprints you have already filed and suppress them on the way in.
+
+`severity` exists because a security flaw and a naming nit cannot share a queue. `locations` exists because a ticket reading "duplicated functions" with no paths is not actionable.
+
+`maxSuggestionsPerCategory` caps the output, default 5. Any real codebase can produce fifty findings, and fifty per turn is noise that teaches your users to ignore the feature. The cap forces the agent to rank rather than enumerate.
 
 ### Setup script improvements
 
-This will report things about the workspace that could be improved, especially missing things that set back the agent on the satellite.
-The agent is given a copy of the existing setup script so that it knows exactly what exists already.
+Things about the workspace that set the agent back on this satellite. The agent is given the current setup script and a full explanation of how setup scripts work, so it knows exactly what already exists.
 
-Examples include:
-- missing a `npm install` step
-- missing golang as a language
-- missing apt/dnf packages
-- unable to use the docker engine to verify an image build step
-- permission denied to execute a custom CLI command
+Examples:
+- a missing `npm install` step
+- Go not installed
+- missing apt or dnf packages
+- no docker engine, so an image build step could not be verified
+- permission denied running a custom CLI command
 
-The report comes in as a single markdown string of all of the issues, along with a single title.
-In addition, the agent can suggest a new setup script string with the issues fixed, if it feels necessary to get it.
-The agent will be informed fully about how the setup script works.
+This is the strongest of the three categories, because it is the only one where the agent has evidence rather than an opinion: it hit the failure itself. So it carries that evidence.
+
+```typescript
+type SetupScriptSuggestion = {
+  title: string
+  body: string
+  evidence: { command: string, exitCode: number, output: string }[]
+  proposedSetupCommands?: string
+}
+```
+
+**`proposedSetupCommands` is inert.** It is data returned to the SDK and nothing else. Arsox never adopts it, never writes it to disk, and never runs it. Applying it means your application explicitly setting it on a future thread, exactly like any other setting. An agent proposing commands that will execute on a later satellite is a permission decision, and permission decisions are never the agent's to make. See [Permissions](#permissions).
 
 ## Artifacts
 
