@@ -28,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/thread/v1/thread.proto.
  */
 export const file_arsox_thread_v1_thread: GenFile = /*@__PURE__*/
-  fileDesc("ChxhcnNveC90aHJlYWQvdjEvdGhyZWFkLnByb3RvEg9hcnNveC50aHJlYWQudjEiqAQKBlRocmVhZBIRCgl0aHJlYWRfaWQYASABKAkSKwoFc3RhdGUYAiABKA4yHC5hcnNveC50aHJlYWQudjEuVGhyZWFkU3RhdGUSMwoIc2V0dGluZ3MYAyABKAsyIS5hcnNveC5zZXR0aW5ncy52MS5UaHJlYWRTZXR0aW5ncxIuCgpjcmVhdGVkX2F0GAQgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBI0ChBsYXN0X2FjdGl2aXR5X2F0GAUgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBIzCgpleHBpcmVzX2F0GAYgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcEgAiAEBEhMKC3F1ZXVlX2RlcHRoGAcgASgNEhwKD2N1cnJlbnRfdHVybl9pZBgIIAEoCUgBiAEBEkEKEXBlbmRpbmdfcXVlc3Rpb25zGAkgASgLMiEuYXJzb3guaW50ZXJhY3Rpb24udjEuUXVlc3Rpb25TZXRIAogBARI1CgxwZW5kaW5nX3BsYW4YCiABKAsyGi5hcnNveC5pbnRlcmFjdGlvbi52MS5QbGFuSAOIAQESFwoPbGF0ZXN0X3NlcXVlbmNlGAsgASgEQg0KC19leHBpcmVzX2F0QhIKEF9jdXJyZW50X3R1cm5faWRCFAoSX3BlbmRpbmdfcXVlc3Rpb25zQg8KDV9wZW5kaW5nX3BsYW4ifAoTQ3JlYXRlVGhyZWFkUmVxdWVzdBIzCghzZXR0aW5ncxgBIAEoCzIhLmFyc294LnNldHRpbmdzLnYxLlRocmVhZFNldHRpbmdzEhwKD2lkZW1wb3RlbmN5X2tleRgCIAEoCUgAiAEBQhIKEF9pZGVtcG90ZW5jeV9rZXkiVQoUQ3JlYXRlVGhyZWFkUmVzcG9uc2USJwoGdGhyZWFkGAEgASgLMhcuYXJzb3gudGhyZWFkLnYxLlRocmVhZBIUCgxkZWR1cGxpY2F0ZWQYAiABKAgiJQoQR2V0VGhyZWFkUmVxdWVzdBIRCgl0aHJlYWRfaWQYASABKAkiPAoRR2V0VGhyZWFkUmVzcG9uc2USJwoGdGhyZWFkGAEgASgLMhcuYXJzb3gudGhyZWFkLnYxLlRocmVhZCJuChJMaXN0VGhyZWFkc1JlcXVlc3QSLAoGc3RhdGVzGAEgAygOMhwuYXJzb3gudGhyZWFkLnYxLlRocmVhZFN0YXRlEioKBHBhZ2UYAiABKAsyHC5hcnNveC5jb21tb24udjEuUGFnZVJlcXVlc3QibAoTTGlzdFRocmVhZHNSZXNwb25zZRIoCgd0aHJlYWRzGAEgAygLMhcuYXJzb3gudGhyZWFkLnYxLlRocmVhZBIrCgRwYWdlGAIgASgLMh0uYXJzb3guY29tbW9uLnYxLlBhZ2VSZXNwb25zZSIpChREZXN0cm95VGhyZWFkUmVxdWVzdBIRCgl0aHJlYWRfaWQYASABKAkiQAoVRGVzdHJveVRocmVhZFJlc3BvbnNlEicKBnRocmVhZBgBIAEoCzIXLmFyc294LnRocmVhZC52MS5UaHJlYWQq7QEKC1RocmVhZFN0YXRlEhwKGFRIUkVBRF9TVEFURV9VTlNQRUNJRklFRBAAEh0KGVRIUkVBRF9TVEFURV9QUk9WSVNJT05JTkcQARIVChFUSFJFQURfU1RBVEVfSURMRRACEhgKFFRIUkVBRF9TVEFURV9SVU5OSU5HEAMSHwobVEhSRUFEX1NUQVRFX0FXQUlUSU5HX0lOUFVUEAQSGQoVVEhSRUFEX1NUQVRFX1dBVENISU5HEAUSGAoUVEhSRUFEX1NUQVRFX0VYUElSRUQQBhIaChZUSFJFQURfU1RBVEVfREVTVFJPWUVEEAdCgAEKE2NvbS5hcnNveC50aHJlYWQudjFCC1RocmVhZFByb3RvUAGiAgNBVFiqAg9BcnNveC5UaHJlYWQuVjHKAg9BcnNveFxUaHJlYWRcVjHiAhtBcnNveFxUaHJlYWRcVjFcR1BCTWV0YWRhdGHqAhFBcnNveDo6VGhyZWFkOjpWMWIGcHJvdG8z", [file_arsox_common_v1_common, file_arsox_interaction_v1_plan, file_arsox_interaction_v1_question, file_arsox_settings_v1_settings]);
+  fileDesc("ChxhcnNveC90aHJlYWQvdjEvdGhyZWFkLnByb3RvEg9hcnNveC50aHJlYWQudjEikgUKBlRocmVhZBIRCgl0aHJlYWRfaWQYASABKAkSKwoFc3RhdGUYAiABKA4yHC5hcnNveC50aHJlYWQudjEuVGhyZWFkU3RhdGUSMwoIc2V0dGluZ3MYAyABKAsyIS5hcnNveC5zZXR0aW5ncy52MS5UaHJlYWRTZXR0aW5ncxIuCgpjcmVhdGVkX2F0GAQgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBI0ChBsYXN0X2FjdGl2aXR5X2F0GAUgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBIzCgpleHBpcmVzX2F0GAYgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcEgAiAEBEhMKC3F1ZXVlX2RlcHRoGAcgASgNEhwKD2N1cnJlbnRfdHVybl9pZBgIIAEoCUgBiAEBEkEKEXBlbmRpbmdfcXVlc3Rpb25zGAkgASgLMiEuYXJzb3guaW50ZXJhY3Rpb24udjEuUXVlc3Rpb25TZXRIAogBARI1CgxwZW5kaW5nX3BsYW4YCiABKAsyGi5hcnNveC5pbnRlcmFjdGlvbi52MS5QbGFuSAOIAQESFwoPbGF0ZXN0X3NlcXVlbmNlGAsgASgEEjcKCG1ldGFkYXRhGAwgAygLMiUuYXJzb3gudGhyZWFkLnYxLlRocmVhZC5NZXRhZGF0YUVudHJ5Gi8KDU1ldGFkYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4AUINCgtfZXhwaXJlc19hdEISChBfY3VycmVudF90dXJuX2lkQhQKEl9wZW5kaW5nX3F1ZXN0aW9uc0IPCg1fcGVuZGluZ19wbGFuIuMDCg1UaHJlYWRTdW1tYXJ5EhEKCXRocmVhZF9pZBgBIAEoCRIrCgVzdGF0ZRgCIAEoDjIcLmFyc294LnRocmVhZC52MS5UaHJlYWRTdGF0ZRITCgtxdWV1ZV9kZXB0aBgDIAEoDRIcCg9jdXJyZW50X3R1cm5faWQYBCABKAlIAIgBARIuCgpjcmVhdGVkX2F0GAUgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBI0ChBsYXN0X2FjdGl2aXR5X2F0GAYgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBIzCgpleHBpcmVzX2F0GAcgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcEgBiAEBEhcKD3dvcmtzcGFjZV9ieXRlcxgIIAEoBBIXCg9sYXRlc3Rfc2VxdWVuY2UYCSABKAQSPgoIbWV0YWRhdGEYCiADKAsyLC5hcnNveC50aHJlYWQudjEuVGhyZWFkU3VtbWFyeS5NZXRhZGF0YUVudHJ5Gi8KDU1ldGFkYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4AUISChBfY3VycmVudF90dXJuX2lkQg0KC19leHBpcmVzX2F0IvMBChNDcmVhdGVUaHJlYWRSZXF1ZXN0EjMKCHNldHRpbmdzGAEgASgLMiEuYXJzb3guc2V0dGluZ3MudjEuVGhyZWFkU2V0dGluZ3MSHAoPaWRlbXBvdGVuY3lfa2V5GAIgASgJSACIAQESRAoIbWV0YWRhdGEYAyADKAsyMi5hcnNveC50aHJlYWQudjEuQ3JlYXRlVGhyZWFkUmVxdWVzdC5NZXRhZGF0YUVudHJ5Gi8KDU1ldGFkYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4AUISChBfaWRlbXBvdGVuY3lfa2V5IlUKFENyZWF0ZVRocmVhZFJlc3BvbnNlEicKBnRocmVhZBgBIAEoCzIXLmFyc294LnRocmVhZC52MS5UaHJlYWQSFAoMZGVkdXBsaWNhdGVkGAIgASgIIiUKEEdldFRocmVhZFJlcXVlc3QSEQoJdGhyZWFkX2lkGAEgASgJIjwKEUdldFRocmVhZFJlc3BvbnNlEicKBnRocmVhZBgBIAEoCzIXLmFyc294LnRocmVhZC52MS5UaHJlYWQi5AEKEkxpc3RUaHJlYWRzUmVxdWVzdBIsCgZzdGF0ZXMYASADKA4yHC5hcnNveC50aHJlYWQudjEuVGhyZWFkU3RhdGUSQwoIbWV0YWRhdGEYAiADKAsyMS5hcnNveC50aHJlYWQudjEuTGlzdFRocmVhZHNSZXF1ZXN0Lk1ldGFkYXRhRW50cnkSKgoEcGFnZRgDIAEoCzIcLmFyc294LmNvbW1vbi52MS5QYWdlUmVxdWVzdBovCg1NZXRhZGF0YUVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAEicwoTTGlzdFRocmVhZHNSZXNwb25zZRIvCgd0aHJlYWRzGAEgAygLMh4uYXJzb3gudGhyZWFkLnYxLlRocmVhZFN1bW1hcnkSKwoEcGFnZRgCIAEoCzIdLmFyc294LmNvbW1vbi52MS5QYWdlUmVzcG9uc2UiKQoURGVzdHJveVRocmVhZFJlcXVlc3QSEQoJdGhyZWFkX2lkGAEgASgJIkAKFURlc3Ryb3lUaHJlYWRSZXNwb25zZRInCgZ0aHJlYWQYASABKAsyFy5hcnNveC50aHJlYWQudjEuVGhyZWFkKu0BCgtUaHJlYWRTdGF0ZRIcChhUSFJFQURfU1RBVEVfVU5TUEVDSUZJRUQQABIdChlUSFJFQURfU1RBVEVfUFJPVklTSU9OSU5HEAESFQoRVEhSRUFEX1NUQVRFX0lETEUQAhIYChRUSFJFQURfU1RBVEVfUlVOTklORxADEh8KG1RIUkVBRF9TVEFURV9BV0FJVElOR19JTlBVVBAEEhkKFVRIUkVBRF9TVEFURV9XQVRDSElORxAFEhgKFFRIUkVBRF9TVEFURV9FWFBJUkVEEAYSGgoWVEhSRUFEX1NUQVRFX0RFU1RST1lFRBAHQoABChNjb20uYXJzb3gudGhyZWFkLnYxQgtUaHJlYWRQcm90b1ABogIDQVRYqgIPQXJzb3guVGhyZWFkLlYxygIPQXJzb3hcVGhyZWFkXFYx4gIbQXJzb3hcVGhyZWFkXFYxXEdQQk1ldGFkYXRh6gIRQXJzb3g6OlRocmVhZDo6VjFiBnByb3RvMw", [file_arsox_common_v1_common, file_arsox_interaction_v1_plan, file_arsox_interaction_v1_question, file_arsox_settings_v1_settings]);
 
 /**
  * One thread's current state.
@@ -119,6 +119,31 @@ export type Thread = Message<"arsox.thread.v1.Thread"> & {
    * @generated from field: uint64 latest_sequence = 11;
    */
   latestSequence: bigint;
+
+  /**
+   * Your own correlation data, stored verbatim and handed back untouched.
+   *
+   * A thread lives on the satellite and any replica can attach to it, so the
+   * replica that picks up an overnight run often knows only the thread ID. This
+   * is where the rest goes: which user triggered the job, which row in your
+   * database it belongs to, which tenant is paying for it.
+   *
+   * **The satellite never reads it.** It does not reach an agent, does not
+   * appear in AGENTS.md, and changes no behavior. That is deliberate: it is a
+   * correlation channel for your application, not a second way to instruct the
+   * agents. Use `prompt` for anything the agents should know.
+   *
+   * Flat strings only, no nesting. Bounded at 50 entries, 64 characters per key,
+   * and 512 per value; breaching any of those is REQUEST_FIELD_INVALID rather
+   * than a silent truncation.
+   *
+   * **Not redacted, ever.** It is stored and returned in plaintext, so a
+   * credential put here is a credential in your logs. Secrets belong in `env`
+   * with `isSecret`, which is the field that knows how to hide them.
+   *
+   * @generated from field: map<string, string> metadata = 12;
+   */
+  metadata: { [key: string]: string };
 };
 
 /**
@@ -127,6 +152,84 @@ export type Thread = Message<"arsox.thread.v1.Thread"> & {
  */
 export const ThreadSchema: GenMessage<Thread> = /*@__PURE__*/
   messageDesc(file_arsox_thread_v1_thread, 0);
+
+/**
+ * A thread reduced to what an operator needs to see at a glance.
+ *
+ * Deliberately not a `Thread`. A status call on a busy satellite would otherwise
+ * return every thread's full settings, which is both a large response and, before
+ * `common.v1.Secret` existed, a way to hand back every credential the satellite
+ * held. Listing threads is an operational question, not a configuration one.
+ *
+ * @generated from message arsox.thread.v1.ThreadSummary
+ */
+export type ThreadSummary = Message<"arsox.thread.v1.ThreadSummary"> & {
+  /**
+   * @generated from field: string thread_id = 1;
+   */
+  threadId: string;
+
+  /**
+   * @generated from field: arsox.thread.v1.ThreadState state = 2;
+   */
+  state: ThreadState;
+
+  /**
+   * @generated from field: uint32 queue_depth = 3;
+   */
+  queueDepth: number;
+
+  /**
+   * Absent when nothing is running.
+   *
+   * @generated from field: optional string current_turn_id = 4;
+   */
+  currentTurnId?: string;
+
+  /**
+   * @generated from field: arsox.common.v1.Timestamp created_at = 5;
+   */
+  createdAt?: Timestamp;
+
+  /**
+   * @generated from field: arsox.common.v1.Timestamp last_activity_at = 6;
+   */
+  lastActivityAt?: Timestamp;
+
+  /**
+   * Absent while a turn or a watch window is holding the idle clock.
+   *
+   * @generated from field: optional arsox.common.v1.Timestamp expires_at = 7;
+   */
+  expiresAt?: Timestamp;
+
+  /**
+   * Current size of this thread's workspace subtree, against its quota.
+   *
+   * @generated from field: uint64 workspace_bytes = 8;
+   */
+  workspaceBytes: bigint;
+
+  /**
+   * @generated from field: uint64 latest_sequence = 9;
+   */
+  latestSequence: bigint;
+
+  /**
+   * Carried here too, because correlating a listing back to your own records is
+   * the main reason to read one.
+   *
+   * @generated from field: map<string, string> metadata = 10;
+   */
+  metadata: { [key: string]: string };
+};
+
+/**
+ * Describes the message arsox.thread.v1.ThreadSummary.
+ * Use `create(ThreadSummarySchema)` to create a new message.
+ */
+export const ThreadSummarySchema: GenMessage<ThreadSummary> = /*@__PURE__*/
+  messageDesc(file_arsox_thread_v1_thread, 1);
 
 /**
  * POST /v1/threads
@@ -151,6 +254,13 @@ export type CreateThreadRequest = Message<"arsox.thread.v1.CreateThreadRequest">
    * @generated from field: optional string idempotency_key = 2;
    */
   idempotencyKey?: string;
+
+  /**
+   * Your own correlation data. See Thread.metadata for the rules.
+   *
+   * @generated from field: map<string, string> metadata = 3;
+   */
+  metadata: { [key: string]: string };
 };
 
 /**
@@ -158,7 +268,7 @@ export type CreateThreadRequest = Message<"arsox.thread.v1.CreateThreadRequest">
  * Use `create(CreateThreadRequestSchema)` to create a new message.
  */
 export const CreateThreadRequestSchema: GenMessage<CreateThreadRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_thread_v1_thread, 1);
+  messageDesc(file_arsox_thread_v1_thread, 2);
 
 /**
  * @generated from message arsox.thread.v1.CreateThreadResponse
@@ -183,7 +293,7 @@ export type CreateThreadResponse = Message<"arsox.thread.v1.CreateThreadResponse
  * Use `create(CreateThreadResponseSchema)` to create a new message.
  */
 export const CreateThreadResponseSchema: GenMessage<CreateThreadResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_thread_v1_thread, 2);
+  messageDesc(file_arsox_thread_v1_thread, 3);
 
 /**
  * @generated from message arsox.thread.v1.GetThreadRequest
@@ -200,7 +310,7 @@ export type GetThreadRequest = Message<"arsox.thread.v1.GetThreadRequest"> & {
  * Use `create(GetThreadRequestSchema)` to create a new message.
  */
 export const GetThreadRequestSchema: GenMessage<GetThreadRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_thread_v1_thread, 3);
+  messageDesc(file_arsox_thread_v1_thread, 4);
 
 /**
  * @generated from message arsox.thread.v1.GetThreadResponse
@@ -217,7 +327,7 @@ export type GetThreadResponse = Message<"arsox.thread.v1.GetThreadResponse"> & {
  * Use `create(GetThreadResponseSchema)` to create a new message.
  */
 export const GetThreadResponseSchema: GenMessage<GetThreadResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_thread_v1_thread, 4);
+  messageDesc(file_arsox_thread_v1_thread, 5);
 
 /**
  * @generated from message arsox.thread.v1.ListThreadsRequest
@@ -229,7 +339,18 @@ export type ListThreadsRequest = Message<"arsox.thread.v1.ListThreadsRequest"> &
   states: ThreadState[];
 
   /**
-   * @generated from field: arsox.common.v1.PageRequest page = 2;
+   * Every entry must match for a thread to be returned. Empty does not filter.
+   *
+   * This is what makes metadata worth storing rather than merely echoing:
+   * "every thread still running for tenant 42" is answerable without your
+   * application keeping its own index of thread IDs.
+   *
+   * @generated from field: map<string, string> metadata = 2;
+   */
+  metadata: { [key: string]: string };
+
+  /**
+   * @generated from field: arsox.common.v1.PageRequest page = 3;
    */
   page?: PageRequest;
 };
@@ -239,7 +360,7 @@ export type ListThreadsRequest = Message<"arsox.thread.v1.ListThreadsRequest"> &
  * Use `create(ListThreadsRequestSchema)` to create a new message.
  */
 export const ListThreadsRequestSchema: GenMessage<ListThreadsRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_thread_v1_thread, 5);
+  messageDesc(file_arsox_thread_v1_thread, 6);
 
 /**
  * @generated from message arsox.thread.v1.ListThreadsResponse
@@ -248,9 +369,9 @@ export type ListThreadsResponse = Message<"arsox.thread.v1.ListThreadsResponse">
   /**
    * Naturally chronological, because thread IDs are UUIDv7.
    *
-   * @generated from field: repeated arsox.thread.v1.Thread threads = 1;
+   * @generated from field: repeated arsox.thread.v1.ThreadSummary threads = 1;
    */
-  threads: Thread[];
+  threads: ThreadSummary[];
 
   /**
    * @generated from field: arsox.common.v1.PageResponse page = 2;
@@ -263,7 +384,7 @@ export type ListThreadsResponse = Message<"arsox.thread.v1.ListThreadsResponse">
  * Use `create(ListThreadsResponseSchema)` to create a new message.
  */
 export const ListThreadsResponseSchema: GenMessage<ListThreadsResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_thread_v1_thread, 6);
+  messageDesc(file_arsox_thread_v1_thread, 7);
 
 /**
  * DELETE /v1/threads/{thread_id}
@@ -287,7 +408,7 @@ export type DestroyThreadRequest = Message<"arsox.thread.v1.DestroyThreadRequest
  * Use `create(DestroyThreadRequestSchema)` to create a new message.
  */
 export const DestroyThreadRequestSchema: GenMessage<DestroyThreadRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_thread_v1_thread, 7);
+  messageDesc(file_arsox_thread_v1_thread, 8);
 
 /**
  * @generated from message arsox.thread.v1.DestroyThreadResponse
@@ -304,7 +425,7 @@ export type DestroyThreadResponse = Message<"arsox.thread.v1.DestroyThreadRespon
  * Use `create(DestroyThreadResponseSchema)` to create a new message.
  */
 export const DestroyThreadResponseSchema: GenMessage<DestroyThreadResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_thread_v1_thread, 8);
+  messageDesc(file_arsox_thread_v1_thread, 9);
 
 /**
  * Where a thread is in its life.

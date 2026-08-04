@@ -668,6 +668,25 @@ async def main() -> None:
         created = await satellite.threads.create(
             settings,
             idempotency_key="rate-limiting-2026-08-04",
+            # Your own correlation data, stored verbatim and handed back
+            # untouched.
+            #
+            # A thread lives on the satellite and any replica can attach to it,
+            # so the replica that picks up an overnight run often knows only the
+            # thread ID. This is where the rest goes. It is also filterable, so
+            # "every thread still running for this tenant" is answerable without
+            # keeping your own index.
+            #
+            # The satellite never reads it and it never reaches an agent: a
+            # correlation channel, not a second way to give instructions. Use
+            # `prompt` for those. It is never redacted either, so credentials
+            # belong in `env` with is_secret, which is the field that knows how
+            # to hide them.
+            metadata={
+                "tenant_id": "acme-corp",
+                "triggered_by_user_id": "usr_8812",
+                "job_row_id": "41ff9c2e-6b1a-4d55-9d0e-2f7c1b3a4e88",
+            },
         )
         thread = created.thread
         logger.info(
@@ -700,6 +719,9 @@ async def main() -> None:
         started = await thread.start_turn(
             prompt="Add per-endpoint rate limiting to the public API and open a PR against develop.",
             idempotency_key="rate-limiting-2026-08-04-turn-1",
+            # Turn metadata is separate from the thread's. The thread carries
+            # the tenant; each turn carries the request that queued it.
+            metadata={"request_id": "req_2f8c11", "queued_by": "nightly-scheduler"},
         )
         turn = started.turn
 
@@ -707,6 +729,11 @@ async def main() -> None:
         # firing the whole time.
         result = await turn.result()
         logger.info(result.summary)
+
+        # The turn's metadata rides along on the result rather than needing a
+        # lookup, because "which customer's job just finished" is the question
+        # you are asking at exactly this moment.
+        logger.info(f"finished job for {result.metadata['request_id']}")
 
         # Cost comes back as an estimate, not a number. `amount` is None when no
         # endpoint published pricing for its model, and is_partial means some
@@ -718,6 +745,14 @@ async def main() -> None:
             dollars = result.cost.amount.units + result.cost.amount.nanos / 1_000_000_000
             qualifier = " (partial, some requests unpriced)" if result.cost.is_partial else ""
             logger.info(f"{result.tokens.total_tokens} tokens, ${dollars:.2f}{qualifier}")
+
+        # Split by the model that actually answered. Without this, failover is
+        # invisible in the accounting: a turn where the first endpoint burned
+        # two million tokens failing looks identical to a clean run on the
+        # second. An incident tells you failover happened, this tells you what
+        # it cost.
+        for model in result.by_model:
+            logger.info(f"  {model.model}: {model.tokens.total_tokens} tokens")
 
         # Every stage of the stack reports what it did, including the ones that
         # did nothing. This is what stops "the budget ran out before self-review"

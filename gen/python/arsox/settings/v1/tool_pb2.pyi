@@ -1,3 +1,4 @@
+from arsox.common.v1 import common_pb2 as _common_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
@@ -25,15 +26,15 @@ class McpServer(_message.Message):
         KEY_FIELD_NUMBER: _ClassVar[int]
         VALUE_FIELD_NUMBER: _ClassVar[int]
         key: str
-        value: str
-        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+        value: _common_pb2.Secret
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[_common_pb2.Secret, _Mapping]] = ...) -> None: ...
     NAME_FIELD_NUMBER: _ClassVar[int]
     URL_FIELD_NUMBER: _ClassVar[int]
     HEADERS_FIELD_NUMBER: _ClassVar[int]
     name: str
     url: str
-    headers: _containers.ScalarMap[str, str]
-    def __init__(self, name: _Optional[str] = ..., url: _Optional[str] = ..., headers: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    headers: _containers.MessageMap[str, _common_pb2.Secret]
+    def __init__(self, name: _Optional[str] = ..., url: _Optional[str] = ..., headers: _Optional[_Mapping[str, _common_pb2.Secret]] = ...) -> None: ...
 
 class VirtualBrowser(_message.Message):
     __slots__ = ()

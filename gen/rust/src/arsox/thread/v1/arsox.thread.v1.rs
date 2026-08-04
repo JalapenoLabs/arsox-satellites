@@ -45,6 +45,61 @@ pub struct Thread {
     /// reconnect with `from_sequence` and lose nothing.
     #[prost(uint64, tag="11")]
     pub latest_sequence: u64,
+    /// Your own correlation data, stored verbatim and handed back untouched.
+    ///
+    /// A thread lives on the satellite and any replica can attach to it, so the
+    /// replica that picks up an overnight run often knows only the thread ID. This
+    /// is where the rest goes: which user triggered the job, which row in your
+    /// database it belongs to, which tenant is paying for it.
+    ///
+    /// **The satellite never reads it.** It does not reach an agent, does not
+    /// appear in AGENTS.md, and changes no behavior. That is deliberate: it is a
+    /// correlation channel for your application, not a second way to instruct the
+    /// agents. Use `prompt` for anything the agents should know.
+    ///
+    /// Flat strings only, no nesting. Bounded at 50 entries, 64 characters per key,
+    /// and 512 per value; breaching any of those is REQUEST_FIELD_INVALID rather
+    /// than a silent truncation.
+    ///
+    /// **Not redacted, ever.** It is stored and returned in plaintext, so a
+    /// credential put here is a credential in your logs. Secrets belong in `env`
+    /// with `isSecret`, which is the field that knows how to hide them.
+    #[prost(map="string, string", tag="12")]
+    pub metadata: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+}
+/// A thread reduced to what an operator needs to see at a glance.
+///
+/// Deliberately not a `Thread`. A status call on a busy satellite would otherwise
+/// return every thread's full settings, which is both a large response and, before
+/// `common.v1.Secret` existed, a way to hand back every credential the satellite
+/// held. Listing threads is an operational question, not a configuration one.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ThreadSummary {
+    #[prost(string, tag="1")]
+    pub thread_id: ::prost::alloc::string::String,
+    #[prost(enumeration="ThreadState", tag="2")]
+    pub state: i32,
+    #[prost(uint32, tag="3")]
+    pub queue_depth: u32,
+    /// Absent when nothing is running.
+    #[prost(string, optional, tag="4")]
+    pub current_turn_id: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="5")]
+    pub created_at: ::core::option::Option<super::super::common::v1::Timestamp>,
+    #[prost(message, optional, tag="6")]
+    pub last_activity_at: ::core::option::Option<super::super::common::v1::Timestamp>,
+    /// Absent while a turn or a watch window is holding the idle clock.
+    #[prost(message, optional, tag="7")]
+    pub expires_at: ::core::option::Option<super::super::common::v1::Timestamp>,
+    /// Current size of this thread's workspace subtree, against its quota.
+    #[prost(uint64, tag="8")]
+    pub workspace_bytes: u64,
+    #[prost(uint64, tag="9")]
+    pub latest_sequence: u64,
+    /// Carried here too, because correlating a listing back to your own records is
+    /// the main reason to read one.
+    #[prost(map="string, string", tag="10")]
+    pub metadata: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
 /// POST /v1/threads
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -60,6 +115,9 @@ pub struct CreateThreadRequest {
     /// is to retry and leak a whole workspace.
     #[prost(string, optional, tag="2")]
     pub idempotency_key: ::core::option::Option<::prost::alloc::string::String>,
+    /// Your own correlation data. See Thread.metadata for the rules.
+    #[prost(map="string, string", tag="3")]
+    pub metadata: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CreateThreadResponse {
@@ -80,18 +138,25 @@ pub struct GetThreadResponse {
     #[prost(message, optional, tag="1")]
     pub thread: ::core::option::Option<Thread>,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListThreadsRequest {
     #[prost(enumeration="ThreadState", repeated, tag="1")]
     pub states: ::prost::alloc::vec::Vec<i32>,
-    #[prost(message, optional, tag="2")]
+    /// Every entry must match for a thread to be returned. Empty does not filter.
+    ///
+    /// This is what makes metadata worth storing rather than merely echoing:
+    /// "every thread still running for tenant 42" is answerable without your
+    /// application keeping its own index of thread IDs.
+    #[prost(map="string, string", tag="2")]
+    pub metadata: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    #[prost(message, optional, tag="3")]
     pub page: ::core::option::Option<super::super::common::v1::PageRequest>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListThreadsResponse {
     /// Naturally chronological, because thread IDs are UUIDv7.
     #[prost(message, repeated, tag="1")]
-    pub threads: ::prost::alloc::vec::Vec<Thread>,
+    pub threads: ::prost::alloc::vec::Vec<ThreadSummary>,
     #[prost(message, optional, tag="2")]
     pub page: ::core::option::Option<super::super::common::v1::PageResponse>,
 }

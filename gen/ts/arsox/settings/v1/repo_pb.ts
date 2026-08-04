@@ -6,6 +6,8 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { Secret } from "../../common/v1/common_pb.js";
+import { file_arsox_common_v1_common } from "../../common/v1/common_pb.js";
 import type { Service } from "./service_pb.js";
 import { file_arsox_settings_v1_service } from "./service_pb.js";
 import type { Message } from "@bufbuild/protobuf";
@@ -14,7 +16,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/settings/v1/repo.proto.
  */
 export const file_arsox_settings_v1_repo: GenFile = /*@__PURE__*/
-  fileDesc("ChxhcnNveC9zZXR0aW5ncy92MS9yZXBvLnByb3RvEhFhcnNveC5zZXR0aW5ncy52MSJqCgdHaXRBdXRoEjAKB3NzaF9rZXkYASABKAsyHS5hcnNveC5zZXR0aW5ncy52MS5Tc2hLZXlQYWlySAASHwoVcGVyc29uYWxfYWNjZXNzX3Rva2VuGAIgASgJSABCDAoKY3JlZGVudGlhbCJJCgpTc2hLZXlQYWlyEhMKC3ByaXZhdGVfa2V5GAEgASgJEhcKCnB1YmxpY19rZXkYAiABKAlIAIgBAUINCgtfcHVibGljX2tleSJrCgpBZ2VudHNSZXBvEgsKA3VybBgBIAEoCRIQCgNyZWYYAiABKAlIAIgBARItCgRhdXRoGAMgASgLMhouYXJzb3guc2V0dGluZ3MudjEuR2l0QXV0aEgBiAEBQgYKBF9yZWZCBwoFX2F1dGgi2gEKBFJlcG8SDAoEbmFtZRgBIAEoCRILCgN1cmwYAiABKAkSGAoLYmFzZV9icmFuY2gYAyABKAlIAIgBARItCgRhdXRoGAQgASgLMhouYXJzb3guc2V0dGluZ3MudjEuR2l0QXV0aEgBiAEBEhYKDnNldHVwX2NvbW1hbmRzGAUgASgJEg8KB2NoZWNrZXIYBiABKAkSLAoIc2VydmljZXMYByADKAsyGi5hcnNveC5zZXR0aW5ncy52MS5TZXJ2aWNlQg4KDF9iYXNlX2JyYW5jaEIHCgVfYXV0aEKIAQoVY29tLmFyc294LnNldHRpbmdzLnYxQglSZXBvUHJvdG9QAaICA0FTWKoCEUFyc294LlNldHRpbmdzLlYxygIRQXJzb3hcU2V0dGluZ3NcVjHiAh1BcnNveFxTZXR0aW5nc1xWMVxHUEJNZXRhZGF0YeoCE0Fyc294OjpTZXR0aW5nczo6VjFiBnByb3RvMw", [file_arsox_settings_v1_service]);
+  fileDesc("ChxhcnNveC9zZXR0aW5ncy92MS9yZXBvLnByb3RvEhFhcnNveC5zZXR0aW5ncy52MSKDAQoHR2l0QXV0aBIwCgdzc2hfa2V5GAEgASgLMh0uYXJzb3guc2V0dGluZ3MudjEuU3NoS2V5UGFpckgAEjgKFXBlcnNvbmFsX2FjY2Vzc190b2tlbhgCIAEoCzIXLmFyc294LmNvbW1vbi52MS5TZWNyZXRIAEIMCgpjcmVkZW50aWFsImIKClNzaEtleVBhaXISLAoLcHJpdmF0ZV9rZXkYASABKAsyFy5hcnNveC5jb21tb24udjEuU2VjcmV0EhcKCnB1YmxpY19rZXkYAiABKAlIAIgBAUINCgtfcHVibGljX2tleSJrCgpBZ2VudHNSZXBvEgsKA3VybBgBIAEoCRIQCgNyZWYYAiABKAlIAIgBARItCgRhdXRoGAMgASgLMhouYXJzb3guc2V0dGluZ3MudjEuR2l0QXV0aEgBiAEBQgYKBF9yZWZCBwoFX2F1dGgi2gEKBFJlcG8SDAoEbmFtZRgBIAEoCRILCgN1cmwYAiABKAkSGAoLYmFzZV9icmFuY2gYAyABKAlIAIgBARItCgRhdXRoGAQgASgLMhouYXJzb3guc2V0dGluZ3MudjEuR2l0QXV0aEgBiAEBEhYKDnNldHVwX2NvbW1hbmRzGAUgASgJEg8KB2NoZWNrZXIYBiABKAkSLAoIc2VydmljZXMYByADKAsyGi5hcnNveC5zZXR0aW5ncy52MS5TZXJ2aWNlQg4KDF9iYXNlX2JyYW5jaEIHCgVfYXV0aEKIAQoVY29tLmFyc294LnNldHRpbmdzLnYxQglSZXBvUHJvdG9QAaICA0FTWKoCEUFyc294LlNldHRpbmdzLlYxygIRQXJzb3hcU2V0dGluZ3NcVjHiAh1BcnNveFxTZXR0aW5nc1xWMVxHUEJNZXRhZGF0YeoCE0Fyc294OjpTZXR0aW5nczo6VjFiBnByb3RvMw", [file_arsox_common_v1_common, file_arsox_settings_v1_service]);
 
 /**
  * Credentials for reaching a git remote.
@@ -33,9 +35,9 @@ export type GitAuth = Message<"arsox.settings.v1.GitAuth"> & {
     case: "sshKey";
   } | {
     /**
-     * @generated from field: string personal_access_token = 2;
+     * @generated from field: arsox.common.v1.Secret personal_access_token = 2;
      */
-    value: string;
+    value: Secret;
     case: "personalAccessToken";
   } | { case: undefined; value?: undefined };
 };
@@ -52,13 +54,13 @@ export const GitAuthSchema: GenMessage<GitAuth> = /*@__PURE__*/
  */
 export type SshKeyPair = Message<"arsox.settings.v1.SshKeyPair"> & {
   /**
-   * @generated from field: string private_key = 1;
+   * @generated from field: arsox.common.v1.Secret private_key = 1;
    */
-  privateKey: string;
+  privateKey?: Secret;
 
   /**
    * Absent is fine for most remotes, which derive the public key from the
-   * private one.
+   * private one. Not a secret, and returned in full.
    *
    * @generated from field: optional string public_key = 2;
    */

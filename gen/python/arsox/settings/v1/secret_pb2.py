@@ -22,9 +22,10 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
+from arsox.common.v1 import common_pb2 as arsox_dot_common_dot_v1_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1e\x61rsox/settings/v1/secret.proto\x12\x11\x61rsox.settings.v1\"`\n\x06\x45nvVar\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value\x12 \n\tis_secret\x18\x03 \x01(\x08H\x00R\x08isSecret\x88\x01\x01\x42\x0c\n\n_is_secret\"\x0e\n\x0cMirrorLength\"g\n\tStarCount\x12\x16\n\x05\x66ixed\x18\x01 \x01(\rH\x00R\x05\x66ixed\x12\x39\n\x06mirror\x18\x02 \x01(\x0b\x32\x1f.arsox.settings.v1.MirrorLengthH\x00R\x06mirrorB\x07\n\x05style\"\xda\x01\n\tRedaction\x12\x34\n\x04mode\x18\x01 \x01(\x0e\x32 .arsox.settings.v1.RedactionModeR\x04mode\x12;\n\nstar_count\x18\x02 \x01(\x0b\x32\x1c.arsox.settings.v1.StarCountR\tstarCount\x12=\n\x18\x61llow_redaction_override\x18\x03 \x01(\x08H\x00R\x16\x61llowRedactionOverride\x88\x01\x01\x42\x1b\n\x19_allow_redaction_override*\xb1\x01\n\rRedactionMode\x12\x1e\n\x1aREDACTION_MODE_UNSPECIFIED\x10\x00\x12\x1c\n\x18REDACTION_MODE_ANONYMOUS\x10\x01\x12\x1f\n\x1bREDACTION_MODE_PREFIX_SHOWN\x10\x02\x12 \n\x1cREDACTION_MODE_POSTFIX_SHOWN\x10\x03\x12\x1f\n\x1bREDACTION_MODE_HYBRID_SHOWN\x10\x04\x42\x8a\x01\n\x15\x63om.arsox.settings.v1B\x0bSecretProtoP\x01\xa2\x02\x03\x41SX\xaa\x02\x11\x41rsox.Settings.V1\xca\x02\x11\x41rsox\\Settings\\V1\xe2\x02\x1d\x41rsox\\Settings\\V1\\GPBMetadata\xea\x02\x13\x41rsox::Settings::V1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1e\x61rsox/settings/v1/secret.proto\x12\x11\x61rsox.settings.v1\x1a\x1c\x61rsox/common/v1/common.proto\"y\n\x06\x45nvVar\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12-\n\x05value\x18\x02 \x01(\x0b\x32\x17.arsox.common.v1.SecretR\x05value\x12 \n\tis_secret\x18\x03 \x01(\x08H\x00R\x08isSecret\x88\x01\x01\x42\x0c\n\n_is_secret\"\x0e\n\x0cMirrorLength\"g\n\tStarCount\x12\x16\n\x05\x66ixed\x18\x01 \x01(\rH\x00R\x05\x66ixed\x12\x39\n\x06mirror\x18\x02 \x01(\x0b\x32\x1f.arsox.settings.v1.MirrorLengthH\x00R\x06mirrorB\x07\n\x05style\"\xda\x01\n\tRedaction\x12\x34\n\x04mode\x18\x01 \x01(\x0e\x32 .arsox.settings.v1.RedactionModeR\x04mode\x12;\n\nstar_count\x18\x02 \x01(\x0b\x32\x1c.arsox.settings.v1.StarCountR\tstarCount\x12=\n\x18\x61llow_redaction_override\x18\x03 \x01(\x08H\x00R\x16\x61llowRedactionOverride\x88\x01\x01\x42\x1b\n\x19_allow_redaction_override*\xb1\x01\n\rRedactionMode\x12\x1e\n\x1aREDACTION_MODE_UNSPECIFIED\x10\x00\x12\x1c\n\x18REDACTION_MODE_ANONYMOUS\x10\x01\x12\x1f\n\x1bREDACTION_MODE_PREFIX_SHOWN\x10\x02\x12 \n\x1cREDACTION_MODE_POSTFIX_SHOWN\x10\x03\x12\x1f\n\x1bREDACTION_MODE_HYBRID_SHOWN\x10\x04\x42\x8a\x01\n\x15\x63om.arsox.settings.v1B\x0bSecretProtoP\x01\xa2\x02\x03\x41SX\xaa\x02\x11\x41rsox.Settings.V1\xca\x02\x11\x41rsox\\Settings\\V1\xe2\x02\x1d\x41rsox\\Settings\\V1\\GPBMetadata\xea\x02\x13\x41rsox::Settings::V1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -32,14 +33,14 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'arsox.settings.v1.secret_pb
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\025com.arsox.settings.v1B\013SecretProtoP\001\242\002\003ASX\252\002\021Arsox.Settings.V1\312\002\021Arsox\\Settings\\V1\342\002\035Arsox\\Settings\\V1\\GPBMetadata\352\002\023Arsox::Settings::V1'
-  _globals['_REDACTIONMODE']._serialized_start=494
-  _globals['_REDACTIONMODE']._serialized_end=671
-  _globals['_ENVVAR']._serialized_start=53
-  _globals['_ENVVAR']._serialized_end=149
-  _globals['_MIRRORLENGTH']._serialized_start=151
-  _globals['_MIRRORLENGTH']._serialized_end=165
-  _globals['_STARCOUNT']._serialized_start=167
-  _globals['_STARCOUNT']._serialized_end=270
-  _globals['_REDACTION']._serialized_start=273
-  _globals['_REDACTION']._serialized_end=491
+  _globals['_REDACTIONMODE']._serialized_start=549
+  _globals['_REDACTIONMODE']._serialized_end=726
+  _globals['_ENVVAR']._serialized_start=83
+  _globals['_ENVVAR']._serialized_end=204
+  _globals['_MIRRORLENGTH']._serialized_start=206
+  _globals['_MIRRORLENGTH']._serialized_end=220
+  _globals['_STARCOUNT']._serialized_start=222
+  _globals['_STARCOUNT']._serialized_end=325
+  _globals['_REDACTION']._serialized_start=328
+  _globals['_REDACTION']._serialized_end=546
 # @@protoc_insertion_point(module_scope)

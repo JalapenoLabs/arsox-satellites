@@ -1,3 +1,4 @@
+from arsox.common.v1 import common_pb2 as _common_pb2
 from arsox.settings.v1 import service_pb2 as _service_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
@@ -12,16 +13,16 @@ class GitAuth(_message.Message):
     SSH_KEY_FIELD_NUMBER: _ClassVar[int]
     PERSONAL_ACCESS_TOKEN_FIELD_NUMBER: _ClassVar[int]
     ssh_key: SshKeyPair
-    personal_access_token: str
-    def __init__(self, ssh_key: _Optional[_Union[SshKeyPair, _Mapping]] = ..., personal_access_token: _Optional[str] = ...) -> None: ...
+    personal_access_token: _common_pb2.Secret
+    def __init__(self, ssh_key: _Optional[_Union[SshKeyPair, _Mapping]] = ..., personal_access_token: _Optional[_Union[_common_pb2.Secret, _Mapping]] = ...) -> None: ...
 
 class SshKeyPair(_message.Message):
     __slots__ = ()
     PRIVATE_KEY_FIELD_NUMBER: _ClassVar[int]
     PUBLIC_KEY_FIELD_NUMBER: _ClassVar[int]
-    private_key: str
+    private_key: _common_pb2.Secret
     public_key: str
-    def __init__(self, private_key: _Optional[str] = ..., public_key: _Optional[str] = ...) -> None: ...
+    def __init__(self, private_key: _Optional[_Union[_common_pb2.Secret, _Mapping]] = ..., public_key: _Optional[str] = ...) -> None: ...
 
 class AgentsRepo(_message.Message):
     __slots__ = ()

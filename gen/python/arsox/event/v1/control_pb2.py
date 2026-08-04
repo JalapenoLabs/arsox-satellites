@@ -24,10 +24,11 @@ _sym_db = _symbol_database.Default()
 
 from arsox.common.v1 import common_pb2 as arsox_dot_common_dot_v1_dot_common__pb2
 from arsox.event.v1 import lifecycle_pb2 as arsox_dot_event_dot_v1_dot_lifecycle__pb2
+from arsox.incident.v1 import incident_pb2 as arsox_dot_incident_dot_v1_dot_incident__pb2
 from arsox.thread.v1 import thread_pb2 as arsox_dot_thread_dot_v1_dot_thread__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1c\x61rsox/event/v1/control.proto\x12\x0e\x61rsox.event.v1\x1a\x1c\x61rsox/common/v1/common.proto\x1a\x1e\x61rsox/event/v1/lifecycle.proto\x1a\x1c\x61rsox/thread/v1/thread.proto\"\xe0\x04\n\x0c\x43ontrolEvent\x12\x1a\n\x08sequence\x18\x01 \x01(\x04R\x08sequence\x12;\n\x0boccurred_at\x18\x02 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\noccurredAt\x12\x12\n\x04type\x18\x03 \x01(\tR\x04type\x12\x46\n\x0ethread_created\x18\x14 \x01(\x0b\x32\x1d.arsox.event.v1.ThreadCreatedH\x00R\rthreadCreated\x12V\n\x14thread_state_changed\x18\x15 \x01(\x0b\x32\".arsox.event.v1.ThreadStateChangedH\x00R\x12threadStateChanged\x12L\n\x10thread_destroyed\x18\x16 \x01(\x0b\x32\x1f.arsox.event.v1.ThreadDestroyedH\x00R\x0fthreadDestroyed\x12S\n\x13queue_depth_changed\x18\x17 \x01(\x0b\x32!.arsox.event.v1.QueueDepthChangedH\x00R\x11queueDepthChanged\x12\x46\n\x0ehealth_changed\x18\x18 \x01(\x0b\x32\x1d.arsox.event.v1.HealthChangedH\x00R\rhealthChanged\x12M\n\x0e\x62udget_warning\x18\x19 \x01(\x0b\x32$.arsox.event.v1.ControlBudgetWarningH\x00R\rbudgetWarningB\t\n\x07payload\",\n\rThreadCreated\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\"\xa3\x01\n\x12ThreadStateChanged\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x38\n\x08previous\x18\x02 \x01(\x0e\x32\x1c.arsox.thread.v1.ThreadStateR\x08previous\x12\x36\n\x07\x63urrent\x18\x03 \x01(\x0e\x32\x1c.arsox.thread.v1.ThreadStateR\x07\x63urrent\"g\n\x0fThreadDestroyed\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x37\n\x06reason\x18\x02 \x01(\x0e\x32\x1f.arsox.event.v1.ThreadEndReasonR\x06reason\"Q\n\x11QueueDepthChanged\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x1f\n\x0bqueue_depth\x18\x02 \x01(\rR\nqueueDepth\"l\n\rHealthChanged\x12\x14\n\x05ready\x18\x01 \x01(\x08R\x05ready\x12\x1d\n\ncheck_name\x18\x02 \x01(\tR\tcheckName\x12\x1b\n\x06\x64\x65tail\x18\x03 \x01(\tH\x00R\x06\x64\x65tail\x88\x01\x01\x42\t\n\x07_detail\"\x89\x01\n\x14\x43ontrolBudgetWarning\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x31\n\x07\x63\x65iling\x18\x02 \x01(\x0e\x32\x17.arsox.event.v1.CeilingR\x07\x63\x65iling\x12!\n\x0cpercent_used\x18\x03 \x01(\rR\x0bpercentUsed*\x95\x01\n\x0fThreadEndReason\x12!\n\x1dTHREAD_END_REASON_UNSPECIFIED\x10\x00\x12\x1f\n\x1bTHREAD_END_REASON_DESTROYED\x10\x01\x12\x1d\n\x19THREAD_END_REASON_EXPIRED\x10\x02\x12\x1f\n\x1bTHREAD_END_REASON_COMPLETED\x10\x03\x42|\n\x12\x63om.arsox.event.v1B\x0c\x43ontrolProtoP\x01\xa2\x02\x03\x41\x45X\xaa\x02\x0e\x41rsox.Event.V1\xca\x02\x0e\x41rsox\\Event\\V1\xe2\x02\x1a\x41rsox\\Event\\V1\\GPBMetadata\xea\x02\x10\x41rsox::Event::V1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1c\x61rsox/event/v1/control.proto\x12\x0e\x61rsox.event.v1\x1a\x1c\x61rsox/common/v1/common.proto\x1a\x1e\x61rsox/event/v1/lifecycle.proto\x1a arsox/incident/v1/incident.proto\x1a\x1c\x61rsox/thread/v1/thread.proto\"\x9b\x05\n\x0c\x43ontrolEvent\x12\x1a\n\x08sequence\x18\x01 \x01(\x04R\x08sequence\x12;\n\x0boccurred_at\x18\x02 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\noccurredAt\x12\x12\n\x04type\x18\x03 \x01(\tR\x04type\x12\x46\n\x0ethread_created\x18\x14 \x01(\x0b\x32\x1d.arsox.event.v1.ThreadCreatedH\x00R\rthreadCreated\x12V\n\x14thread_state_changed\x18\x15 \x01(\x0b\x32\".arsox.event.v1.ThreadStateChangedH\x00R\x12threadStateChanged\x12L\n\x10thread_destroyed\x18\x16 \x01(\x0b\x32\x1f.arsox.event.v1.ThreadDestroyedH\x00R\x0fthreadDestroyed\x12S\n\x13queue_depth_changed\x18\x17 \x01(\x0b\x32!.arsox.event.v1.QueueDepthChangedH\x00R\x11queueDepthChanged\x12\x46\n\x0ehealth_changed\x18\x18 \x01(\x0b\x32\x1d.arsox.event.v1.HealthChangedH\x00R\rhealthChanged\x12M\n\x0e\x62udget_warning\x18\x19 \x01(\x0b\x32$.arsox.event.v1.ControlBudgetWarningH\x00R\rbudgetWarning\x12\x39\n\x08incident\x18\x1a \x01(\x0b\x32\x1b.arsox.incident.v1.IncidentH\x00R\x08incidentB\t\n\x07payload\",\n\rThreadCreated\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\"\xa3\x01\n\x12ThreadStateChanged\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x38\n\x08previous\x18\x02 \x01(\x0e\x32\x1c.arsox.thread.v1.ThreadStateR\x08previous\x12\x36\n\x07\x63urrent\x18\x03 \x01(\x0e\x32\x1c.arsox.thread.v1.ThreadStateR\x07\x63urrent\"g\n\x0fThreadDestroyed\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x37\n\x06reason\x18\x02 \x01(\x0e\x32\x1f.arsox.event.v1.ThreadEndReasonR\x06reason\"Q\n\x11QueueDepthChanged\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x1f\n\x0bqueue_depth\x18\x02 \x01(\rR\nqueueDepth\"l\n\rHealthChanged\x12\x14\n\x05ready\x18\x01 \x01(\x08R\x05ready\x12\x1d\n\ncheck_name\x18\x02 \x01(\tR\tcheckName\x12\x1b\n\x06\x64\x65tail\x18\x03 \x01(\tH\x00R\x06\x64\x65tail\x88\x01\x01\x42\t\n\x07_detail\"\x89\x01\n\x14\x43ontrolBudgetWarning\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x31\n\x07\x63\x65iling\x18\x02 \x01(\x0e\x32\x17.arsox.event.v1.CeilingR\x07\x63\x65iling\x12!\n\x0cpercent_used\x18\x03 \x01(\rR\x0bpercentUsed*\x95\x01\n\x0fThreadEndReason\x12!\n\x1dTHREAD_END_REASON_UNSPECIFIED\x10\x00\x12\x1f\n\x1bTHREAD_END_REASON_DESTROYED\x10\x01\x12\x1d\n\x19THREAD_END_REASON_EXPIRED\x10\x02\x12\x1f\n\x1bTHREAD_END_REASON_COMPLETED\x10\x03\x42|\n\x12\x63om.arsox.event.v1B\x0c\x43ontrolProtoP\x01\xa2\x02\x03\x41\x45X\xaa\x02\x0e\x41rsox.Event.V1\xca\x02\x0e\x41rsox\\Event\\V1\xe2\x02\x1a\x41rsox\\Event\\V1\\GPBMetadata\xea\x02\x10\x41rsox::Event::V1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -35,20 +36,20 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'arsox.event.v1.control_pb2'
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\022com.arsox.event.v1B\014ControlProtoP\001\242\002\003AEX\252\002\016Arsox.Event.V1\312\002\016Arsox\\Event\\V1\342\002\032Arsox\\Event\\V1\\GPBMetadata\352\002\020Arsox::Event::V1'
-  _globals['_THREADENDREASON']._serialized_start=1402
-  _globals['_THREADENDREASON']._serialized_end=1551
-  _globals['_CONTROLEVENT']._serialized_start=141
-  _globals['_CONTROLEVENT']._serialized_end=749
-  _globals['_THREADCREATED']._serialized_start=751
-  _globals['_THREADCREATED']._serialized_end=795
-  _globals['_THREADSTATECHANGED']._serialized_start=798
-  _globals['_THREADSTATECHANGED']._serialized_end=961
-  _globals['_THREADDESTROYED']._serialized_start=963
-  _globals['_THREADDESTROYED']._serialized_end=1066
-  _globals['_QUEUEDEPTHCHANGED']._serialized_start=1068
-  _globals['_QUEUEDEPTHCHANGED']._serialized_end=1149
-  _globals['_HEALTHCHANGED']._serialized_start=1151
-  _globals['_HEALTHCHANGED']._serialized_end=1259
-  _globals['_CONTROLBUDGETWARNING']._serialized_start=1262
-  _globals['_CONTROLBUDGETWARNING']._serialized_end=1399
+  _globals['_THREADENDREASON']._serialized_start=1495
+  _globals['_THREADENDREASON']._serialized_end=1644
+  _globals['_CONTROLEVENT']._serialized_start=175
+  _globals['_CONTROLEVENT']._serialized_end=842
+  _globals['_THREADCREATED']._serialized_start=844
+  _globals['_THREADCREATED']._serialized_end=888
+  _globals['_THREADSTATECHANGED']._serialized_start=891
+  _globals['_THREADSTATECHANGED']._serialized_end=1054
+  _globals['_THREADDESTROYED']._serialized_start=1056
+  _globals['_THREADDESTROYED']._serialized_end=1159
+  _globals['_QUEUEDEPTHCHANGED']._serialized_start=1161
+  _globals['_QUEUEDEPTHCHANGED']._serialized_end=1242
+  _globals['_HEALTHCHANGED']._serialized_start=1244
+  _globals['_HEALTHCHANGED']._serialized_end=1352
+  _globals['_CONTROLBUDGETWARNING']._serialized_start=1355
+  _globals['_CONTROLBUDGETWARNING']._serialized_end=1492
 # @@protoc_insertion_point(module_scope)

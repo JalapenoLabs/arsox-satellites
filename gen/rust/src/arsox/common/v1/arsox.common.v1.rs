@@ -52,6 +52,35 @@ pub struct Money {
     #[prost(int32, tag="3")]
     pub nanos: i32,
 }
+/// A credential: plaintext on the way in, redacted on the way out.
+///
+/// Every field in the contract that carries a credential uses this type rather
+/// than a bare string, so "never echo this back" is a property of the type
+/// instead of a rule somebody has to remember at each of a dozen call sites.
+///
+/// This matters more than it looks. `Thread` carries the settings it was created
+/// with, so a status call on a satellite running forty threads would otherwise
+/// hand back every API key, SSH private key, and PAT it has ever been given.
+/// Those credentials came from the caller, so returning them is not an escalation
+/// of privilege, but it does put them in proxy logs, browser consoles during JSON
+/// debugging, and any audit sink hanging off the SDK.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct Secret {
+    /// The plaintext. Set this on requests.
+    ///
+    /// The satellite never populates it on a response, at any endpoint, at any
+    /// authentication level. A response carrying it is a bug in the satellite.
+    #[prost(string, optional, tag="1")]
+    pub value: ::core::option::Option<::prost::alloc::string::String>,
+    /// What is safe to show: the redacted rendering for a credential, or the
+    /// plaintext for a value explicitly marked public.
+    ///
+    /// Populated on responses so two credentials can be told apart in a status page
+    /// without either being readable, which is what `PostfixShown` exists for.
+    /// Ignored on requests.
+    #[prost(string, optional, tag="2")]
+    pub display: ::core::option::Option<::prost::alloc::string::String>,
+}
 /// The explicit absence of a ceiling.
 ///
 /// This message carries no data and exists only so that "unlimited" has to be

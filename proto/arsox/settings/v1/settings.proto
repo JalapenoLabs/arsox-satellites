@@ -95,4 +95,13 @@ message ThreadSettings {
   StreamSettings stream = 24;
   ResourceLimits resource_limits = 25;
   Timeouts timeouts = 26;
+
+  // Restart a turn the satellite interrupted, without waiting to be asked.
+  //
+  // Default off. When the satellite restarts mid-turn the thread and its
+  // workspace survive and the turn is marked INTERRUPTED, and by default it
+  // stays that way until you decide. Automatic resumption is the right call for
+  // an unattended fleet and the wrong one when a human would want to look at
+  // what happened first, which is why it is a choice rather than a behavior.
+  bool resume_interrupted_turns = 27;
 }

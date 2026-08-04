@@ -4,17 +4,22 @@ syntax = "proto3";
 
 package arsox.settings.v1;
 
+import "arsox/common/v1/common.proto";
+
 // A server whose tools the agents may use.
 //
 // Arsox provides its own MCP tools alongside these, including team spawn and
-// despawn, request_integration, and override_redaction.
+// despawn, request_integration, and override_redaction. Those are MCP schemas
+// offered to the agents rather than part of this contract, so they are not
+// defined anywhere in these files.
 message McpServer {
   string name = 1;
   string url = 2;
 
-  // Sent on every request to the server. Values here are treated as secrets and
-  // redacted like any other.
-  map<string, string> headers = 3;
+  // Sent on every request to the server. Header values are credentials far more
+  // often than not, so they carry the same type as every other credential and
+  // come back redacted.
+  map<string, arsox.common.v1.Secret> headers = 3;
 }
 
 enum Viewport {

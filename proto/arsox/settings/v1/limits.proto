@@ -39,6 +39,11 @@ message ResourceLimits {
   // Total artifact bytes per thread, to keep a runaway log out of your artifact
   // download. Absent uses 100 MiB.
   optional uint64 artifact_cap_bytes = 2;
+
+  // How many turns may wait behind the running one. Submissions past this are
+  // rejected with TURN_QUEUE_FULL rather than accumulating without bound.
+  // Absent uses the satellite's default.
+  optional uint32 max_queued_turns = 3;
 }
 
 // Bounds on the operations that can otherwise hang forever.

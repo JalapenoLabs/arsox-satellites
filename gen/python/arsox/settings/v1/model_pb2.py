@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from arsox.common.v1 import common_pb2 as arsox_dot_common_dot_v1_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1d\x61rsox/settings/v1/model.proto\x12\x11\x61rsox.settings.v1\x1a\x1c\x61rsox/common/v1/common.proto\"\xcc\x01\n\rModelEndpoint\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n\x05model\x18\x02 \x01(\tR\x05model\x12\x1e\n\x08\x62\x61se_url\x18\x03 \x01(\tH\x00R\x07\x62\x61seUrl\x88\x01\x01\x12.\n\x04\x61uth\x18\x04 \x01(\x0b\x32\x1a.arsox.settings.v1.LlmAuthR\x04\x61uth\x12\x34\n\x05retry\x18\x05 \x01(\x0b\x32\x1e.arsox.settings.v1.RetryPolicyR\x05retryB\x0b\n\t_base_url\"\x9f\x01\n\x07LlmAuth\x12\x19\n\x07\x61pi_key\x18\x01 \x01(\tH\x00R\x06\x61piKey\x12/\n\x12subscription_token\x18\x02 \x01(\tH\x00R\x11subscriptionToken\x12:\n\x05oauth\x18\x03 \x01(\x0b\x32\".arsox.settings.v1.OAuthCredentialH\x00R\x05oauthB\x0c\n\ncredential\"\xbf\x01\n\x0fOAuthCredential\x12!\n\x0c\x61\x63\x63\x65ss_token\x18\x01 \x01(\tR\x0b\x61\x63\x63\x65ssToken\x12(\n\rrefresh_token\x18\x02 \x01(\tH\x00R\x0crefreshToken\x88\x01\x01\x12>\n\nexpires_at\x18\x03 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampH\x01R\texpiresAt\x88\x01\x01\x42\x10\n\x0e_refresh_tokenB\r\n\x0b_expires_at\"\x9c\x02\n\x0bRetryPolicy\x12&\n\x0cmax_attempts\x18\x01 \x01(\rH\x00R\x0bmaxAttempts\x88\x01\x01\x12G\n\x0finitial_backoff\x18\x02 \x01(\x0b\x32\x19.arsox.common.v1.DurationH\x01R\x0einitialBackoff\x88\x01\x01\x12?\n\x0bmax_backoff\x18\x03 \x01(\x0b\x32\x19.arsox.common.v1.DurationH\x02R\nmaxBackoff\x88\x01\x01\x12&\n\x0fretry_on_status\x18\x04 \x03(\rR\rretryOnStatusB\x0f\n\r_max_attemptsB\x12\n\x10_initial_backoffB\x0e\n\x0c_max_backoffB\x89\x01\n\x15\x63om.arsox.settings.v1B\nModelProtoP\x01\xa2\x02\x03\x41SX\xaa\x02\x11\x41rsox.Settings.V1\xca\x02\x11\x41rsox\\Settings\\V1\xe2\x02\x1d\x41rsox\\Settings\\V1\\GPBMetadata\xea\x02\x13\x41rsox::Settings::V1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1d\x61rsox/settings/v1/model.proto\x12\x11\x61rsox.settings.v1\x1a\x1c\x61rsox/common/v1/common.proto\"\xcc\x01\n\rModelEndpoint\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n\x05model\x18\x02 \x01(\tR\x05model\x12\x1e\n\x08\x62\x61se_url\x18\x03 \x01(\tH\x00R\x07\x62\x61seUrl\x88\x01\x01\x12.\n\x04\x61uth\x18\x04 \x01(\x0b\x32\x1a.arsox.settings.v1.LlmAuthR\x04\x61uth\x12\x34\n\x05retry\x18\x05 \x01(\x0b\x32\x1e.arsox.settings.v1.RetryPolicyR\x05retryB\x0b\n\t_base_url\"\xd1\x01\n\x07LlmAuth\x12\x32\n\x07\x61pi_key\x18\x01 \x01(\x0b\x32\x17.arsox.common.v1.SecretH\x00R\x06\x61piKey\x12H\n\x12subscription_token\x18\x02 \x01(\x0b\x32\x17.arsox.common.v1.SecretH\x00R\x11subscriptionToken\x12:\n\x05oauth\x18\x03 \x01(\x0b\x32\".arsox.settings.v1.OAuthCredentialH\x00R\x05oauthB\x0c\n\ncredential\"\xf1\x01\n\x0fOAuthCredential\x12:\n\x0c\x61\x63\x63\x65ss_token\x18\x01 \x01(\x0b\x32\x17.arsox.common.v1.SecretR\x0b\x61\x63\x63\x65ssToken\x12\x41\n\rrefresh_token\x18\x02 \x01(\x0b\x32\x17.arsox.common.v1.SecretH\x00R\x0crefreshToken\x88\x01\x01\x12>\n\nexpires_at\x18\x03 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampH\x01R\texpiresAt\x88\x01\x01\x42\x10\n\x0e_refresh_tokenB\r\n\x0b_expires_at\"\x9c\x02\n\x0bRetryPolicy\x12&\n\x0cmax_attempts\x18\x01 \x01(\rH\x00R\x0bmaxAttempts\x88\x01\x01\x12G\n\x0finitial_backoff\x18\x02 \x01(\x0b\x32\x19.arsox.common.v1.DurationH\x01R\x0einitialBackoff\x88\x01\x01\x12?\n\x0bmax_backoff\x18\x03 \x01(\x0b\x32\x19.arsox.common.v1.DurationH\x02R\nmaxBackoff\x88\x01\x01\x12&\n\x0fretry_on_status\x18\x04 \x03(\rR\rretryOnStatusB\x0f\n\r_max_attemptsB\x12\n\x10_initial_backoffB\x0e\n\x0c_max_backoffB\x89\x01\n\x15\x63om.arsox.settings.v1B\nModelProtoP\x01\xa2\x02\x03\x41SX\xaa\x02\x11\x41rsox.Settings.V1\xca\x02\x11\x41rsox\\Settings\\V1\xe2\x02\x1d\x41rsox\\Settings\\V1\\GPBMetadata\xea\x02\x13\x41rsox::Settings::V1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -36,9 +36,9 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_MODELENDPOINT']._serialized_start=83
   _globals['_MODELENDPOINT']._serialized_end=287
   _globals['_LLMAUTH']._serialized_start=290
-  _globals['_LLMAUTH']._serialized_end=449
-  _globals['_OAUTHCREDENTIAL']._serialized_start=452
-  _globals['_OAUTHCREDENTIAL']._serialized_end=643
-  _globals['_RETRYPOLICY']._serialized_start=646
-  _globals['_RETRYPOLICY']._serialized_end=930
+  _globals['_LLMAUTH']._serialized_end=499
+  _globals['_OAUTHCREDENTIAL']._serialized_start=502
+  _globals['_OAUTHCREDENTIAL']._serialized_end=743
+  _globals['_RETRYPOLICY']._serialized_start=746
+  _globals['_RETRYPOLICY']._serialized_end=1030
 # @@protoc_insertion_point(module_scope)

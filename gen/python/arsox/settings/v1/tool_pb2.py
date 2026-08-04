@@ -22,9 +22,10 @@ _runtime_version.ValidateProtobufRuntimeVersion(
 _sym_db = _symbol_database.Default()
 
 
+from arsox.common.v1 import common_pb2 as arsox_dot_common_dot_v1_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1c\x61rsox/settings/v1/tool.proto\x12\x11\x61rsox.settings.v1\"\xb2\x01\n\tMcpServer\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n\x03url\x18\x02 \x01(\tR\x03url\x12\x43\n\x07headers\x18\x03 \x03(\x0b\x32).arsox.settings.v1.McpServer.HeadersEntryR\x07headers\x1a:\n\x0cHeadersEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\x8a\x01\n\x0eVirtualBrowser\x12\x18\n\x07\x65nabled\x18\x01 \x01(\x08R\x07\x65nabled\x12#\n\rallowed_roles\x18\x02 \x03(\tR\x0c\x61llowedRoles\x12\x39\n\tviewports\x18\x03 \x03(\x0e\x32\x1b.arsox.settings.v1.ViewportR\tviewports*d\n\x08Viewport\x12\x18\n\x14VIEWPORT_UNSPECIFIED\x10\x00\x12\x13\n\x0fVIEWPORT_MOBILE\x10\x01\x12\x13\n\x0fVIEWPORT_TABLET\x10\x02\x12\x14\n\x10VIEWPORT_DESKTOP\x10\x03\x42\x88\x01\n\x15\x63om.arsox.settings.v1B\tToolProtoP\x01\xa2\x02\x03\x41SX\xaa\x02\x11\x41rsox.Settings.V1\xca\x02\x11\x41rsox\\Settings\\V1\xe2\x02\x1d\x41rsox\\Settings\\V1\\GPBMetadata\xea\x02\x13\x41rsox::Settings::V1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1c\x61rsox/settings/v1/tool.proto\x12\x11\x61rsox.settings.v1\x1a\x1c\x61rsox/common/v1/common.proto\"\xcb\x01\n\tMcpServer\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x10\n\x03url\x18\x02 \x01(\tR\x03url\x12\x43\n\x07headers\x18\x03 \x03(\x0b\x32).arsox.settings.v1.McpServer.HeadersEntryR\x07headers\x1aS\n\x0cHeadersEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12-\n\x05value\x18\x02 \x01(\x0b\x32\x17.arsox.common.v1.SecretR\x05value:\x02\x38\x01\"\x8a\x01\n\x0eVirtualBrowser\x12\x18\n\x07\x65nabled\x18\x01 \x01(\x08R\x07\x65nabled\x12#\n\rallowed_roles\x18\x02 \x03(\tR\x0c\x61llowedRoles\x12\x39\n\tviewports\x18\x03 \x03(\x0e\x32\x1b.arsox.settings.v1.ViewportR\tviewports*d\n\x08Viewport\x12\x18\n\x14VIEWPORT_UNSPECIFIED\x10\x00\x12\x13\n\x0fVIEWPORT_MOBILE\x10\x01\x12\x13\n\x0fVIEWPORT_TABLET\x10\x02\x12\x14\n\x10VIEWPORT_DESKTOP\x10\x03\x42\x88\x01\n\x15\x63om.arsox.settings.v1B\tToolProtoP\x01\xa2\x02\x03\x41SX\xaa\x02\x11\x41rsox.Settings.V1\xca\x02\x11\x41rsox\\Settings\\V1\xe2\x02\x1d\x41rsox\\Settings\\V1\\GPBMetadata\xea\x02\x13\x41rsox::Settings::V1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -34,12 +35,12 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._serialized_options = b'\n\025com.arsox.settings.v1B\tToolProtoP\001\242\002\003ASX\252\002\021Arsox.Settings.V1\312\002\021Arsox\\Settings\\V1\342\002\035Arsox\\Settings\\V1\\GPBMetadata\352\002\023Arsox::Settings::V1'
   _globals['_MCPSERVER_HEADERSENTRY']._loaded_options = None
   _globals['_MCPSERVER_HEADERSENTRY']._serialized_options = b'8\001'
-  _globals['_VIEWPORT']._serialized_start=373
-  _globals['_VIEWPORT']._serialized_end=473
-  _globals['_MCPSERVER']._serialized_start=52
-  _globals['_MCPSERVER']._serialized_end=230
-  _globals['_MCPSERVER_HEADERSENTRY']._serialized_start=172
-  _globals['_MCPSERVER_HEADERSENTRY']._serialized_end=230
-  _globals['_VIRTUALBROWSER']._serialized_start=233
-  _globals['_VIRTUALBROWSER']._serialized_end=371
+  _globals['_VIEWPORT']._serialized_start=428
+  _globals['_VIEWPORT']._serialized_end=528
+  _globals['_MCPSERVER']._serialized_start=82
+  _globals['_MCPSERVER']._serialized_end=285
+  _globals['_MCPSERVER_HEADERSENTRY']._serialized_start=202
+  _globals['_MCPSERVER_HEADERSENTRY']._serialized_end=285
+  _globals['_VIRTUALBROWSER']._serialized_start=288
+  _globals['_VIRTUALBROWSER']._serialized_end=426
 # @@protoc_insertion_point(module_scope)

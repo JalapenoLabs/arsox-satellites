@@ -19,7 +19,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/common/v1/common.proto.
  */
 export const file_arsox_common_v1_common: GenFile = /*@__PURE__*/
-  fileDesc("ChxhcnNveC9jb21tb24vdjEvY29tbW9uLnByb3RvEg9hcnNveC5jb21tb24udjEiQwoJVGltZXN0YW1wEhUKDWVwb2NoX3NlY29uZHMYASABKAMSDQoFbmFub3MYAiABKA0SEAoIdGltZXpvbmUYAyABKAkiKgoIRHVyYXRpb24SDwoHc2Vjb25kcxgBIAEoAxINCgVuYW5vcxgCIAEoBSI8CgVNb25leRIVCg1jdXJyZW5jeV9jb2RlGAEgASgJEg0KBXVuaXRzGAIgASgDEg0KBW5hbm9zGAMgASgFIgsKCVVubGltaXRlZCJcCgxUb2tlbkNlaWxpbmcSEAoGdG9rZW5zGAEgASgESAASLwoJdW5saW1pdGVkGAIgASgLMhouYXJzb3guY29tbW9uLnYxLlVubGltaXRlZEgAQgkKB2NlaWxpbmcicQoLQ29zdENlaWxpbmcSJgoEY29zdBgBIAEoCzIWLmFyc294LmNvbW1vbi52MS5Nb25leUgAEi8KCXVubGltaXRlZBgCIAEoCzIaLmFyc294LmNvbW1vbi52MS5VbmxpbWl0ZWRIAEIJCgdjZWlsaW5nInwKD0R1cmF0aW9uQ2VpbGluZxItCghkdXJhdGlvbhgBIAEoCzIZLmFyc294LmNvbW1vbi52MS5EdXJhdGlvbkgAEi8KCXVubGltaXRlZBgCIAEoCzIaLmFyc294LmNvbW1vbi52MS5VbmxpbWl0ZWRIAEIJCgdjZWlsaW5nIiwKC1BhZ2VSZXF1ZXN0Eg0KBWxpbWl0GAEgASgNEg4KBmN1cnNvchgCIAEoCSJBCgxQYWdlUmVzcG9uc2USEwoLbmV4dF9jdXJzb3IYASABKAkSEgoFdG90YWwYAiABKARIAIgBAUIICgZfdG90YWxCgAEKE2NvbS5hcnNveC5jb21tb24udjFCC0NvbW1vblByb3RvUAGiAgNBQ1iqAg9BcnNveC5Db21tb24uVjHKAg9BcnNveFxDb21tb25cVjHiAhtBcnNveFxDb21tb25cVjFcR1BCTWV0YWRhdGHqAhFBcnNveDo6Q29tbW9uOjpWMWIGcHJvdG8z");
+  fileDesc("ChxhcnNveC9jb21tb24vdjEvY29tbW9uLnByb3RvEg9hcnNveC5jb21tb24udjEiQwoJVGltZXN0YW1wEhUKDWVwb2NoX3NlY29uZHMYASABKAMSDQoFbmFub3MYAiABKA0SEAoIdGltZXpvbmUYAyABKAkiKgoIRHVyYXRpb24SDwoHc2Vjb25kcxgBIAEoAxINCgVuYW5vcxgCIAEoBSI8CgVNb25leRIVCg1jdXJyZW5jeV9jb2RlGAEgASgJEg0KBXVuaXRzGAIgASgDEg0KBW5hbm9zGAMgASgFIkgKBlNlY3JldBISCgV2YWx1ZRgBIAEoCUgAiAEBEhQKB2Rpc3BsYXkYAiABKAlIAYgBAUIICgZfdmFsdWVCCgoIX2Rpc3BsYXkiCwoJVW5saW1pdGVkIlwKDFRva2VuQ2VpbGluZxIQCgZ0b2tlbnMYASABKARIABIvCgl1bmxpbWl0ZWQYAiABKAsyGi5hcnNveC5jb21tb24udjEuVW5saW1pdGVkSABCCQoHY2VpbGluZyJxCgtDb3N0Q2VpbGluZxImCgRjb3N0GAEgASgLMhYuYXJzb3guY29tbW9uLnYxLk1vbmV5SAASLwoJdW5saW1pdGVkGAIgASgLMhouYXJzb3guY29tbW9uLnYxLlVubGltaXRlZEgAQgkKB2NlaWxpbmcifAoPRHVyYXRpb25DZWlsaW5nEi0KCGR1cmF0aW9uGAEgASgLMhkuYXJzb3guY29tbW9uLnYxLkR1cmF0aW9uSAASLwoJdW5saW1pdGVkGAIgASgLMhouYXJzb3guY29tbW9uLnYxLlVubGltaXRlZEgAQgkKB2NlaWxpbmciLAoLUGFnZVJlcXVlc3QSDQoFbGltaXQYASABKA0SDgoGY3Vyc29yGAIgASgJIkEKDFBhZ2VSZXNwb25zZRITCgtuZXh0X2N1cnNvchgBIAEoCRISCgV0b3RhbBgCIAEoBEgAiAEBQggKBl90b3RhbEKAAQoTY29tLmFyc294LmNvbW1vbi52MUILQ29tbW9uUHJvdG9QAaICA0FDWKoCD0Fyc294LkNvbW1vbi5WMcoCD0Fyc294XENvbW1vblxWMeICG0Fyc294XENvbW1vblxWMVxHUEJNZXRhZGF0YeoCEUFyc294OjpDb21tb246OlYxYgZwcm90bzM");
 
 /**
  * An absolute instant on the UTC timeline, plus the zone it should be shown in.
@@ -136,6 +136,53 @@ export const MoneySchema: GenMessage<Money> = /*@__PURE__*/
   messageDesc(file_arsox_common_v1_common, 2);
 
 /**
+ * A credential: plaintext on the way in, redacted on the way out.
+ *
+ * Every field in the contract that carries a credential uses this type rather
+ * than a bare string, so "never echo this back" is a property of the type
+ * instead of a rule somebody has to remember at each of a dozen call sites.
+ *
+ * This matters more than it looks. `Thread` carries the settings it was created
+ * with, so a status call on a satellite running forty threads would otherwise
+ * hand back every API key, SSH private key, and PAT it has ever been given.
+ * Those credentials came from the caller, so returning them is not an escalation
+ * of privilege, but it does put them in proxy logs, browser consoles during JSON
+ * debugging, and any audit sink hanging off the SDK.
+ *
+ * @generated from message arsox.common.v1.Secret
+ */
+export type Secret = Message<"arsox.common.v1.Secret"> & {
+  /**
+   * The plaintext. Set this on requests.
+   *
+   * The satellite never populates it on a response, at any endpoint, at any
+   * authentication level. A response carrying it is a bug in the satellite.
+   *
+   * @generated from field: optional string value = 1;
+   */
+  value?: string;
+
+  /**
+   * What is safe to show: the redacted rendering for a credential, or the
+   * plaintext for a value explicitly marked public.
+   *
+   * Populated on responses so two credentials can be told apart in a status page
+   * without either being readable, which is what `PostfixShown` exists for.
+   * Ignored on requests.
+   *
+   * @generated from field: optional string display = 2;
+   */
+  display?: string;
+};
+
+/**
+ * Describes the message arsox.common.v1.Secret.
+ * Use `create(SecretSchema)` to create a new message.
+ */
+export const SecretSchema: GenMessage<Secret> = /*@__PURE__*/
+  messageDesc(file_arsox_common_v1_common, 3);
+
+/**
  * The explicit absence of a ceiling.
  *
  * This message carries no data and exists only so that "unlimited" has to be
@@ -153,7 +200,7 @@ export type Unlimited = Message<"arsox.common.v1.Unlimited"> & {
  * Use `create(UnlimitedSchema)` to create a new message.
  */
 export const UnlimitedSchema: GenMessage<Unlimited> = /*@__PURE__*/
-  messageDesc(file_arsox_common_v1_common, 3);
+  messageDesc(file_arsox_common_v1_common, 4);
 
 /**
  * A ceiling on a token count, or the explicit refusal to set one.
@@ -184,7 +231,7 @@ export type TokenCeiling = Message<"arsox.common.v1.TokenCeiling"> & {
  * Use `create(TokenCeilingSchema)` to create a new message.
  */
 export const TokenCeilingSchema: GenMessage<TokenCeiling> = /*@__PURE__*/
-  messageDesc(file_arsox_common_v1_common, 4);
+  messageDesc(file_arsox_common_v1_common, 5);
 
 /**
  * A ceiling on spend, or the explicit refusal to set one.
@@ -215,7 +262,7 @@ export type CostCeiling = Message<"arsox.common.v1.CostCeiling"> & {
  * Use `create(CostCeilingSchema)` to create a new message.
  */
 export const CostCeilingSchema: GenMessage<CostCeiling> = /*@__PURE__*/
-  messageDesc(file_arsox_common_v1_common, 5);
+  messageDesc(file_arsox_common_v1_common, 6);
 
 /**
  * A ceiling on elapsed time, or the explicit refusal to set one.
@@ -246,7 +293,7 @@ export type DurationCeiling = Message<"arsox.common.v1.DurationCeiling"> & {
  * Use `create(DurationCeilingSchema)` to create a new message.
  */
 export const DurationCeilingSchema: GenMessage<DurationCeiling> = /*@__PURE__*/
-  messageDesc(file_arsox_common_v1_common, 6);
+  messageDesc(file_arsox_common_v1_common, 7);
 
 /**
  * A request for one page of a list endpoint.
@@ -274,7 +321,7 @@ export type PageRequest = Message<"arsox.common.v1.PageRequest"> & {
  * Use `create(PageRequestSchema)` to create a new message.
  */
 export const PageRequestSchema: GenMessage<PageRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_common_v1_common, 7);
+  messageDesc(file_arsox_common_v1_common, 8);
 
 /**
  * Pagination state returned alongside a page of results.
@@ -303,5 +350,5 @@ export type PageResponse = Message<"arsox.common.v1.PageResponse"> & {
  * Use `create(PageResponseSchema)` to create a new message.
  */
 export const PageResponseSchema: GenMessage<PageResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_common_v1_common, 8);
+  messageDesc(file_arsox_common_v1_common, 9);
 

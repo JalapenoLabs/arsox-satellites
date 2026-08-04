@@ -1,5 +1,6 @@
 from arsox.common.v1 import common_pb2 as _common_pb2
 from arsox.event.v1 import lifecycle_pb2 as _lifecycle_pb2
+from arsox.incident.v1 import incident_pb2 as _incident_pb2
 from arsox.thread.v1 import thread_pb2 as _thread_pb2
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
@@ -31,6 +32,7 @@ class ControlEvent(_message.Message):
     QUEUE_DEPTH_CHANGED_FIELD_NUMBER: _ClassVar[int]
     HEALTH_CHANGED_FIELD_NUMBER: _ClassVar[int]
     BUDGET_WARNING_FIELD_NUMBER: _ClassVar[int]
+    INCIDENT_FIELD_NUMBER: _ClassVar[int]
     sequence: int
     occurred_at: _common_pb2.Timestamp
     type: str
@@ -40,7 +42,8 @@ class ControlEvent(_message.Message):
     queue_depth_changed: QueueDepthChanged
     health_changed: HealthChanged
     budget_warning: ControlBudgetWarning
-    def __init__(self, sequence: _Optional[int] = ..., occurred_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., type: _Optional[str] = ..., thread_created: _Optional[_Union[ThreadCreated, _Mapping]] = ..., thread_state_changed: _Optional[_Union[ThreadStateChanged, _Mapping]] = ..., thread_destroyed: _Optional[_Union[ThreadDestroyed, _Mapping]] = ..., queue_depth_changed: _Optional[_Union[QueueDepthChanged, _Mapping]] = ..., health_changed: _Optional[_Union[HealthChanged, _Mapping]] = ..., budget_warning: _Optional[_Union[ControlBudgetWarning, _Mapping]] = ...) -> None: ...
+    incident: _incident_pb2.Incident
+    def __init__(self, sequence: _Optional[int] = ..., occurred_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., type: _Optional[str] = ..., thread_created: _Optional[_Union[ThreadCreated, _Mapping]] = ..., thread_state_changed: _Optional[_Union[ThreadStateChanged, _Mapping]] = ..., thread_destroyed: _Optional[_Union[ThreadDestroyed, _Mapping]] = ..., queue_depth_changed: _Optional[_Union[QueueDepthChanged, _Mapping]] = ..., health_changed: _Optional[_Union[HealthChanged, _Mapping]] = ..., budget_warning: _Optional[_Union[ControlBudgetWarning, _Mapping]] = ..., incident: _Optional[_Union[_incident_pb2.Incident, _Mapping]] = ...) -> None: ...
 
 class ThreadCreated(_message.Message):
     __slots__ = ()

@@ -1,4 +1,5 @@
 from arsox.artifact.v1 import artifact_pb2 as _artifact_pb2
+from arsox.common.v1 import common_pb2 as _common_pb2
 from arsox.error.v1 import error_pb2 as _error_pb2
 from arsox.incident.v1 import incident_pb2 as _incident_pb2
 from arsox.interaction.v1 import question_pb2 as _question_pb2
@@ -51,10 +52,12 @@ class StageOutcome(_message.Message):
     STAGE_FIELD_NUMBER: _ClassVar[int]
     DISPOSITION_FIELD_NUMBER: _ClassVar[int]
     REASON_FIELD_NUMBER: _ClassVar[int]
+    ELAPSED_FIELD_NUMBER: _ClassVar[int]
     stage: Stage
     disposition: StageDisposition
     reason: str
-    def __init__(self, stage: _Optional[_Union[Stage, str]] = ..., disposition: _Optional[_Union[StageDisposition, str]] = ..., reason: _Optional[str] = ...) -> None: ...
+    elapsed: _common_pb2.Duration
+    def __init__(self, stage: _Optional[_Union[Stage, str]] = ..., disposition: _Optional[_Union[StageDisposition, str]] = ..., reason: _Optional[str] = ..., elapsed: _Optional[_Union[_common_pb2.Duration, _Mapping]] = ...) -> None: ...
 
 class PullRequestWatchReport(_message.Message):
     __slots__ = ()
@@ -70,12 +73,20 @@ class PullRequestWatchReport(_message.Message):
 
 class TurnResult(_message.Message):
     __slots__ = ()
+    class MetadataEntry(_message.Message):
+        __slots__ = ()
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     TURN_ID_FIELD_NUMBER: _ClassVar[int]
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
     STATUS_FIELD_NUMBER: _ClassVar[int]
     SUMMARY_FIELD_NUMBER: _ClassVar[int]
     TOKENS_FIELD_NUMBER: _ClassVar[int]
     COST_FIELD_NUMBER: _ClassVar[int]
+    BY_MODEL_FIELD_NUMBER: _ClassVar[int]
     ERROR_FIELD_NUMBER: _ClassVar[int]
     INCIDENT_COUNTS_FIELD_NUMBER: _ClassVar[int]
     MEMBERS_FIELD_NUMBER: _ClassVar[int]
@@ -88,12 +99,14 @@ class TurnResult(_message.Message):
     UNANSWERED_QUESTIONS_FIELD_NUMBER: _ClassVar[int]
     WATCH_FIELD_NUMBER: _ClassVar[int]
     AGENTS_REPO_COMMIT_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
     turn_id: str
     thread_id: str
     status: _turn_pb2.TurnStatus
     summary: str
     tokens: _usage_pb2.TokenUsage
     cost: _usage_pb2.CostEstimate
+    by_model: _containers.RepeatedCompositeFieldContainer[_usage_pb2.ModelStatistics]
     error: _error_pb2.Error
     incident_counts: _incident_pb2.IncidentCounts
     members: _containers.RepeatedCompositeFieldContainer[_turn_pb2.TeamMember]
@@ -106,7 +119,8 @@ class TurnResult(_message.Message):
     unanswered_questions: _containers.RepeatedCompositeFieldContainer[_question_pb2.QuestionSet]
     watch: PullRequestWatchReport
     agents_repo_commit: str
-    def __init__(self, turn_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., status: _Optional[_Union[_turn_pb2.TurnStatus, str]] = ..., summary: _Optional[str] = ..., tokens: _Optional[_Union[_usage_pb2.TokenUsage, _Mapping]] = ..., cost: _Optional[_Union[_usage_pb2.CostEstimate, _Mapping]] = ..., error: _Optional[_Union[_error_pb2.Error, _Mapping]] = ..., incident_counts: _Optional[_Union[_incident_pb2.IncidentCounts, _Mapping]] = ..., members: _Optional[_Iterable[_Union[_turn_pb2.TeamMember, _Mapping]]] = ..., changed_files: _Optional[_Iterable[_Union[_turn_pb2.ChangedFile, _Mapping]]] = ..., integrations: _Optional[_Iterable[_Union[_turn_pb2.IntegrationRecord, _Mapping]]] = ..., checker_results: _Optional[_Iterable[_Union[_turn_pb2.CheckerResult, _Mapping]]] = ..., artifacts: _Optional[_Iterable[_Union[_artifact_pb2.Artifact, _Mapping]]] = ..., suggestions: _Optional[_Union[_suggestion_pb2.SuggestionReport, _Mapping]] = ..., stages: _Optional[_Iterable[_Union[StageOutcome, _Mapping]]] = ..., unanswered_questions: _Optional[_Iterable[_Union[_question_pb2.QuestionSet, _Mapping]]] = ..., watch: _Optional[_Union[PullRequestWatchReport, _Mapping]] = ..., agents_repo_commit: _Optional[str] = ...) -> None: ...
+    metadata: _containers.ScalarMap[str, str]
+    def __init__(self, turn_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., status: _Optional[_Union[_turn_pb2.TurnStatus, str]] = ..., summary: _Optional[str] = ..., tokens: _Optional[_Union[_usage_pb2.TokenUsage, _Mapping]] = ..., cost: _Optional[_Union[_usage_pb2.CostEstimate, _Mapping]] = ..., by_model: _Optional[_Iterable[_Union[_usage_pb2.ModelStatistics, _Mapping]]] = ..., error: _Optional[_Union[_error_pb2.Error, _Mapping]] = ..., incident_counts: _Optional[_Union[_incident_pb2.IncidentCounts, _Mapping]] = ..., members: _Optional[_Iterable[_Union[_turn_pb2.TeamMember, _Mapping]]] = ..., changed_files: _Optional[_Iterable[_Union[_turn_pb2.ChangedFile, _Mapping]]] = ..., integrations: _Optional[_Iterable[_Union[_turn_pb2.IntegrationRecord, _Mapping]]] = ..., checker_results: _Optional[_Iterable[_Union[_turn_pb2.CheckerResult, _Mapping]]] = ..., artifacts: _Optional[_Iterable[_Union[_artifact_pb2.Artifact, _Mapping]]] = ..., suggestions: _Optional[_Union[_suggestion_pb2.SuggestionReport, _Mapping]] = ..., stages: _Optional[_Iterable[_Union[StageOutcome, _Mapping]]] = ..., unanswered_questions: _Optional[_Iterable[_Union[_question_pb2.QuestionSet, _Mapping]]] = ..., watch: _Optional[_Union[PullRequestWatchReport, _Mapping]] = ..., agents_repo_commit: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class GetTurnRequest(_message.Message):
     __slots__ = ()

@@ -6,7 +6,7 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
-import type { Duration, Timestamp } from "../../common/v1/common_pb.js";
+import type { Duration, Secret, Timestamp } from "../../common/v1/common_pb.js";
 import { file_arsox_common_v1_common } from "../../common/v1/common_pb.js";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/settings/v1/model.proto.
  */
 export const file_arsox_settings_v1_model: GenFile = /*@__PURE__*/
-  fileDesc("Ch1hcnNveC9zZXR0aW5ncy92MS9tb2RlbC5wcm90bxIRYXJzb3guc2V0dGluZ3MudjEiqQEKDU1vZGVsRW5kcG9pbnQSDAoEbmFtZRgBIAEoCRINCgVtb2RlbBgCIAEoCRIVCghiYXNlX3VybBgDIAEoCUgAiAEBEigKBGF1dGgYBCABKAsyGi5hcnNveC5zZXR0aW5ncy52MS5MbG1BdXRoEi0KBXJldHJ5GAUgASgLMh4uYXJzb3guc2V0dGluZ3MudjEuUmV0cnlQb2xpY3lCCwoJX2Jhc2VfdXJsIn0KB0xsbUF1dGgSEQoHYXBpX2tleRgBIAEoCUgAEhwKEnN1YnNjcmlwdGlvbl90b2tlbhgCIAEoCUgAEjMKBW9hdXRoGAMgASgLMiIuYXJzb3guc2V0dGluZ3MudjEuT0F1dGhDcmVkZW50aWFsSABCDAoKY3JlZGVudGlhbCKZAQoPT0F1dGhDcmVkZW50aWFsEhQKDGFjY2Vzc190b2tlbhgBIAEoCRIaCg1yZWZyZXNoX3Rva2VuGAIgASgJSACIAQESMwoKZXhwaXJlc19hdBgDIAEoCzIaLmFyc294LmNvbW1vbi52MS5UaW1lc3RhbXBIAYgBAUIQCg5fcmVmcmVzaF90b2tlbkINCgtfZXhwaXJlc19hdCLkAQoLUmV0cnlQb2xpY3kSGQoMbWF4X2F0dGVtcHRzGAEgASgNSACIAQESNwoPaW5pdGlhbF9iYWNrb2ZmGAIgASgLMhkuYXJzb3guY29tbW9uLnYxLkR1cmF0aW9uSAGIAQESMwoLbWF4X2JhY2tvZmYYAyABKAsyGS5hcnNveC5jb21tb24udjEuRHVyYXRpb25IAogBARIXCg9yZXRyeV9vbl9zdGF0dXMYBCADKA1CDwoNX21heF9hdHRlbXB0c0ISChBfaW5pdGlhbF9iYWNrb2ZmQg4KDF9tYXhfYmFja29mZkKJAQoVY29tLmFyc294LnNldHRpbmdzLnYxQgpNb2RlbFByb3RvUAGiAgNBU1iqAhFBcnNveC5TZXR0aW5ncy5WMcoCEUFyc294XFNldHRpbmdzXFYx4gIdQXJzb3hcU2V0dGluZ3NcVjFcR1BCTWV0YWRhdGHqAhNBcnNveDo6U2V0dGluZ3M6OlYxYgZwcm90bzM", [file_arsox_common_v1_common]);
+  fileDesc("Ch1hcnNveC9zZXR0aW5ncy92MS9tb2RlbC5wcm90bxIRYXJzb3guc2V0dGluZ3MudjEiqQEKDU1vZGVsRW5kcG9pbnQSDAoEbmFtZRgBIAEoCRINCgVtb2RlbBgCIAEoCRIVCghiYXNlX3VybBgDIAEoCUgAiAEBEigKBGF1dGgYBCABKAsyGi5hcnNveC5zZXR0aW5ncy52MS5MbG1BdXRoEi0KBXJldHJ5GAUgASgLMh4uYXJzb3guc2V0dGluZ3MudjEuUmV0cnlQb2xpY3lCCwoJX2Jhc2VfdXJsIq8BCgdMbG1BdXRoEioKB2FwaV9rZXkYASABKAsyFy5hcnNveC5jb21tb24udjEuU2VjcmV0SAASNQoSc3Vic2NyaXB0aW9uX3Rva2VuGAIgASgLMhcuYXJzb3guY29tbW9uLnYxLlNlY3JldEgAEjMKBW9hdXRoGAMgASgLMiIuYXJzb3guc2V0dGluZ3MudjEuT0F1dGhDcmVkZW50aWFsSABCDAoKY3JlZGVudGlhbCLLAQoPT0F1dGhDcmVkZW50aWFsEi0KDGFjY2Vzc190b2tlbhgBIAEoCzIXLmFyc294LmNvbW1vbi52MS5TZWNyZXQSMwoNcmVmcmVzaF90b2tlbhgCIAEoCzIXLmFyc294LmNvbW1vbi52MS5TZWNyZXRIAIgBARIzCgpleHBpcmVzX2F0GAMgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcEgBiAEBQhAKDl9yZWZyZXNoX3Rva2VuQg0KC19leHBpcmVzX2F0IuQBCgtSZXRyeVBvbGljeRIZCgxtYXhfYXR0ZW1wdHMYASABKA1IAIgBARI3Cg9pbml0aWFsX2JhY2tvZmYYAiABKAsyGS5hcnNveC5jb21tb24udjEuRHVyYXRpb25IAYgBARIzCgttYXhfYmFja29mZhgDIAEoCzIZLmFyc294LmNvbW1vbi52MS5EdXJhdGlvbkgCiAEBEhcKD3JldHJ5X29uX3N0YXR1cxgEIAMoDUIPCg1fbWF4X2F0dGVtcHRzQhIKEF9pbml0aWFsX2JhY2tvZmZCDgoMX21heF9iYWNrb2ZmQokBChVjb20uYXJzb3guc2V0dGluZ3MudjFCCk1vZGVsUHJvdG9QAaICA0FTWKoCEUFyc294LlNldHRpbmdzLlYxygIRQXJzb3hcU2V0dGluZ3NcVjHiAh1BcnNveFxTZXR0aW5nc1xWMVxHUEJNZXRhZGF0YeoCE0Fyc294OjpTZXR0aW5nczo6VjFiBnByb3RvMw", [file_arsox_common_v1_common]);
 
 /**
  * One place the satellite will try to get completions from.
@@ -78,17 +78,17 @@ export type LlmAuth = Message<"arsox.settings.v1.LlmAuth"> & {
    */
   credential: {
     /**
-     * @generated from field: string api_key = 1;
+     * @generated from field: arsox.common.v1.Secret api_key = 1;
      */
-    value: string;
+    value: Secret;
     case: "apiKey";
   } | {
     /**
      * A long-lived token such as the one `claude setup-token` mints.
      *
-     * @generated from field: string subscription_token = 2;
+     * @generated from field: arsox.common.v1.Secret subscription_token = 2;
      */
-    value: string;
+    value: Secret;
     case: "subscriptionToken";
   } | {
     /**
@@ -113,17 +113,17 @@ export const LlmAuthSchema: GenMessage<LlmAuth> = /*@__PURE__*/
  */
 export type OAuthCredential = Message<"arsox.settings.v1.OAuthCredential"> & {
   /**
-   * @generated from field: string access_token = 1;
+   * @generated from field: arsox.common.v1.Secret access_token = 1;
    */
-  accessToken: string;
+  accessToken?: Secret;
 
   /**
    * Absent means the satellite cannot refresh, and the endpoint fails over once
    * the access token expires.
    *
-   * @generated from field: optional string refresh_token = 2;
+   * @generated from field: optional arsox.common.v1.Secret refresh_token = 2;
    */
-  refreshToken?: string;
+  refreshToken?: Secret;
 
   /**
    * @generated from field: optional arsox.common.v1.Timestamp expires_at = 3;

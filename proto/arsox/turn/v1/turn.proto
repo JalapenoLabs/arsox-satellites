@@ -64,6 +64,14 @@ message Turn {
 
   // Absent until the turn reaches a terminal state.
   optional arsox.common.v1.Timestamp finished_at = 8;
+
+  // The turn whose pull request watch started this one. Absent unless
+  // `satellite_initiated` is true.
+  optional string triggered_by_turn_id = 9;
+
+  // Your own correlation data. See ThreadSettings' thread-level `metadata`: the
+  // same rules apply, and the satellite never reads either.
+  map<string, string> metadata = 10;
 }
 
 // One member of the team, for reporting.
@@ -127,6 +135,10 @@ message StartTurnRequest {
   // thread has already seen returns the original turn instead of queueing a
   // second one, which is what makes a network timeout safe to retry.
   optional string idempotency_key = 3;
+
+  // Correlation data for this turn specifically, distinct from the thread's.
+  // A thread might carry the tenant, and each turn the request that queued it.
+  map<string, string> metadata = 4;
 }
 
 message StartTurnResponse {

@@ -6,13 +6,15 @@
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { Secret } from "../../common/v1/common_pb.js";
+import { file_arsox_common_v1_common } from "../../common/v1/common_pb.js";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file arsox/settings/v1/integration.proto.
  */
 export const file_arsox_settings_v1_integration: GenFile = /*@__PURE__*/
-  fileDesc("CiNhcnNveC9zZXR0aW5ncy92MS9pbnRlZ3JhdGlvbi5wcm90bxIRYXJzb3guc2V0dGluZ3MudjEiIgoRR2l0aHViSW50ZWdyYXRpb24SDQoFdG9rZW4YASABKAkixAEKD0ppcmFJbnRlZ3JhdGlvbhINCgV0b2tlbhgBIAEoCRIQCghiYXNlX3VybBgCIAEoCRISCgVlbWFpbBgDIAEoCUgAiAEBEiUKGGFsbG93X3N0YXR1c190cmFuc2l0aW9ucxgEIAEoCEgBiAEBEhsKDmFsbG93X2NvbW1lbnRzGAUgASgISAKIAQFCCAoGX2VtYWlsQhsKGV9hbGxvd19zdGF0dXNfdHJhbnNpdGlvbnNCEQoPX2FsbG93X2NvbW1lbnRzQo8BChVjb20uYXJzb3guc2V0dGluZ3MudjFCEEludGVncmF0aW9uUHJvdG9QAaICA0FTWKoCEUFyc294LlNldHRpbmdzLlYxygIRQXJzb3hcU2V0dGluZ3NcVjHiAh1BcnNveFxTZXR0aW5nc1xWMVxHUEJNZXRhZGF0YeoCE0Fyc294OjpTZXR0aW5nczo6VjFiBnByb3RvMw");
+  fileDesc("CiNhcnNveC9zZXR0aW5ncy92MS9pbnRlZ3JhdGlvbi5wcm90bxIRYXJzb3guc2V0dGluZ3MudjEiOwoRR2l0aHViSW50ZWdyYXRpb24SJgoFdG9rZW4YASABKAsyFy5hcnNveC5jb21tb24udjEuU2VjcmV0It0BCg9KaXJhSW50ZWdyYXRpb24SJgoFdG9rZW4YASABKAsyFy5hcnNveC5jb21tb24udjEuU2VjcmV0EhAKCGJhc2VfdXJsGAIgASgJEhIKBWVtYWlsGAMgASgJSACIAQESJQoYYWxsb3dfc3RhdHVzX3RyYW5zaXRpb25zGAQgASgISAGIAQESGwoOYWxsb3dfY29tbWVudHMYBSABKAhIAogBAUIICgZfZW1haWxCGwoZX2FsbG93X3N0YXR1c190cmFuc2l0aW9uc0IRCg9fYWxsb3dfY29tbWVudHNCjwEKFWNvbS5hcnNveC5zZXR0aW5ncy52MUIQSW50ZWdyYXRpb25Qcm90b1ABogIDQVNYqgIRQXJzb3guU2V0dGluZ3MuVjHKAhFBcnNveFxTZXR0aW5nc1xWMeICHUFyc294XFNldHRpbmdzXFYxXEdQQk1ldGFkYXRh6gITQXJzb3g6OlNldHRpbmdzOjpWMWIGcHJvdG8z", [file_arsox_common_v1_common]);
 
 /**
  * Lets the agents use `gh`. Highly recommended.
@@ -27,9 +29,9 @@ export const file_arsox_settings_v1_integration: GenFile = /*@__PURE__*/
  */
 export type GithubIntegration = Message<"arsox.settings.v1.GithubIntegration"> & {
   /**
-   * @generated from field: string token = 1;
+   * @generated from field: arsox.common.v1.Secret token = 1;
    */
-  token: string;
+  token?: Secret;
 };
 
 /**
@@ -46,9 +48,9 @@ export const GithubIntegrationSchema: GenMessage<GithubIntegration> = /*@__PURE_
  */
 export type JiraIntegration = Message<"arsox.settings.v1.JiraIntegration"> & {
   /**
-   * @generated from field: string token = 1;
+   * @generated from field: arsox.common.v1.Secret token = 1;
    */
-  token: string;
+  token?: Secret;
 
   /**
    * e.g. "https://your-org.atlassian.net".

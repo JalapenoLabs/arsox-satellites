@@ -6,19 +6,23 @@
 
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { Secret } from "../../common/v1/common_pb.js";
+import { file_arsox_common_v1_common } from "../../common/v1/common_pb.js";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file arsox/settings/v1/tool.proto.
  */
 export const file_arsox_settings_v1_tool: GenFile = /*@__PURE__*/
-  fileDesc("ChxhcnNveC9zZXR0aW5ncy92MS90b29sLnByb3RvEhFhcnNveC5zZXR0aW5ncy52MSKSAQoJTWNwU2VydmVyEgwKBG5hbWUYASABKAkSCwoDdXJsGAIgASgJEjoKB2hlYWRlcnMYAyADKAsyKS5hcnNveC5zZXR0aW5ncy52MS5NY3BTZXJ2ZXIuSGVhZGVyc0VudHJ5Gi4KDEhlYWRlcnNFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBImgKDlZpcnR1YWxCcm93c2VyEg8KB2VuYWJsZWQYASABKAgSFQoNYWxsb3dlZF9yb2xlcxgCIAMoCRIuCgl2aWV3cG9ydHMYAyADKA4yGy5hcnNveC5zZXR0aW5ncy52MS5WaWV3cG9ydCpkCghWaWV3cG9ydBIYChRWSUVXUE9SVF9VTlNQRUNJRklFRBAAEhMKD1ZJRVdQT1JUX01PQklMRRABEhMKD1ZJRVdQT1JUX1RBQkxFVBACEhQKEFZJRVdQT1JUX0RFU0tUT1AQA0KIAQoVY29tLmFyc294LnNldHRpbmdzLnYxQglUb29sUHJvdG9QAaICA0FTWKoCEUFyc294LlNldHRpbmdzLlYxygIRQXJzb3hcU2V0dGluZ3NcVjHiAh1BcnNveFxTZXR0aW5nc1xWMVxHUEJNZXRhZGF0YeoCE0Fyc294OjpTZXR0aW5nczo6VjFiBnByb3RvMw");
+  fileDesc("ChxhcnNveC9zZXR0aW5ncy92MS90b29sLnByb3RvEhFhcnNveC5zZXR0aW5ncy52MSKrAQoJTWNwU2VydmVyEgwKBG5hbWUYASABKAkSCwoDdXJsGAIgASgJEjoKB2hlYWRlcnMYAyADKAsyKS5hcnNveC5zZXR0aW5ncy52MS5NY3BTZXJ2ZXIuSGVhZGVyc0VudHJ5GkcKDEhlYWRlcnNFbnRyeRILCgNrZXkYASABKAkSJgoFdmFsdWUYAiABKAsyFy5hcnNveC5jb21tb24udjEuU2VjcmV0OgI4ASJoCg5WaXJ0dWFsQnJvd3NlchIPCgdlbmFibGVkGAEgASgIEhUKDWFsbG93ZWRfcm9sZXMYAiADKAkSLgoJdmlld3BvcnRzGAMgAygOMhsuYXJzb3guc2V0dGluZ3MudjEuVmlld3BvcnQqZAoIVmlld3BvcnQSGAoUVklFV1BPUlRfVU5TUEVDSUZJRUQQABITCg9WSUVXUE9SVF9NT0JJTEUQARITCg9WSUVXUE9SVF9UQUJMRVQQAhIUChBWSUVXUE9SVF9ERVNLVE9QEANCiAEKFWNvbS5hcnNveC5zZXR0aW5ncy52MUIJVG9vbFByb3RvUAGiAgNBU1iqAhFBcnNveC5TZXR0aW5ncy5WMcoCEUFyc294XFNldHRpbmdzXFYx4gIdQXJzb3hcU2V0dGluZ3NcVjFcR1BCTWV0YWRhdGHqAhNBcnNveDo6U2V0dGluZ3M6OlYxYgZwcm90bzM", [file_arsox_common_v1_common]);
 
 /**
  * A server whose tools the agents may use.
  *
  * Arsox provides its own MCP tools alongside these, including team spawn and
- * despawn, request_integration, and override_redaction.
+ * despawn, request_integration, and override_redaction. Those are MCP schemas
+ * offered to the agents rather than part of this contract, so they are not
+ * defined anywhere in these files.
  *
  * @generated from message arsox.settings.v1.McpServer
  */
@@ -34,12 +38,13 @@ export type McpServer = Message<"arsox.settings.v1.McpServer"> & {
   url: string;
 
   /**
-   * Sent on every request to the server. Values here are treated as secrets and
-   * redacted like any other.
+   * Sent on every request to the server. Header values are credentials far more
+   * often than not, so they carry the same type as every other credential and
+   * come back redacted.
    *
-   * @generated from field: map<string, string> headers = 3;
+   * @generated from field: map<string, arsox.common.v1.Secret> headers = 3;
    */
-  headers: { [key: string]: string };
+  headers: { [key: string]: Secret };
 };
 
 /**

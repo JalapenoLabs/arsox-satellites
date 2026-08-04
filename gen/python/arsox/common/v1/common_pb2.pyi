@@ -33,6 +33,14 @@ class Money(_message.Message):
     nanos: int
     def __init__(self, currency_code: _Optional[str] = ..., units: _Optional[int] = ..., nanos: _Optional[int] = ...) -> None: ...
 
+class Secret(_message.Message):
+    __slots__ = ()
+    VALUE_FIELD_NUMBER: _ClassVar[int]
+    DISPLAY_FIELD_NUMBER: _ClassVar[int]
+    value: str
+    display: str
+    def __init__(self, value: _Optional[str] = ..., display: _Optional[str] = ...) -> None: ...
+
 class Unlimited(_message.Message):
     __slots__ = ()
     def __init__(self) -> None: ...

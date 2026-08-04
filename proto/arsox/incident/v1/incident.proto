@@ -52,9 +52,17 @@ message Incident {
 
   // Position in the thread's event stream, so an incident read from the
   // database can be located in the stream and vice versa.
-  uint64 sequence = 2;
+  //
+  // Absent on a satellite-scoped incident, which reaches the control stream and
+  // carries that stream's sequence instead.
+  optional uint64 sequence = 2;
 
-  string thread_id = 3;
+  // Absent when the failure belongs to the satellite rather than to any thread:
+  // the LLM proxy unreachable at boot, a failed database migration, a volume
+  // that will not mount. Those are the failures an operator most needs, and
+  // without somewhere to put them they could only ever reach stderr, which is
+  // precisely the silent failure this whole feature exists to prevent.
+  optional string thread_id = 3;
 
   // The turn this happened during. Absent for failures outside any turn, such
   // as workspace provisioning at thread creation.

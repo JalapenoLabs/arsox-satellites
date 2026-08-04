@@ -55,6 +55,17 @@ message ThreadEvent {
   // hook rather than a hole.
   string type = 5;
 
+  // Which team member this event belongs to, hoisted out of the payload.
+  //
+  // Duplicated for the same reason as `type`: a consumer can route or filter by
+  // member without decoding the body, and without knowing which payload types
+  // happen to carry an author. That is what makes a nine-agent thread renderable
+  // as per-member panes rather than one unreadable scrollback.
+  //
+  // Absent for satellite-level events and for anything the commander did
+  // directly.
+  optional string member_id = 6;
+
   oneof payload {
     AgentMessage agent_message = 20;
     AgentThinking agent_thinking = 21;

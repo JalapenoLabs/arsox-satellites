@@ -26,20 +26,20 @@ class LlmAuth(_message.Message):
     API_KEY_FIELD_NUMBER: _ClassVar[int]
     SUBSCRIPTION_TOKEN_FIELD_NUMBER: _ClassVar[int]
     OAUTH_FIELD_NUMBER: _ClassVar[int]
-    api_key: str
-    subscription_token: str
+    api_key: _common_pb2.Secret
+    subscription_token: _common_pb2.Secret
     oauth: OAuthCredential
-    def __init__(self, api_key: _Optional[str] = ..., subscription_token: _Optional[str] = ..., oauth: _Optional[_Union[OAuthCredential, _Mapping]] = ...) -> None: ...
+    def __init__(self, api_key: _Optional[_Union[_common_pb2.Secret, _Mapping]] = ..., subscription_token: _Optional[_Union[_common_pb2.Secret, _Mapping]] = ..., oauth: _Optional[_Union[OAuthCredential, _Mapping]] = ...) -> None: ...
 
 class OAuthCredential(_message.Message):
     __slots__ = ()
     ACCESS_TOKEN_FIELD_NUMBER: _ClassVar[int]
     REFRESH_TOKEN_FIELD_NUMBER: _ClassVar[int]
     EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
-    access_token: str
-    refresh_token: str
+    access_token: _common_pb2.Secret
+    refresh_token: _common_pb2.Secret
     expires_at: _common_pb2.Timestamp
-    def __init__(self, access_token: _Optional[str] = ..., refresh_token: _Optional[str] = ..., expires_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+    def __init__(self, access_token: _Optional[_Union[_common_pb2.Secret, _Mapping]] = ..., refresh_token: _Optional[_Union[_common_pb2.Secret, _Mapping]] = ..., expires_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
 class RetryPolicy(_message.Message):
     __slots__ = ()

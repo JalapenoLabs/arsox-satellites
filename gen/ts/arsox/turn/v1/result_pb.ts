@@ -8,6 +8,8 @@ import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2"
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { Artifact } from "../../artifact/v1/artifact_pb.js";
 import { file_arsox_artifact_v1_artifact } from "../../artifact/v1/artifact_pb.js";
+import type { Duration } from "../../common/v1/common_pb.js";
+import { file_arsox_common_v1_common } from "../../common/v1/common_pb.js";
 import type { Error } from "../../error/v1/error_pb.js";
 import { file_arsox_error_v1_error } from "../../error/v1/error_pb.js";
 import type { IncidentCounts } from "../../incident/v1/incident_pb.js";
@@ -18,7 +20,7 @@ import type { SuggestionReport } from "../../suggestion/v1/suggestion_pb.js";
 import { file_arsox_suggestion_v1_suggestion } from "../../suggestion/v1/suggestion_pb.js";
 import type { ChangedFile, CheckerResult, IntegrationRecord, TeamMember, Turn, TurnStatus } from "./turn_pb.js";
 import { file_arsox_turn_v1_turn } from "./turn_pb.js";
-import type { CostEstimate, TokenUsage } from "../../usage/v1/usage_pb.js";
+import type { CostEstimate, ModelStatistics, TokenUsage } from "../../usage/v1/usage_pb.js";
 import { file_arsox_usage_v1_usage } from "../../usage/v1/usage_pb.js";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -26,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/turn/v1/result.proto.
  */
 export const file_arsox_turn_v1_result: GenFile = /*@__PURE__*/
-  fileDesc("ChphcnNveC90dXJuL3YxL3Jlc3VsdC5wcm90bxINYXJzb3gudHVybi52MSKJAQoMU3RhZ2VPdXRjb21lEiMKBXN0YWdlGAEgASgOMhQuYXJzb3gudHVybi52MS5TdGFnZRI0CgtkaXNwb3NpdGlvbhgCIAEoDjIfLmFyc294LnR1cm4udjEuU3RhZ2VEaXNwb3NpdGlvbhITCgZyZWFzb24YAyABKAlIAIgBAUIJCgdfcmVhc29uIn8KFlB1bGxSZXF1ZXN0V2F0Y2hSZXBvcnQSGwoTcHVsbF9yZXF1ZXN0X251bWJlchgBIAEoDRIVCg1hdHRlbXB0c191c2VkGAIgASgNEhUKDWNoZWNrc19wYXNzZWQYAyABKAgSGgoSdGVybWluYXRpb25fcmVhc29uGAQgASgJItoGCgpUdXJuUmVzdWx0Eg8KB3R1cm5faWQYASABKAkSEQoJdGhyZWFkX2lkGAIgASgJEikKBnN0YXR1cxgDIAEoDjIZLmFyc294LnR1cm4udjEuVHVyblN0YXR1cxIPCgdzdW1tYXJ5GAQgASgJEioKBnRva2VucxgFIAEoCzIaLmFyc294LnVzYWdlLnYxLlRva2VuVXNhZ2USKgoEY29zdBgGIAEoCzIcLmFyc294LnVzYWdlLnYxLkNvc3RFc3RpbWF0ZRIpCgVlcnJvchgHIAEoCzIVLmFyc294LmVycm9yLnYxLkVycm9ySACIAQESOgoPaW5jaWRlbnRfY291bnRzGAggASgLMiEuYXJzb3guaW5jaWRlbnQudjEuSW5jaWRlbnRDb3VudHMSKgoHbWVtYmVycxgJIAMoCzIZLmFyc294LnR1cm4udjEuVGVhbU1lbWJlchIxCg1jaGFuZ2VkX2ZpbGVzGAogAygLMhouYXJzb3gudHVybi52MS5DaGFuZ2VkRmlsZRI2CgxpbnRlZ3JhdGlvbnMYCyADKAsyIC5hcnNveC50dXJuLnYxLkludGVncmF0aW9uUmVjb3JkEjUKD2NoZWNrZXJfcmVzdWx0cxgMIAMoCzIcLmFyc294LnR1cm4udjEuQ2hlY2tlclJlc3VsdBIuCglhcnRpZmFjdHMYDSADKAsyGy5hcnNveC5hcnRpZmFjdC52MS5BcnRpZmFjdBI6CgtzdWdnZXN0aW9ucxgOIAEoCzIlLmFyc294LnN1Z2dlc3Rpb24udjEuU3VnZ2VzdGlvblJlcG9ydBIrCgZzdGFnZXMYDyADKAsyGy5hcnNveC50dXJuLnYxLlN0YWdlT3V0Y29tZRI/ChR1bmFuc3dlcmVkX3F1ZXN0aW9ucxgQIAMoCzIhLmFyc294LmludGVyYWN0aW9uLnYxLlF1ZXN0aW9uU2V0EjkKBXdhdGNoGBEgASgLMiUuYXJzb3gudHVybi52MS5QdWxsUmVxdWVzdFdhdGNoUmVwb3J0SAGIAQESHwoSYWdlbnRzX3JlcG9fY29tbWl0GBIgASgJSAKIAQFCCAoGX2Vycm9yQggKBl93YXRjaEIVChNfYWdlbnRzX3JlcG9fY29tbWl0IjQKDkdldFR1cm5SZXF1ZXN0EhEKCXRocmVhZF9pZBgBIAEoCRIPCgd0dXJuX2lkGAIgASgJIm8KD0dldFR1cm5SZXNwb25zZRIhCgR0dXJuGAEgASgLMhMuYXJzb3gudHVybi52MS5UdXJuEi4KBnJlc3VsdBgCIAEoCzIZLmFyc294LnR1cm4udjEuVHVyblJlc3VsdEgAiAEBQgkKB19yZXN1bHQqyQEKBVN0YWdlEhUKEVNUQUdFX1VOU1BFQ0lGSUVEEAASDgoKU1RBR0VfUExBThABEhMKD1NUQUdFX1RFQU1fV09SSxACEhIKDlNUQUdFX0NIRUNLRVJTEAMSFQoRU1RBR0VfU0VMRl9SRVZJRVcQBBIPCgtTVEFHRV9NRVJHRRAFEhMKD1NUQUdFX0FSVElGQUNUUxAGEhUKEVNUQUdFX1NVR0dFU1RJT05TEAcSHAoYU1RBR0VfUFVMTF9SRVFVRVNUX1dBVENIEAgqjQEKEFN0YWdlRGlzcG9zaXRpb24SIQodU1RBR0VfRElTUE9TSVRJT05fVU5TUEVDSUZJRUQQABIZChVTVEFHRV9ESVNQT1NJVElPTl9SQU4QARIdChlTVEFHRV9ESVNQT1NJVElPTl9TS0lQUEVEEAISHAoYU1RBR0VfRElTUE9TSVRJT05fRkFJTEVEEANCdgoRY29tLmFyc294LnR1cm4udjFCC1Jlc3VsdFByb3RvUAGiAgNBVFiqAg1BcnNveC5UdXJuLlYxygINQXJzb3hcVHVyblxWMeICGUFyc294XFR1cm5cVjFcR1BCTWV0YWRhdGHqAg9BcnNveDo6VHVybjo6VjFiBnByb3RvMw", [file_arsox_artifact_v1_artifact, file_arsox_error_v1_error, file_arsox_incident_v1_incident, file_arsox_interaction_v1_question, file_arsox_suggestion_v1_suggestion, file_arsox_turn_v1_turn, file_arsox_usage_v1_usage]);
+  fileDesc("ChphcnNveC90dXJuL3YxL3Jlc3VsdC5wcm90bxINYXJzb3gudHVybi52MSK1AQoMU3RhZ2VPdXRjb21lEiMKBXN0YWdlGAEgASgOMhQuYXJzb3gudHVybi52MS5TdGFnZRI0CgtkaXNwb3NpdGlvbhgCIAEoDjIfLmFyc294LnR1cm4udjEuU3RhZ2VEaXNwb3NpdGlvbhITCgZyZWFzb24YAyABKAlIAIgBARIqCgdlbGFwc2VkGAQgASgLMhkuYXJzb3guY29tbW9uLnYxLkR1cmF0aW9uQgkKB19yZWFzb24ifwoWUHVsbFJlcXVlc3RXYXRjaFJlcG9ydBIbChNwdWxsX3JlcXVlc3RfbnVtYmVyGAEgASgNEhUKDWF0dGVtcHRzX3VzZWQYAiABKA0SFQoNY2hlY2tzX3Bhc3NlZBgDIAEoCBIaChJ0ZXJtaW5hdGlvbl9yZWFzb24YBCABKAki+QcKClR1cm5SZXN1bHQSDwoHdHVybl9pZBgBIAEoCRIRCgl0aHJlYWRfaWQYAiABKAkSKQoGc3RhdHVzGAMgASgOMhkuYXJzb3gudHVybi52MS5UdXJuU3RhdHVzEg8KB3N1bW1hcnkYBCABKAkSKgoGdG9rZW5zGAUgASgLMhouYXJzb3gudXNhZ2UudjEuVG9rZW5Vc2FnZRIqCgRjb3N0GAYgASgLMhwuYXJzb3gudXNhZ2UudjEuQ29zdEVzdGltYXRlEjEKCGJ5X21vZGVsGBMgAygLMh8uYXJzb3gudXNhZ2UudjEuTW9kZWxTdGF0aXN0aWNzEikKBWVycm9yGAcgASgLMhUuYXJzb3guZXJyb3IudjEuRXJyb3JIAIgBARI6Cg9pbmNpZGVudF9jb3VudHMYCCABKAsyIS5hcnNveC5pbmNpZGVudC52MS5JbmNpZGVudENvdW50cxIqCgdtZW1iZXJzGAkgAygLMhkuYXJzb3gudHVybi52MS5UZWFtTWVtYmVyEjEKDWNoYW5nZWRfZmlsZXMYCiADKAsyGi5hcnNveC50dXJuLnYxLkNoYW5nZWRGaWxlEjYKDGludGVncmF0aW9ucxgLIAMoCzIgLmFyc294LnR1cm4udjEuSW50ZWdyYXRpb25SZWNvcmQSNQoPY2hlY2tlcl9yZXN1bHRzGAwgAygLMhwuYXJzb3gudHVybi52MS5DaGVja2VyUmVzdWx0Ei4KCWFydGlmYWN0cxgNIAMoCzIbLmFyc294LmFydGlmYWN0LnYxLkFydGlmYWN0EjoKC3N1Z2dlc3Rpb25zGA4gASgLMiUuYXJzb3guc3VnZ2VzdGlvbi52MS5TdWdnZXN0aW9uUmVwb3J0EisKBnN0YWdlcxgPIAMoCzIbLmFyc294LnR1cm4udjEuU3RhZ2VPdXRjb21lEj8KFHVuYW5zd2VyZWRfcXVlc3Rpb25zGBAgAygLMiEuYXJzb3guaW50ZXJhY3Rpb24udjEuUXVlc3Rpb25TZXQSOQoFd2F0Y2gYESABKAsyJS5hcnNveC50dXJuLnYxLlB1bGxSZXF1ZXN0V2F0Y2hSZXBvcnRIAYgBARIfChJhZ2VudHNfcmVwb19jb21taXQYEiABKAlIAogBARI5CghtZXRhZGF0YRgUIAMoCzInLmFyc294LnR1cm4udjEuVHVyblJlc3VsdC5NZXRhZGF0YUVudHJ5Gi8KDU1ldGFkYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4AUIICgZfZXJyb3JCCAoGX3dhdGNoQhUKE19hZ2VudHNfcmVwb19jb21taXQiNAoOR2V0VHVyblJlcXVlc3QSEQoJdGhyZWFkX2lkGAEgASgJEg8KB3R1cm5faWQYAiABKAkibwoPR2V0VHVyblJlc3BvbnNlEiEKBHR1cm4YASABKAsyEy5hcnNveC50dXJuLnYxLlR1cm4SLgoGcmVzdWx0GAIgASgLMhkuYXJzb3gudHVybi52MS5UdXJuUmVzdWx0SACIAQFCCQoHX3Jlc3VsdCrJAQoFU3RhZ2USFQoRU1RBR0VfVU5TUEVDSUZJRUQQABIOCgpTVEFHRV9QTEFOEAESEwoPU1RBR0VfVEVBTV9XT1JLEAISEgoOU1RBR0VfQ0hFQ0tFUlMQAxIVChFTVEFHRV9TRUxGX1JFVklFVxAEEg8KC1NUQUdFX01FUkdFEAUSEwoPU1RBR0VfQVJUSUZBQ1RTEAYSFQoRU1RBR0VfU1VHR0VTVElPTlMQBxIcChhTVEFHRV9QVUxMX1JFUVVFU1RfV0FUQ0gQCCqNAQoQU3RhZ2VEaXNwb3NpdGlvbhIhCh1TVEFHRV9ESVNQT1NJVElPTl9VTlNQRUNJRklFRBAAEhkKFVNUQUdFX0RJU1BPU0lUSU9OX1JBThABEh0KGVNUQUdFX0RJU1BPU0lUSU9OX1NLSVBQRUQQAhIcChhTVEFHRV9ESVNQT1NJVElPTl9GQUlMRUQQA0J2ChFjb20uYXJzb3gudHVybi52MUILUmVzdWx0UHJvdG9QAaICA0FUWKoCDUFyc294LlR1cm4uVjHKAg1BcnNveFxUdXJuXFYx4gIZQXJzb3hcVHVyblxWMVxHUEJNZXRhZGF0YeoCD0Fyc294OjpUdXJuOjpWMWIGcHJvdG8z", [file_arsox_artifact_v1_artifact, file_arsox_common_v1_common, file_arsox_error_v1_error, file_arsox_incident_v1_incident, file_arsox_interaction_v1_question, file_arsox_suggestion_v1_suggestion, file_arsox_turn_v1_turn, file_arsox_usage_v1_usage]);
 
 /**
  * What each stage of the stack actually did.
@@ -56,6 +58,13 @@ export type StageOutcome = Message<"arsox.turn.v1.StageOutcome"> & {
    * @generated from field: optional string reason = 3;
    */
   reason?: string;
+
+  /**
+   * Wall clock the stage consumed. Zero for a stage that was skipped.
+   *
+   * @generated from field: arsox.common.v1.Duration elapsed = 4;
+   */
+  elapsed?: Duration;
 };
 
 /**
@@ -136,6 +145,8 @@ export type TurnResult = Message<"arsox.turn.v1.TurnResult"> & {
   summary: string;
 
   /**
+   * Every agent in the turn, every endpoint, combined.
+   *
    * @generated from field: arsox.usage.v1.TokenUsage tokens = 5;
    */
   tokens?: TokenUsage;
@@ -144,6 +155,19 @@ export type TurnResult = Message<"arsox.turn.v1.TurnResult"> & {
    * @generated from field: arsox.usage.v1.CostEstimate cost = 6;
    */
   cost?: CostEstimate;
+
+  /**
+   * The same totals split by the model that actually answered.
+   *
+   * Without this, failover is invisible in the accounting. A turn where the
+   * first endpoint burned two million tokens failing and the second did the real
+   * work looks identical to a clean run on the second, and the failover tax the
+   * README warns about is exactly the number you cannot see. A `recovered`
+   * incident says failover happened; this says what it cost.
+   *
+   * @generated from field: repeated arsox.usage.v1.ModelStatistics by_model = 19;
+   */
+  byModel: ModelStatistics[];
 
   /**
    * Why the turn ended early. Absent on a turn that completed.
@@ -220,6 +244,18 @@ export type TurnResult = Message<"arsox.turn.v1.TurnResult"> & {
    * @generated from field: optional string agents_repo_commit = 18;
    */
   agentsRepoCommit?: string;
+
+  /**
+   * The turn's `metadata`, repeated here rather than referenced.
+   *
+   * A consumer reacting to `turn.completed` receives only this message, and
+   * "which customer's job just finished" is precisely the question it needs to
+   * answer at that moment. Making it look up the Turn first would defeat the
+   * point of carrying correlation data at all.
+   *
+   * @generated from field: map<string, string> metadata = 20;
+   */
+  metadata: { [key: string]: string };
 };
 
 /**

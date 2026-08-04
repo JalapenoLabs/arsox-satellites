@@ -4,6 +4,8 @@ syntax = "proto3";
 
 package arsox.settings.v1;
 
+import "arsox/common/v1/common.proto";
+
 // Lets the agents use `gh`. Highly recommended.
 //
 // Merge permission lives in PullRequestPolicy, not here, so there is exactly one
@@ -12,12 +14,12 @@ package arsox.settings.v1;
 // GitHub is supported first-class. The integration is built polymorphically so
 // GitLab and Bitbucket can follow.
 message GithubIntegration {
-  string token = 1;
+  arsox.common.v1.Secret token = 1;
 }
 
 // Lets the agents look up and act on Jira items.
 message JiraIntegration {
-  string token = 1;
+  arsox.common.v1.Secret token = 1;
 
   // e.g. "https://your-org.atlassian.net".
   string base_url = 2;

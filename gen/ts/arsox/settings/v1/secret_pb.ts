@@ -6,13 +6,15 @@
 
 import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { Secret } from "../../common/v1/common_pb.js";
+import { file_arsox_common_v1_common } from "../../common/v1/common_pb.js";
 import type { Message } from "@bufbuild/protobuf";
 
 /**
  * Describes the file arsox/settings/v1/secret.proto.
  */
 export const file_arsox_settings_v1_secret: GenFile = /*@__PURE__*/
-  fileDesc("Ch5hcnNveC9zZXR0aW5ncy92MS9zZWNyZXQucHJvdG8SEWFyc294LnNldHRpbmdzLnYxIkoKBkVudlZhchILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAkSFgoJaXNfc2VjcmV0GAMgASgISACIAQFCDAoKX2lzX3NlY3JldCIOCgxNaXJyb3JMZW5ndGgiWAoJU3RhckNvdW50Eg8KBWZpeGVkGAEgASgNSAASMQoGbWlycm9yGAIgASgLMh8uYXJzb3guc2V0dGluZ3MudjEuTWlycm9yTGVuZ3RoSABCBwoFc3R5bGUisQEKCVJlZGFjdGlvbhIuCgRtb2RlGAEgASgOMiAuYXJzb3guc2V0dGluZ3MudjEuUmVkYWN0aW9uTW9kZRIwCgpzdGFyX2NvdW50GAIgASgLMhwuYXJzb3guc2V0dGluZ3MudjEuU3RhckNvdW50EiUKGGFsbG93X3JlZGFjdGlvbl9vdmVycmlkZRgDIAEoCEgAiAEBQhsKGV9hbGxvd19yZWRhY3Rpb25fb3ZlcnJpZGUqsQEKDVJlZGFjdGlvbk1vZGUSHgoaUkVEQUNUSU9OX01PREVfVU5TUEVDSUZJRUQQABIcChhSRURBQ1RJT05fTU9ERV9BTk9OWU1PVVMQARIfChtSRURBQ1RJT05fTU9ERV9QUkVGSVhfU0hPV04QAhIgChxSRURBQ1RJT05fTU9ERV9QT1NURklYX1NIT1dOEAMSHwobUkVEQUNUSU9OX01PREVfSFlCUklEX1NIT1dOEARCigEKFWNvbS5hcnNveC5zZXR0aW5ncy52MUILU2VjcmV0UHJvdG9QAaICA0FTWKoCEUFyc294LlNldHRpbmdzLlYxygIRQXJzb3hcU2V0dGluZ3NcVjHiAh1BcnNveFxTZXR0aW5nc1xWMVxHUEJNZXRhZGF0YeoCE0Fyc294OjpTZXR0aW5nczo6VjFiBnByb3RvMw");
+  fileDesc("Ch5hcnNveC9zZXR0aW5ncy92MS9zZWNyZXQucHJvdG8SEWFyc294LnNldHRpbmdzLnYxImMKBkVudlZhchILCgNrZXkYASABKAkSJgoFdmFsdWUYAiABKAsyFy5hcnNveC5jb21tb24udjEuU2VjcmV0EhYKCWlzX3NlY3JldBgDIAEoCEgAiAEBQgwKCl9pc19zZWNyZXQiDgoMTWlycm9yTGVuZ3RoIlgKCVN0YXJDb3VudBIPCgVmaXhlZBgBIAEoDUgAEjEKBm1pcnJvchgCIAEoCzIfLmFyc294LnNldHRpbmdzLnYxLk1pcnJvckxlbmd0aEgAQgcKBXN0eWxlIrEBCglSZWRhY3Rpb24SLgoEbW9kZRgBIAEoDjIgLmFyc294LnNldHRpbmdzLnYxLlJlZGFjdGlvbk1vZGUSMAoKc3Rhcl9jb3VudBgCIAEoCzIcLmFyc294LnNldHRpbmdzLnYxLlN0YXJDb3VudBIlChhhbGxvd19yZWRhY3Rpb25fb3ZlcnJpZGUYAyABKAhIAIgBAUIbChlfYWxsb3dfcmVkYWN0aW9uX292ZXJyaWRlKrEBCg1SZWRhY3Rpb25Nb2RlEh4KGlJFREFDVElPTl9NT0RFX1VOU1BFQ0lGSUVEEAASHAoYUkVEQUNUSU9OX01PREVfQU5PTllNT1VTEAESHwobUkVEQUNUSU9OX01PREVfUFJFRklYX1NIT1dOEAISIAocUkVEQUNUSU9OX01PREVfUE9TVEZJWF9TSE9XThADEh8KG1JFREFDVElPTl9NT0RFX0hZQlJJRF9TSE9XThAEQooBChVjb20uYXJzb3guc2V0dGluZ3MudjFCC1NlY3JldFByb3RvUAGiAgNBU1iqAhFBcnNveC5TZXR0aW5ncy5WMcoCEUFyc294XFNldHRpbmdzXFYx4gIdQXJzb3hcU2V0dGluZ3NcVjFcR1BCTWV0YWRhdGHqAhNBcnNveDo6U2V0dGluZ3M6OlYxYgZwcm90bzM", [file_arsox_common_v1_common]);
 
 /**
  * An environment variable for the agents.
@@ -30,9 +32,13 @@ export type EnvVar = Message<"arsox.settings.v1.EnvVar"> & {
   key: string;
 
   /**
-   * @generated from field: string value = 2;
+   * Carries the credential type even for values marked public, so one rule
+   * covers the whole contract: `value` goes up, `display` comes back. For a
+   * public value the redaction is a no-op and `display` is the plaintext.
+   *
+   * @generated from field: arsox.common.v1.Secret value = 2;
    */
-  value: string;
+  value?: Secret;
 
   /**
    * Absent means secret. Defaulting to secret fails safe: the cost of

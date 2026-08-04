@@ -46,6 +46,27 @@ message GetReadinessResponse {
   repeated ReadinessCheck checks = 2;
 }
 
+// Disk the satellite is holding, across every thread.
+//
+// Per-thread quotas stop one runaway workspace, and they do not stop forty
+// well-behaved ones from filling a volume between them. This is what an
+// orchestrator watches to decide it needs another satellite.
+message DiskUsage {
+  // Total bytes under /workspace right now.
+  uint64 workspace_bytes = 1;
+
+  // Bytes the volume has left, as the filesystem reports it.
+  uint64 available_bytes = 2;
+
+  // The satellite-wide ceiling, when one is configured. Absent means the
+  // volume's own capacity is the only limit.
+  optional uint64 aggregate_quota_bytes = 3;
+
+  // Bytes held by the embedded database, which grows with retained events,
+  // incidents, and lifetime statistics rather than with workspace contents.
+  uint64 database_bytes = 4;
+}
+
 // GET /v1/status
 message GetStatusResponse {
   string satellite_version = 1;
@@ -58,7 +79,11 @@ message GetStatusResponse {
   uint32 running_threads = 3;
 
   // Every thread the satellite still holds, whatever its state.
-  repeated arsox.thread.v1.Thread threads = 4;
+  //
+  // Summaries rather than full threads: this endpoint gets polled, and a
+  // configuration dump per thread is the wrong payload for an operational
+  // question.
+  repeated arsox.thread.v1.ThreadSummary threads = 4;
 
   arsox.common.v1.Timestamp started_at = 5;
 
@@ -66,4 +91,6 @@ message GetStatusResponse {
   // ARSOX_ALLOW_INSECURE was set. Reported so an operator can see it from the
   // API rather than only in the boot log.
   bool insecure_mode = 6;
+
+  DiskUsage disk = 7;
 }

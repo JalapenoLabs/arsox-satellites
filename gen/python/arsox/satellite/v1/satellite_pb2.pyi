@@ -36,6 +36,18 @@ class GetReadinessResponse(_message.Message):
     checks: _containers.RepeatedCompositeFieldContainer[ReadinessCheck]
     def __init__(self, ready: _Optional[bool] = ..., checks: _Optional[_Iterable[_Union[ReadinessCheck, _Mapping]]] = ...) -> None: ...
 
+class DiskUsage(_message.Message):
+    __slots__ = ()
+    WORKSPACE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    AVAILABLE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    AGGREGATE_QUOTA_BYTES_FIELD_NUMBER: _ClassVar[int]
+    DATABASE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    workspace_bytes: int
+    available_bytes: int
+    aggregate_quota_bytes: int
+    database_bytes: int
+    def __init__(self, workspace_bytes: _Optional[int] = ..., available_bytes: _Optional[int] = ..., aggregate_quota_bytes: _Optional[int] = ..., database_bytes: _Optional[int] = ...) -> None: ...
+
 class GetStatusResponse(_message.Message):
     __slots__ = ()
     SATELLITE_VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -44,10 +56,12 @@ class GetStatusResponse(_message.Message):
     THREADS_FIELD_NUMBER: _ClassVar[int]
     STARTED_AT_FIELD_NUMBER: _ClassVar[int]
     INSECURE_MODE_FIELD_NUMBER: _ClassVar[int]
+    DISK_FIELD_NUMBER: _ClassVar[int]
     satellite_version: str
     max_concurrent_threads: int
     running_threads: int
-    threads: _containers.RepeatedCompositeFieldContainer[_thread_pb2.Thread]
+    threads: _containers.RepeatedCompositeFieldContainer[_thread_pb2.ThreadSummary]
     started_at: _common_pb2.Timestamp
     insecure_mode: bool
-    def __init__(self, satellite_version: _Optional[str] = ..., max_concurrent_threads: _Optional[int] = ..., running_threads: _Optional[int] = ..., threads: _Optional[_Iterable[_Union[_thread_pb2.Thread, _Mapping]]] = ..., started_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., insecure_mode: _Optional[bool] = ...) -> None: ...
+    disk: DiskUsage
+    def __init__(self, satellite_version: _Optional[str] = ..., max_concurrent_threads: _Optional[int] = ..., running_threads: _Optional[int] = ..., threads: _Optional[_Iterable[_Union[_thread_pb2.ThreadSummary, _Mapping]]] = ..., started_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., insecure_mode: _Optional[bool] = ..., disk: _Optional[_Union[DiskUsage, _Mapping]] = ...) -> None: ...

@@ -121,6 +121,50 @@ forgot, and a sentinel like `0` or `-1` would hand that decision straight back t
 the default. `StarCount` uses the same pattern so that "mirror the secret's
 length" is a case rather than a magic `-1`.
 
+### Credentials are a type, not a convention
+
+Every field carrying a credential is `common.v1.Secret` rather than a bare
+string. `value` goes up and is never populated on a response; `display` comes
+back carrying the redacted rendering.
+
+This exists because `Thread` carries the settings it was created with, so a
+status call on a busy satellite would otherwise hand back every API key, SSH
+private key, and PAT it holds. Those came from the caller, so returning them is
+not an escalation of privilege, but it does put credentials in proxy logs,
+browser consoles during JSON debugging, and any audit sink hanging off the SDK.
+
+A rule ("remember to redact before responding") would work until somebody added
+the fourteenth credential field. A type puts the obligation where a reviewer can
+see it, and makes `.value` on a response path greppable.
+
+`ThreadSummary` is the second half of the same decision. Listing threads is an
+operational question, not a configuration one, so `GET /v1/status` and
+`ListThreads` return a summary that structurally has no settings field at all
+rather than a `Thread` that has one and is careful about it.
+
+### Metadata is correlation, not instruction
+
+`Thread`, `Turn`, and `TurnResult` each carry a flat `map<string, string>
+metadata` for the caller's own data: which user triggered a job, which row in
+their database it belongs to, which tenant is paying.
+
+Three properties make it worth having rather than telling people to keep their
+own index:
+
+- **`ListThreads` filters on it.** "Every thread still running for tenant 42" is
+  answerable from the satellite.
+- **`TurnResult` repeats the turn's copy.** A consumer reacting to
+  `turn.completed` receives only that message, and that is exactly when it needs
+  to know whose job finished.
+- **The satellite never reads it.** It reaches no agent, appears in no
+  `AGENTS.md`, and changes no behavior. Deliberate: the moment metadata can
+  influence a run, it becomes an undocumented second prompt channel.
+
+Bounded at 50 entries, 64 characters per key, 512 per value, rejected with
+`REQUEST_FIELD_INVALID` rather than silently truncated. **Never redacted**, so a
+credential placed here is a credential in the caller's logs; `env` with
+`isSecret` is the field that knows how to hide things.
+
 ### One canonical message per concept
 
 There is one `TokenUsage`. There is deliberately no `ClaudeTokenUsage` and no
@@ -218,6 +262,43 @@ wildcard subscription a real forward compatibility hook rather than a hole.
 payload set. The control socket carries satellite lifecycle only and never thread
 content, and making that a structural property beats making it a promise
 somebody has to keep.
+
+## Deliberately not in this contract
+
+Two surfaces exist and are defined elsewhere, so nobody goes looking for them
+here:
+
+- **File upload and download** are byte-stream HTTP endpoints, not protobuf
+  messages. Framing a 90 MiB artifact as a proto field would mean buffering it
+  whole on both ends. `ListArtifacts` and `ListWorkspaceFiles` are the proto
+  half; the transfer itself is `application/octet-stream`.
+- **The agent-facing MCP tools** (`request_integration`, `override_redaction`,
+  team spawn and despawn) are MCP JSON schemas offered to the harnesses. They are
+  a different audience with a different contract. Their *effects* appear here, as
+  `IntegrationRequested` and `RedactionOverridden` events.
+
+## Implementation notes
+
+Two places the contract is right and the Rust will be tedious. Both want a
+decision before the satellite is written, not after.
+
+**`google.protobuf.Struct` is verbose in prost.** Every `details` site needs a
+`BTreeMap<String, Value>` of `Value { kind: Some(Kind::StringValue(..)) }`.
+Across the error and incident paths that is a lot of ceremony for what reads as
+a key-value bag. Write one `details!` macro on day one rather than hand-rolling
+it at fifty call sites. Struct stays because detail keys are per-code and
+additive, and a typed variant per code would make every new code a breaking
+change for consumers that only read `code` and `retryable`.
+
+**`common.v1.Timestamp` renders poorly as JSON.**
+`{"epochSeconds":"1754305200","nanos":0,"timezone":"Etc/UTC"}` where a reader
+wants `"2026-08-04T10:00:00Z"`. That is a real cost to the "point Postman at it
+and read what is happening" affordance the JSON representation exists for. The
+shape is what `proto.md` mandates and it is right on the wire: nanosecond
+precision and an explicit zone beat an RFC 3339 string that different languages
+parse to different precisions. Decide before launch whether the JSON renderer
+special-cases it, because changing that later changes what every hand-written
+parser sees.
 
 ## Roadmap
 

@@ -11,10 +11,18 @@ pub struct Incident {
     pub incident_id: ::prost::alloc::string::String,
     /// Position in the thread's event stream, so an incident read from the
     /// database can be located in the stream and vice versa.
-    #[prost(uint64, tag="2")]
-    pub sequence: u64,
-    #[prost(string, tag="3")]
-    pub thread_id: ::prost::alloc::string::String,
+    ///
+    /// Absent on a satellite-scoped incident, which reaches the control stream and
+    /// carries that stream's sequence instead.
+    #[prost(uint64, optional, tag="2")]
+    pub sequence: ::core::option::Option<u64>,
+    /// Absent when the failure belongs to the satellite rather than to any thread:
+    /// the LLM proxy unreachable at boot, a failed database migration, a volume
+    /// that will not mount. Those are the failures an operator most needs, and
+    /// without somewhere to put them they could only ever reach stderr, which is
+    /// precisely the silent failure this whole feature exists to prevent.
+    #[prost(string, optional, tag="3")]
+    pub thread_id: ::core::option::Option<::prost::alloc::string::String>,
     /// The turn this happened during. Absent for failures outside any turn, such
     /// as workspace provisioning at thread creation.
     #[prost(string, optional, tag="4")]

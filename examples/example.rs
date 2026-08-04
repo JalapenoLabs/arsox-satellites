@@ -551,10 +551,27 @@ async fn main() -> Result<()> {
     // Without it, a response lost in transit is indistinguishable from a thread
     // that was never created, and the only safe move is to retry and leak a
     // whole workspace. `deduplicated` tells you which happened.
+    // `metadata` is your own correlation data, stored verbatim and handed back
+    // untouched.
+    //
+    // A thread lives on the satellite and any replica can attach to it, so the
+    // replica that picks up an overnight run often knows only the thread ID.
+    // This is where the rest goes. It is also filterable, so "every thread still
+    // running for this tenant" is answerable without keeping your own index.
+    //
+    // The satellite never reads it and it never reaches an agent: a correlation
+    // channel, not a second way to give instructions. Use `prompt` for those. It
+    // is never redacted either, so credentials belong in `env` with
+    // `CustomEnvVar::secret`, which is the field that knows how to hide them.
     let ThreadCreated { thread, deduplicated } = satellite
         .threads()
         .create(settings)
         .idempotency_key("rate-limiting-2026-08-04")
+        .metadata([
+            ("tenant_id", "acme-corp"),
+            ("triggered_by_user_id", "usr_8812"),
+            ("job_row_id", "41ff9c2e-6b1a-4d55-9d0e-2f7c1b3a4e88"),
+        ])
         .await?;
     tracing::info!(thread = %thread.id(), deduplicated, "thread ready");
 
@@ -589,12 +606,20 @@ async fn main() -> Result<()> {
     let TurnStarted { turn, .. } = thread
         .start_turn("Add per-endpoint rate limiting to the public API and open a PR against develop.")
         .idempotency_key("rate-limiting-2026-08-04-turn-1")
+        // Turn metadata is separate from the thread's. The thread carries the
+        // tenant; each turn carries the request that queued it.
+        .metadata([("request_id", "req_2f8c11"), ("queued_by", "nightly-scheduler")])
         .await?;
 
     // Resolves when this turn reaches a terminal state. The pump task keeps
     // handling events the whole time.
     let result = turn.result().await?;
     tracing::info!("{}", result.summary());
+
+    // The turn's metadata rides along on the result rather than needing a
+    // lookup, because "which customer's job just finished" is the question you
+    // are asking at exactly this moment.
+    tracing::info!(request = ?result.metadata().get("request_id"), "job finished");
 
     // Cost comes back as an estimate, not a number. `amount` is `None` when no
     // endpoint published pricing for its model, and `is_partial` means some
@@ -618,6 +643,18 @@ async fn main() -> Result<()> {
                 "turn accounting, no endpoint published pricing",
             );
         }
+    }
+
+    // Split by the model that actually answered. Without this, failover is
+    // invisible in the accounting: a turn where the first endpoint burned two
+    // million tokens failing looks identical to a clean run on the second. An
+    // incident tells you failover happened, this tells you what it cost.
+    for model in result.by_model() {
+        tracing::info!(
+            model = %model.model(),
+            tokens = model.tokens().total_tokens(),
+            "usage by model",
+        );
     }
 
     // Every stage of the stack reports what it did, including the ones that did

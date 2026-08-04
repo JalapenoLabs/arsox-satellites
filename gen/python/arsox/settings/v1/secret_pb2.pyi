@@ -1,3 +1,4 @@
+from arsox.common.v1 import common_pb2 as _common_pb2
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
@@ -25,9 +26,9 @@ class EnvVar(_message.Message):
     VALUE_FIELD_NUMBER: _ClassVar[int]
     IS_SECRET_FIELD_NUMBER: _ClassVar[int]
     key: str
-    value: str
+    value: _common_pb2.Secret
     is_secret: bool
-    def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ..., is_secret: _Optional[bool] = ...) -> None: ...
+    def __init__(self, key: _Optional[str] = ..., value: _Optional[_Union[_common_pb2.Secret, _Mapping]] = ..., is_secret: _Optional[bool] = ...) -> None: ...
 
 class MirrorLength(_message.Message):
     __slots__ = ()

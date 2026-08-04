@@ -4,21 +4,22 @@ syntax = "proto3";
 
 package arsox.settings.v1;
 
+import "arsox/common/v1/common.proto";
 import "arsox/settings/v1/service.proto";
 
 // Credentials for reaching a git remote.
 message GitAuth {
   oneof credential {
     SshKeyPair ssh_key = 1;
-    string personal_access_token = 2;
+    arsox.common.v1.Secret personal_access_token = 2;
   }
 }
 
 message SshKeyPair {
-  string private_key = 1;
+  arsox.common.v1.Secret private_key = 1;
 
   // Absent is fine for most remotes, which derive the public key from the
-  // private one.
+  // private one. Not a secret, and returned in full.
   optional string public_key = 2;
 }
 

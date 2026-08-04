@@ -6,6 +6,7 @@ package arsox.event.v1;
 
 import "arsox/common/v1/common.proto";
 import "arsox/event/v1/lifecycle.proto";
+import "arsox/incident/v1/incident.proto";
 import "arsox/thread/v1/thread.proto";
 
 // One event on the satellite's control stream.
@@ -31,6 +32,13 @@ message ControlEvent {
     QueueDepthChanged queue_depth_changed = 23;
     HealthChanged health_changed = 24;
     ControlBudgetWarning budget_warning = 25;
+
+    // A failure that belongs to the satellite rather than to any thread, so it
+    // has no thread stream to travel on. Its `thread_id` is absent and its
+    // `sequence` is this stream's.
+    //
+    // Like its thread-scoped counterpart, this arm cannot be switched off.
+    arsox.incident.v1.Incident incident = 26;
   }
 }
 

@@ -95,6 +95,58 @@ message Thread {
   // alongside the thread ID and a replica that picks the thread back up can
   // reconnect with `from_sequence` and lose nothing.
   uint64 latest_sequence = 11;
+
+  // Your own correlation data, stored verbatim and handed back untouched.
+  //
+  // A thread lives on the satellite and any replica can attach to it, so the
+  // replica that picks up an overnight run often knows only the thread ID. This
+  // is where the rest goes: which user triggered the job, which row in your
+  // database it belongs to, which tenant is paying for it.
+  //
+  // **The satellite never reads it.** It does not reach an agent, does not
+  // appear in AGENTS.md, and changes no behavior. That is deliberate: it is a
+  // correlation channel for your application, not a second way to instruct the
+  // agents. Use `prompt` for anything the agents should know.
+  //
+  // Flat strings only, no nesting. Bounded at 50 entries, 64 characters per key,
+  // and 512 per value; breaching any of those is REQUEST_FIELD_INVALID rather
+  // than a silent truncation.
+  //
+  // **Not redacted, ever.** It is stored and returned in plaintext, so a
+  // credential put here is a credential in your logs. Secrets belong in `env`
+  // with `isSecret`, which is the field that knows how to hide them.
+  map<string, string> metadata = 12;
+}
+
+// A thread reduced to what an operator needs to see at a glance.
+//
+// Deliberately not a `Thread`. A status call on a busy satellite would otherwise
+// return every thread's full settings, which is both a large response and, before
+// `common.v1.Secret` existed, a way to hand back every credential the satellite
+// held. Listing threads is an operational question, not a configuration one.
+message ThreadSummary {
+  string thread_id = 1;
+  ThreadState state = 2;
+
+  uint32 queue_depth = 3;
+
+  // Absent when nothing is running.
+  optional string current_turn_id = 4;
+
+  arsox.common.v1.Timestamp created_at = 5;
+  arsox.common.v1.Timestamp last_activity_at = 6;
+
+  // Absent while a turn or a watch window is holding the idle clock.
+  optional arsox.common.v1.Timestamp expires_at = 7;
+
+  // Current size of this thread's workspace subtree, against its quota.
+  uint64 workspace_bytes = 8;
+
+  uint64 latest_sequence = 9;
+
+  // Carried here too, because correlating a listing back to your own records is
+  // the main reason to read one.
+  map<string, string> metadata = 10;
 }
 
 // POST /v1/threads
@@ -109,6 +161,9 @@ message CreateThreadRequest {
   // to tell "not created" from "created, response lost", and the only safe move
   // is to retry and leak a whole workspace.
   optional string idempotency_key = 2;
+
+  // Your own correlation data. See Thread.metadata for the rules.
+  map<string, string> metadata = 3;
 }
 
 message CreateThreadResponse {
@@ -129,12 +184,20 @@ message GetThreadResponse {
 
 message ListThreadsRequest {
   repeated ThreadState states = 1;
-  arsox.common.v1.PageRequest page = 2;
+
+  // Every entry must match for a thread to be returned. Empty does not filter.
+  //
+  // This is what makes metadata worth storing rather than merely echoing:
+  // "every thread still running for tenant 42" is answerable without your
+  // application keeping its own index of thread IDs.
+  map<string, string> metadata = 2;
+
+  arsox.common.v1.PageRequest page = 3;
 }
 
 message ListThreadsResponse {
   // Naturally chronological, because thread IDs are UUIDv7.
-  repeated Thread threads = 1;
+  repeated ThreadSummary threads = 1;
   arsox.common.v1.PageResponse page = 2;
 }
 

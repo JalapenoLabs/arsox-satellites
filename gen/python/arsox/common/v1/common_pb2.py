@@ -24,7 +24,7 @@ _sym_db = _symbol_database.Default()
 
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1c\x61rsox/common/v1/common.proto\x12\x0f\x61rsox.common.v1\"b\n\tTimestamp\x12#\n\repoch_seconds\x18\x01 \x01(\x03R\x0c\x65pochSeconds\x12\x14\n\x05nanos\x18\x02 \x01(\rR\x05nanos\x12\x1a\n\x08timezone\x18\x03 \x01(\tR\x08timezone\":\n\x08\x44uration\x12\x18\n\x07seconds\x18\x01 \x01(\x03R\x07seconds\x12\x14\n\x05nanos\x18\x02 \x01(\x05R\x05nanos\"X\n\x05Money\x12#\n\rcurrency_code\x18\x01 \x01(\tR\x0c\x63urrencyCode\x12\x14\n\x05units\x18\x02 \x01(\x03R\x05units\x12\x14\n\x05nanos\x18\x03 \x01(\x05R\x05nanos\"\x0b\n\tUnlimited\"o\n\x0cTokenCeiling\x12\x18\n\x06tokens\x18\x01 \x01(\x04H\x00R\x06tokens\x12:\n\tunlimited\x18\x02 \x01(\x0b\x32\x1a.arsox.common.v1.UnlimitedH\x00R\tunlimitedB\t\n\x07\x63\x65iling\"\x82\x01\n\x0b\x43ostCeiling\x12,\n\x04\x63ost\x18\x01 \x01(\x0b\x32\x16.arsox.common.v1.MoneyH\x00R\x04\x63ost\x12:\n\tunlimited\x18\x02 \x01(\x0b\x32\x1a.arsox.common.v1.UnlimitedH\x00R\tunlimitedB\t\n\x07\x63\x65iling\"\x91\x01\n\x0f\x44urationCeiling\x12\x37\n\x08\x64uration\x18\x01 \x01(\x0b\x32\x19.arsox.common.v1.DurationH\x00R\x08\x64uration\x12:\n\tunlimited\x18\x02 \x01(\x0b\x32\x1a.arsox.common.v1.UnlimitedH\x00R\tunlimitedB\t\n\x07\x63\x65iling\";\n\x0bPageRequest\x12\x14\n\x05limit\x18\x01 \x01(\rR\x05limit\x12\x16\n\x06\x63ursor\x18\x02 \x01(\tR\x06\x63ursor\"T\n\x0cPageResponse\x12\x1f\n\x0bnext_cursor\x18\x01 \x01(\tR\nnextCursor\x12\x19\n\x05total\x18\x02 \x01(\x04H\x00R\x05total\x88\x01\x01\x42\x08\n\x06_totalB\x80\x01\n\x13\x63om.arsox.common.v1B\x0b\x43ommonProtoP\x01\xa2\x02\x03\x41\x43X\xaa\x02\x0f\x41rsox.Common.V1\xca\x02\x0f\x41rsox\\Common\\V1\xe2\x02\x1b\x41rsox\\Common\\V1\\GPBMetadata\xea\x02\x11\x41rsox::Common::V1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1c\x61rsox/common/v1/common.proto\x12\x0f\x61rsox.common.v1\"b\n\tTimestamp\x12#\n\repoch_seconds\x18\x01 \x01(\x03R\x0c\x65pochSeconds\x12\x14\n\x05nanos\x18\x02 \x01(\rR\x05nanos\x12\x1a\n\x08timezone\x18\x03 \x01(\tR\x08timezone\":\n\x08\x44uration\x12\x18\n\x07seconds\x18\x01 \x01(\x03R\x07seconds\x12\x14\n\x05nanos\x18\x02 \x01(\x05R\x05nanos\"X\n\x05Money\x12#\n\rcurrency_code\x18\x01 \x01(\tR\x0c\x63urrencyCode\x12\x14\n\x05units\x18\x02 \x01(\x03R\x05units\x12\x14\n\x05nanos\x18\x03 \x01(\x05R\x05nanos\"X\n\x06Secret\x12\x19\n\x05value\x18\x01 \x01(\tH\x00R\x05value\x88\x01\x01\x12\x1d\n\x07\x64isplay\x18\x02 \x01(\tH\x01R\x07\x64isplay\x88\x01\x01\x42\x08\n\x06_valueB\n\n\x08_display\"\x0b\n\tUnlimited\"o\n\x0cTokenCeiling\x12\x18\n\x06tokens\x18\x01 \x01(\x04H\x00R\x06tokens\x12:\n\tunlimited\x18\x02 \x01(\x0b\x32\x1a.arsox.common.v1.UnlimitedH\x00R\tunlimitedB\t\n\x07\x63\x65iling\"\x82\x01\n\x0b\x43ostCeiling\x12,\n\x04\x63ost\x18\x01 \x01(\x0b\x32\x16.arsox.common.v1.MoneyH\x00R\x04\x63ost\x12:\n\tunlimited\x18\x02 \x01(\x0b\x32\x1a.arsox.common.v1.UnlimitedH\x00R\tunlimitedB\t\n\x07\x63\x65iling\"\x91\x01\n\x0f\x44urationCeiling\x12\x37\n\x08\x64uration\x18\x01 \x01(\x0b\x32\x19.arsox.common.v1.DurationH\x00R\x08\x64uration\x12:\n\tunlimited\x18\x02 \x01(\x0b\x32\x1a.arsox.common.v1.UnlimitedH\x00R\tunlimitedB\t\n\x07\x63\x65iling\";\n\x0bPageRequest\x12\x14\n\x05limit\x18\x01 \x01(\rR\x05limit\x12\x16\n\x06\x63ursor\x18\x02 \x01(\tR\x06\x63ursor\"T\n\x0cPageResponse\x12\x1f\n\x0bnext_cursor\x18\x01 \x01(\tR\nnextCursor\x12\x19\n\x05total\x18\x02 \x01(\x04H\x00R\x05total\x88\x01\x01\x42\x08\n\x06_totalB\x80\x01\n\x13\x63om.arsox.common.v1B\x0b\x43ommonProtoP\x01\xa2\x02\x03\x41\x43X\xaa\x02\x0f\x41rsox.Common.V1\xca\x02\x0f\x41rsox\\Common\\V1\xe2\x02\x1b\x41rsox\\Common\\V1\\GPBMetadata\xea\x02\x11\x41rsox::Common::V1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -38,16 +38,18 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_DURATION']._serialized_end=207
   _globals['_MONEY']._serialized_start=209
   _globals['_MONEY']._serialized_end=297
-  _globals['_UNLIMITED']._serialized_start=299
-  _globals['_UNLIMITED']._serialized_end=310
-  _globals['_TOKENCEILING']._serialized_start=312
-  _globals['_TOKENCEILING']._serialized_end=423
-  _globals['_COSTCEILING']._serialized_start=426
-  _globals['_COSTCEILING']._serialized_end=556
-  _globals['_DURATIONCEILING']._serialized_start=559
-  _globals['_DURATIONCEILING']._serialized_end=704
-  _globals['_PAGEREQUEST']._serialized_start=706
-  _globals['_PAGEREQUEST']._serialized_end=765
-  _globals['_PAGERESPONSE']._serialized_start=767
-  _globals['_PAGERESPONSE']._serialized_end=851
+  _globals['_SECRET']._serialized_start=299
+  _globals['_SECRET']._serialized_end=387
+  _globals['_UNLIMITED']._serialized_start=389
+  _globals['_UNLIMITED']._serialized_end=400
+  _globals['_TOKENCEILING']._serialized_start=402
+  _globals['_TOKENCEILING']._serialized_end=513
+  _globals['_COSTCEILING']._serialized_start=516
+  _globals['_COSTCEILING']._serialized_end=646
+  _globals['_DURATIONCEILING']._serialized_start=649
+  _globals['_DURATIONCEILING']._serialized_end=794
+  _globals['_PAGEREQUEST']._serialized_start=796
+  _globals['_PAGEREQUEST']._serialized_end=855
+  _globals['_PAGERESPONSE']._serialized_start=857
+  _globals['_PAGERESPONSE']._serialized_end=941
 # @@protoc_insertion_point(module_scope)

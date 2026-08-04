@@ -32,6 +32,13 @@ THREAD_STATE_DESTROYED: ThreadState
 
 class Thread(_message.Message):
     __slots__ = ()
+    class MetadataEntry(_message.Message):
+        __slots__ = ()
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
     STATE_FIELD_NUMBER: _ClassVar[int]
     SETTINGS_FIELD_NUMBER: _ClassVar[int]
@@ -43,6 +50,7 @@ class Thread(_message.Message):
     PENDING_QUESTIONS_FIELD_NUMBER: _ClassVar[int]
     PENDING_PLAN_FIELD_NUMBER: _ClassVar[int]
     LATEST_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
     thread_id: str
     state: ThreadState
     settings: _settings_pb2.ThreadSettings
@@ -54,15 +62,56 @@ class Thread(_message.Message):
     pending_questions: _question_pb2.QuestionSet
     pending_plan: _plan_pb2.Plan
     latest_sequence: int
-    def __init__(self, thread_id: _Optional[str] = ..., state: _Optional[_Union[ThreadState, str]] = ..., settings: _Optional[_Union[_settings_pb2.ThreadSettings, _Mapping]] = ..., created_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., last_activity_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., expires_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., queue_depth: _Optional[int] = ..., current_turn_id: _Optional[str] = ..., pending_questions: _Optional[_Union[_question_pb2.QuestionSet, _Mapping]] = ..., pending_plan: _Optional[_Union[_plan_pb2.Plan, _Mapping]] = ..., latest_sequence: _Optional[int] = ...) -> None: ...
+    metadata: _containers.ScalarMap[str, str]
+    def __init__(self, thread_id: _Optional[str] = ..., state: _Optional[_Union[ThreadState, str]] = ..., settings: _Optional[_Union[_settings_pb2.ThreadSettings, _Mapping]] = ..., created_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., last_activity_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., expires_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., queue_depth: _Optional[int] = ..., current_turn_id: _Optional[str] = ..., pending_questions: _Optional[_Union[_question_pb2.QuestionSet, _Mapping]] = ..., pending_plan: _Optional[_Union[_plan_pb2.Plan, _Mapping]] = ..., latest_sequence: _Optional[int] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+
+class ThreadSummary(_message.Message):
+    __slots__ = ()
+    class MetadataEntry(_message.Message):
+        __slots__ = ()
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
+    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    STATE_FIELD_NUMBER: _ClassVar[int]
+    QUEUE_DEPTH_FIELD_NUMBER: _ClassVar[int]
+    CURRENT_TURN_ID_FIELD_NUMBER: _ClassVar[int]
+    CREATED_AT_FIELD_NUMBER: _ClassVar[int]
+    LAST_ACTIVITY_AT_FIELD_NUMBER: _ClassVar[int]
+    EXPIRES_AT_FIELD_NUMBER: _ClassVar[int]
+    WORKSPACE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    LATEST_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
+    thread_id: str
+    state: ThreadState
+    queue_depth: int
+    current_turn_id: str
+    created_at: _common_pb2.Timestamp
+    last_activity_at: _common_pb2.Timestamp
+    expires_at: _common_pb2.Timestamp
+    workspace_bytes: int
+    latest_sequence: int
+    metadata: _containers.ScalarMap[str, str]
+    def __init__(self, thread_id: _Optional[str] = ..., state: _Optional[_Union[ThreadState, str]] = ..., queue_depth: _Optional[int] = ..., current_turn_id: _Optional[str] = ..., created_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., last_activity_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., expires_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., workspace_bytes: _Optional[int] = ..., latest_sequence: _Optional[int] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class CreateThreadRequest(_message.Message):
     __slots__ = ()
+    class MetadataEntry(_message.Message):
+        __slots__ = ()
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     SETTINGS_FIELD_NUMBER: _ClassVar[int]
     IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
     settings: _settings_pb2.ThreadSettings
     idempotency_key: str
-    def __init__(self, settings: _Optional[_Union[_settings_pb2.ThreadSettings, _Mapping]] = ..., idempotency_key: _Optional[str] = ...) -> None: ...
+    metadata: _containers.ScalarMap[str, str]
+    def __init__(self, settings: _Optional[_Union[_settings_pb2.ThreadSettings, _Mapping]] = ..., idempotency_key: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
 
 class CreateThreadResponse(_message.Message):
     __slots__ = ()
@@ -86,19 +135,28 @@ class GetThreadResponse(_message.Message):
 
 class ListThreadsRequest(_message.Message):
     __slots__ = ()
+    class MetadataEntry(_message.Message):
+        __slots__ = ()
+        KEY_FIELD_NUMBER: _ClassVar[int]
+        VALUE_FIELD_NUMBER: _ClassVar[int]
+        key: str
+        value: str
+        def __init__(self, key: _Optional[str] = ..., value: _Optional[str] = ...) -> None: ...
     STATES_FIELD_NUMBER: _ClassVar[int]
+    METADATA_FIELD_NUMBER: _ClassVar[int]
     PAGE_FIELD_NUMBER: _ClassVar[int]
     states: _containers.RepeatedScalarFieldContainer[ThreadState]
+    metadata: _containers.ScalarMap[str, str]
     page: _common_pb2.PageRequest
-    def __init__(self, states: _Optional[_Iterable[_Union[ThreadState, str]]] = ..., page: _Optional[_Union[_common_pb2.PageRequest, _Mapping]] = ...) -> None: ...
+    def __init__(self, states: _Optional[_Iterable[_Union[ThreadState, str]]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., page: _Optional[_Union[_common_pb2.PageRequest, _Mapping]] = ...) -> None: ...
 
 class ListThreadsResponse(_message.Message):
     __slots__ = ()
     THREADS_FIELD_NUMBER: _ClassVar[int]
     PAGE_FIELD_NUMBER: _ClassVar[int]
-    threads: _containers.RepeatedCompositeFieldContainer[Thread]
+    threads: _containers.RepeatedCompositeFieldContainer[ThreadSummary]
     page: _common_pb2.PageResponse
-    def __init__(self, threads: _Optional[_Iterable[_Union[Thread, _Mapping]]] = ..., page: _Optional[_Union[_common_pb2.PageResponse, _Mapping]] = ...) -> None: ...
+    def __init__(self, threads: _Optional[_Iterable[_Union[ThreadSummary, _Mapping]]] = ..., page: _Optional[_Union[_common_pb2.PageResponse, _Mapping]] = ...) -> None: ...
 
 class DestroyThreadRequest(_message.Message):
     __slots__ = ()

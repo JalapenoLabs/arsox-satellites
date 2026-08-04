@@ -31,14 +31,14 @@ pub struct Budget {
 /// GitLab and Bitbucket can follow.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GithubIntegration {
-    #[prost(string, tag="1")]
-    pub token: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="1")]
+    pub token: ::core::option::Option<super::super::common::v1::Secret>,
 }
 /// Lets the agents look up and act on Jira items.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct JiraIntegration {
-    #[prost(string, tag="1")]
-    pub token: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="1")]
+    pub token: ::core::option::Option<super::super::common::v1::Secret>,
     /// e.g. "<https://your-org.atlassian.net".>
     #[prost(string, tag="2")]
     pub base_url: ::prost::alloc::string::String,
@@ -92,6 +92,11 @@ pub struct ResourceLimits {
     /// download. Absent uses 100 MiB.
     #[prost(uint64, optional, tag="2")]
     pub artifact_cap_bytes: ::core::option::Option<u64>,
+    /// How many turns may wait behind the running one. Submissions past this are
+    /// rejected with TURN_QUEUE_FULL rather than accumulating without bound.
+    /// Absent uses the satellite's default.
+    #[prost(uint32, optional, tag="3")]
+    pub max_queued_turns: ::core::option::Option<u32>,
 }
 /// Bounds on the operations that can otherwise hang forever.
 ///
@@ -145,11 +150,11 @@ pub struct LlmAuth {
 pub mod llm_auth {
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum Credential {
-        #[prost(string, tag="1")]
-        ApiKey(::prost::alloc::string::String),
+        #[prost(message, tag="1")]
+        ApiKey(super::super::super::common::v1::Secret),
         /// A long-lived token such as the one `claude setup-token` mints.
-        #[prost(string, tag="2")]
-        SubscriptionToken(::prost::alloc::string::String),
+        #[prost(message, tag="2")]
+        SubscriptionToken(super::super::super::common::v1::Secret),
         /// Subscription access and refresh tokens.
         #[prost(message, tag="3")]
         Oauth(super::OAuthCredential),
@@ -157,12 +162,12 @@ pub mod llm_auth {
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct OAuthCredential {
-    #[prost(string, tag="1")]
-    pub access_token: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="1")]
+    pub access_token: ::core::option::Option<super::super::common::v1::Secret>,
     /// Absent means the satellite cannot refresh, and the endpoint fails over once
     /// the access token expires.
-    #[prost(string, optional, tag="2")]
-    pub refresh_token: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag="2")]
+    pub refresh_token: ::core::option::Option<super::super::common::v1::Secret>,
     #[prost(message, optional, tag="3")]
     pub expires_at: ::core::option::Option<super::super::common::v1::Timestamp>,
 }
@@ -571,16 +576,16 @@ pub mod git_auth {
     pub enum Credential {
         #[prost(message, tag="1")]
         SshKey(super::SshKeyPair),
-        #[prost(string, tag="2")]
-        PersonalAccessToken(::prost::alloc::string::String),
+        #[prost(message, tag="2")]
+        PersonalAccessToken(super::super::super::common::v1::Secret),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SshKeyPair {
-    #[prost(string, tag="1")]
-    pub private_key: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="1")]
+    pub private_key: ::core::option::Option<super::super::common::v1::Secret>,
     /// Absent is fine for most remotes, which derive the public key from the
-    /// private one.
+    /// private one. Not a secret, and returned in full.
     #[prost(string, optional, tag="2")]
     pub public_key: ::core::option::Option<::prost::alloc::string::String>,
 }
@@ -653,8 +658,11 @@ pub struct Repo {
 pub struct EnvVar {
     #[prost(string, tag="1")]
     pub key: ::prost::alloc::string::String,
-    #[prost(string, tag="2")]
-    pub value: ::prost::alloc::string::String,
+    /// Carries the credential type even for values marked public, so one rule
+    /// covers the whole contract: `value` goes up, `display` comes back. For a
+    /// public value the redaction is a no-op and `display` is the plaintext.
+    #[prost(message, optional, tag="2")]
+    pub value: ::core::option::Option<super::super::common::v1::Secret>,
     /// Absent means secret. Defaulting to secret fails safe: the cost of
     /// needlessly redacting a public value is a confusing log line, and the cost of
     /// the reverse is a leaked credential.
@@ -843,17 +851,20 @@ pub struct TeamMode {
 /// A server whose tools the agents may use.
 ///
 /// Arsox provides its own MCP tools alongside these, including team spawn and
-/// despawn, request_integration, and override_redaction.
+/// despawn, request_integration, and override_redaction. Those are MCP schemas
+/// offered to the agents rather than part of this contract, so they are not
+/// defined anywhere in these files.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct McpServer {
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
     #[prost(string, tag="2")]
     pub url: ::prost::alloc::string::String,
-    /// Sent on every request to the server. Values here are treated as secrets and
-    /// redacted like any other.
-    #[prost(map="string, string", tag="3")]
-    pub headers: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    /// Sent on every request to the server. Header values are credentials far more
+    /// often than not, so they carry the same type as every other credential and
+    /// come back redacted.
+    #[prost(map="string, message", tag="3")]
+    pub headers: ::std::collections::HashMap<::prost::alloc::string::String, super::super::common::v1::Secret>,
 }
 /// Headless Chrome, so frontend and QA work is not done blind.
 ///
@@ -986,5 +997,14 @@ pub struct ThreadSettings {
     pub resource_limits: ::core::option::Option<ResourceLimits>,
     #[prost(message, optional, tag="26")]
     pub timeouts: ::core::option::Option<Timeouts>,
+    /// Restart a turn the satellite interrupted, without waiting to be asked.
+    ///
+    /// Default off. When the satellite restarts mid-turn the thread and its
+    /// workspace survive and the turn is marked INTERRUPTED, and by default it
+    /// stays that way until you decide. Automatic resumption is the right call for
+    /// an unattended fleet and the wrong one when a human would want to look at
+    /// what happened first, which is why it is a choice rather than a behavior.
+    #[prost(bool, tag="27")]
+    pub resume_interrupted_turns: bool,
 }
 // @@protoc_insertion_point(module)

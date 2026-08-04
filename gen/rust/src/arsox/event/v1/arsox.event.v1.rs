@@ -192,7 +192,7 @@ pub struct RedactionOverridden {
     #[prost(string, tag="4")]
     pub operation: ::prost::alloc::string::String,
 }
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TurnStarted {
     #[prost(message, optional, tag="1")]
     pub turn: ::core::option::Option<super::super::turn::v1::Turn>,
@@ -248,7 +248,7 @@ impl Ceiling {
 /// narrower payload set. The control socket carries satellite lifecycle only and
 /// never thread content, and making that a structural property beats making it a
 /// promise somebody has to keep.
-#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ControlEvent {
     /// Monotonic per satellite, and unrelated to any thread's sequence.
     #[prost(uint64, tag="1")]
@@ -259,12 +259,12 @@ pub struct ControlEvent {
     /// forward compatibility reason as on ThreadEvent.
     #[prost(string, tag="3")]
     pub r#type: ::prost::alloc::string::String,
-    #[prost(oneof="control_event::Payload", tags="20, 21, 22, 23, 24, 25")]
+    #[prost(oneof="control_event::Payload", tags="20, 21, 22, 23, 24, 25, 26")]
     pub payload: ::core::option::Option<control_event::Payload>,
 }
 /// Nested message and enum types in `ControlEvent`.
 pub mod control_event {
-    #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Payload {
         #[prost(message, tag="20")]
         ThreadCreated(super::ThreadCreated),
@@ -278,6 +278,13 @@ pub mod control_event {
         HealthChanged(super::HealthChanged),
         #[prost(message, tag="25")]
         BudgetWarning(super::ControlBudgetWarning),
+        /// A failure that belongs to the satellite rather than to any thread, so it
+        /// has no thread stream to travel on. Its `thread_id` is absent and its
+        /// `sequence` is this stream's.
+        ///
+        /// Like its thread-scoped counterpart, this arm cannot be switched off.
+        #[prost(message, tag="26")]
+        Incident(super::super::super::incident::v1::Incident),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -557,6 +564,17 @@ pub struct ThreadEvent {
     /// hook rather than a hole.
     #[prost(string, tag="5")]
     pub r#type: ::prost::alloc::string::String,
+    /// Which team member this event belongs to, hoisted out of the payload.
+    ///
+    /// Duplicated for the same reason as `type`: a consumer can route or filter by
+    /// member without decoding the body, and without knowing which payload types
+    /// happen to carry an author. That is what makes a nine-agent thread renderable
+    /// as per-member panes rather than one unreadable scrollback.
+    ///
+    /// Absent for satellite-level events and for anything the commander did
+    /// directly.
+    #[prost(string, optional, tag="6")]
+    pub member_id: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(oneof="thread_event::Payload", tags="20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44")]
     pub payload: ::core::option::Option<thread_event::Payload>,
 }

@@ -42,6 +42,28 @@ pub struct GetReadinessResponse {
     #[prost(message, repeated, tag="2")]
     pub checks: ::prost::alloc::vec::Vec<ReadinessCheck>,
 }
+/// Disk the satellite is holding, across every thread.
+///
+/// Per-thread quotas stop one runaway workspace, and they do not stop forty
+/// well-behaved ones from filling a volume between them. This is what an
+/// orchestrator watches to decide it needs another satellite.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DiskUsage {
+    /// Total bytes under /workspace right now.
+    #[prost(uint64, tag="1")]
+    pub workspace_bytes: u64,
+    /// Bytes the volume has left, as the filesystem reports it.
+    #[prost(uint64, tag="2")]
+    pub available_bytes: u64,
+    /// The satellite-wide ceiling, when one is configured. Absent means the
+    /// volume's own capacity is the only limit.
+    #[prost(uint64, optional, tag="3")]
+    pub aggregate_quota_bytes: ::core::option::Option<u64>,
+    /// Bytes held by the embedded database, which grows with retained events,
+    /// incidents, and lifetime statistics rather than with workspace contents.
+    #[prost(uint64, tag="4")]
+    pub database_bytes: u64,
+}
 /// GET /v1/status
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GetStatusResponse {
@@ -55,8 +77,12 @@ pub struct GetStatusResponse {
     #[prost(uint32, tag="3")]
     pub running_threads: u32,
     /// Every thread the satellite still holds, whatever its state.
+    ///
+    /// Summaries rather than full threads: this endpoint gets polled, and a
+    /// configuration dump per thread is the wrong payload for an operational
+    /// question.
     #[prost(message, repeated, tag="4")]
-    pub threads: ::prost::alloc::vec::Vec<super::super::thread::v1::Thread>,
+    pub threads: ::prost::alloc::vec::Vec<super::super::thread::v1::ThreadSummary>,
     #[prost(message, optional, tag="5")]
     pub started_at: ::core::option::Option<super::super::common::v1::Timestamp>,
     /// Whether the satellite is running without a secret because
@@ -64,5 +90,7 @@ pub struct GetStatusResponse {
     /// API rather than only in the boot log.
     #[prost(bool, tag="6")]
     pub insecure_mode: bool,
+    #[prost(message, optional, tag="7")]
+    pub disk: ::core::option::Option<DiskUsage>,
 }
 // @@protoc_insertion_point(module)

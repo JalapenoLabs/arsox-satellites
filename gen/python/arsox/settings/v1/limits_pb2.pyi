@@ -24,9 +24,11 @@ class ResourceLimits(_message.Message):
     __slots__ = ()
     WORKSPACE_QUOTA_BYTES_FIELD_NUMBER: _ClassVar[int]
     ARTIFACT_CAP_BYTES_FIELD_NUMBER: _ClassVar[int]
+    MAX_QUEUED_TURNS_FIELD_NUMBER: _ClassVar[int]
     workspace_quota_bytes: int
     artifact_cap_bytes: int
-    def __init__(self, workspace_quota_bytes: _Optional[int] = ..., artifact_cap_bytes: _Optional[int] = ...) -> None: ...
+    max_queued_turns: int
+    def __init__(self, workspace_quota_bytes: _Optional[int] = ..., artifact_cap_bytes: _Optional[int] = ..., max_queued_turns: _Optional[int] = ...) -> None: ...
 
 class Timeouts(_message.Message):
     __slots__ = ()

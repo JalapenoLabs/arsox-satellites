@@ -31,10 +31,10 @@ message ModelEndpoint {
 // Credentials for one endpoint.
 message LlmAuth {
   oneof credential {
-    string api_key = 1;
+    arsox.common.v1.Secret api_key = 1;
 
     // A long-lived token such as the one `claude setup-token` mints.
-    string subscription_token = 2;
+    arsox.common.v1.Secret subscription_token = 2;
 
     // Subscription access and refresh tokens.
     OAuthCredential oauth = 3;
@@ -42,11 +42,11 @@ message LlmAuth {
 }
 
 message OAuthCredential {
-  string access_token = 1;
+  arsox.common.v1.Secret access_token = 1;
 
   // Absent means the satellite cannot refresh, and the endpoint fails over once
   // the access token expires.
-  optional string refresh_token = 2;
+  optional arsox.common.v1.Secret refresh_token = 2;
 
   optional arsox.common.v1.Timestamp expires_at = 3;
 }

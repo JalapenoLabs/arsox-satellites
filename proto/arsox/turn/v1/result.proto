@@ -5,6 +5,7 @@ syntax = "proto3";
 package arsox.turn.v1;
 
 import "arsox/artifact/v1/artifact.proto";
+import "arsox/common/v1/common.proto";
 import "arsox/error/v1/error.proto";
 import "arsox/incident/v1/incident.proto";
 import "arsox/interaction/v1/question.proto";
@@ -45,6 +46,9 @@ message StageOutcome {
 
   // Why it was skipped or how it failed. Absent when it simply ran.
   optional string reason = 3;
+
+  // Wall clock the stage consumed. Zero for a stage that was skipped.
+  arsox.common.v1.Duration elapsed = 4;
 }
 
 // How a pull request watch window resolved.
@@ -73,8 +77,18 @@ message TurnResult {
   // The commander's account of what it did, in markdown.
   string summary = 4;
 
+  // Every agent in the turn, every endpoint, combined.
   arsox.usage.v1.TokenUsage tokens = 5;
   arsox.usage.v1.CostEstimate cost = 6;
+
+  // The same totals split by the model that actually answered.
+  //
+  // Without this, failover is invisible in the accounting. A turn where the
+  // first endpoint burned two million tokens failing and the second did the real
+  // work looks identical to a clean run on the second, and the failover tax the
+  // README warns about is exactly the number you cannot see. A `recovered`
+  // incident says failover happened; this says what it cost.
+  repeated arsox.usage.v1.ModelStatistics by_model = 19;
 
   // Why the turn ended early. Absent on a turn that completed.
   optional arsox.error.v1.Error error = 7;
@@ -105,6 +119,14 @@ message TurnResult {
   // The agents repo commit this turn actually ran against, resolved from `ref`.
   // Absent when no agents repo was configured.
   optional string agents_repo_commit = 18;
+
+  // The turn's `metadata`, repeated here rather than referenced.
+  //
+  // A consumer reacting to `turn.completed` receives only this message, and
+  // "which customer's job just finished" is precisely the question it needs to
+  // answer at that moment. Making it look up the Turn first would defeat the
+  // point of carrying correlation data at all.
+  map<string, string> metadata = 20;
 }
 
 message GetTurnRequest {

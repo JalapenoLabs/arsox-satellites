@@ -10,7 +10,7 @@ import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { Timestamp } from "../../common/v1/common_pb.js";
 import { file_arsox_common_v1_common } from "../../common/v1/common_pb.js";
-import type { Thread } from "../../thread/v1/thread_pb.js";
+import type { ThreadSummary } from "../../thread/v1/thread_pb.js";
 import { file_arsox_thread_v1_thread } from "../../thread/v1/thread_pb.js";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -18,7 +18,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/satellite/v1/satellite.proto.
  */
 export const file_arsox_satellite_v1_satellite: GenFile = /*@__PURE__*/
-  fileDesc("CiJhcnNveC9zYXRlbGxpdGUvdjEvc2F0ZWxsaXRlLnByb3RvEhJhcnNveC5zYXRlbGxpdGUudjEiWQoSR2V0VmVyc2lvblJlc3BvbnNlEhkKEXNhdGVsbGl0ZV92ZXJzaW9uGAEgASgJEhMKC3Byb3RvX21ham9yGAIgASgNEhMKC3Byb3RvX21pbm9yGAMgASgNIk8KDlJlYWRpbmVzc0NoZWNrEgwKBG5hbWUYASABKAkSDwoHcGFzc2luZxgCIAEoCBITCgZkZXRhaWwYAyABKAlIAIgBAUIJCgdfZGV0YWlsIlkKFEdldFJlYWRpbmVzc1Jlc3BvbnNlEg0KBXJlYWR5GAEgASgIEjIKBmNoZWNrcxgCIAMoCzIiLmFyc294LnNhdGVsbGl0ZS52MS5SZWFkaW5lc3NDaGVjayLYAQoRR2V0U3RhdHVzUmVzcG9uc2USGQoRc2F0ZWxsaXRlX3ZlcnNpb24YASABKAkSHgoWbWF4X2NvbmN1cnJlbnRfdGhyZWFkcxgCIAEoDRIXCg9ydW5uaW5nX3RocmVhZHMYAyABKA0SKAoHdGhyZWFkcxgEIAMoCzIXLmFyc294LnRocmVhZC52MS5UaHJlYWQSLgoKc3RhcnRlZF9hdBgFIAEoCzIaLmFyc294LmNvbW1vbi52MS5UaW1lc3RhbXASFQoNaW5zZWN1cmVfbW9kZRgGIAEoCEKSAQoWY29tLmFyc294LnNhdGVsbGl0ZS52MUIOU2F0ZWxsaXRlUHJvdG9QAaICA0FTWKoCEkFyc294LlNhdGVsbGl0ZS5WMcoCEkFyc294XFNhdGVsbGl0ZVxWMeICHkFyc294XFNhdGVsbGl0ZVxWMVxHUEJNZXRhZGF0YeoCFEFyc294OjpTYXRlbGxpdGU6OlYxYgZwcm90bzM", [file_arsox_common_v1_common, file_arsox_thread_v1_thread]);
+  fileDesc("CiJhcnNveC9zYXRlbGxpdGUvdjEvc2F0ZWxsaXRlLnByb3RvEhJhcnNveC5zYXRlbGxpdGUudjEiWQoSR2V0VmVyc2lvblJlc3BvbnNlEhkKEXNhdGVsbGl0ZV92ZXJzaW9uGAEgASgJEhMKC3Byb3RvX21ham9yGAIgASgNEhMKC3Byb3RvX21pbm9yGAMgASgNIk8KDlJlYWRpbmVzc0NoZWNrEgwKBG5hbWUYASABKAkSDwoHcGFzc2luZxgCIAEoCBITCgZkZXRhaWwYAyABKAlIAIgBAUIJCgdfZGV0YWlsIlkKFEdldFJlYWRpbmVzc1Jlc3BvbnNlEg0KBXJlYWR5GAEgASgIEjIKBmNoZWNrcxgCIAMoCzIiLmFyc294LnNhdGVsbGl0ZS52MS5SZWFkaW5lc3NDaGVjayKTAQoJRGlza1VzYWdlEhcKD3dvcmtzcGFjZV9ieXRlcxgBIAEoBBIXCg9hdmFpbGFibGVfYnl0ZXMYAiABKAQSIgoVYWdncmVnYXRlX3F1b3RhX2J5dGVzGAMgASgESACIAQESFgoOZGF0YWJhc2VfYnl0ZXMYBCABKARCGAoWX2FnZ3JlZ2F0ZV9xdW90YV9ieXRlcyKMAgoRR2V0U3RhdHVzUmVzcG9uc2USGQoRc2F0ZWxsaXRlX3ZlcnNpb24YASABKAkSHgoWbWF4X2NvbmN1cnJlbnRfdGhyZWFkcxgCIAEoDRIXCg9ydW5uaW5nX3RocmVhZHMYAyABKA0SLwoHdGhyZWFkcxgEIAMoCzIeLmFyc294LnRocmVhZC52MS5UaHJlYWRTdW1tYXJ5Ei4KCnN0YXJ0ZWRfYXQYBSABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wEhUKDWluc2VjdXJlX21vZGUYBiABKAgSKwoEZGlzaxgHIAEoCzIdLmFyc294LnNhdGVsbGl0ZS52MS5EaXNrVXNhZ2VCkgEKFmNvbS5hcnNveC5zYXRlbGxpdGUudjFCDlNhdGVsbGl0ZVByb3RvUAGiAgNBU1iqAhJBcnNveC5TYXRlbGxpdGUuVjHKAhJBcnNveFxTYXRlbGxpdGVcVjHiAh5BcnNveFxTYXRlbGxpdGVcVjFcR1BCTWV0YWRhdGHqAhRBcnNveDo6U2F0ZWxsaXRlOjpWMWIGcHJvdG8z", [file_arsox_common_v1_common, file_arsox_thread_v1_thread]);
 
 /**
  * GET /v1/version
@@ -122,6 +122,54 @@ export const GetReadinessResponseSchema: GenMessage<GetReadinessResponse> = /*@_
   messageDesc(file_arsox_satellite_v1_satellite, 2);
 
 /**
+ * Disk the satellite is holding, across every thread.
+ *
+ * Per-thread quotas stop one runaway workspace, and they do not stop forty
+ * well-behaved ones from filling a volume between them. This is what an
+ * orchestrator watches to decide it needs another satellite.
+ *
+ * @generated from message arsox.satellite.v1.DiskUsage
+ */
+export type DiskUsage = Message<"arsox.satellite.v1.DiskUsage"> & {
+  /**
+   * Total bytes under /workspace right now.
+   *
+   * @generated from field: uint64 workspace_bytes = 1;
+   */
+  workspaceBytes: bigint;
+
+  /**
+   * Bytes the volume has left, as the filesystem reports it.
+   *
+   * @generated from field: uint64 available_bytes = 2;
+   */
+  availableBytes: bigint;
+
+  /**
+   * The satellite-wide ceiling, when one is configured. Absent means the
+   * volume's own capacity is the only limit.
+   *
+   * @generated from field: optional uint64 aggregate_quota_bytes = 3;
+   */
+  aggregateQuotaBytes?: bigint;
+
+  /**
+   * Bytes held by the embedded database, which grows with retained events,
+   * incidents, and lifetime statistics rather than with workspace contents.
+   *
+   * @generated from field: uint64 database_bytes = 4;
+   */
+  databaseBytes: bigint;
+};
+
+/**
+ * Describes the message arsox.satellite.v1.DiskUsage.
+ * Use `create(DiskUsageSchema)` to create a new message.
+ */
+export const DiskUsageSchema: GenMessage<DiskUsage> = /*@__PURE__*/
+  messageDesc(file_arsox_satellite_v1_satellite, 3);
+
+/**
  * GET /v1/status
  *
  * @generated from message arsox.satellite.v1.GetStatusResponse
@@ -150,9 +198,13 @@ export type GetStatusResponse = Message<"arsox.satellite.v1.GetStatusResponse"> 
   /**
    * Every thread the satellite still holds, whatever its state.
    *
-   * @generated from field: repeated arsox.thread.v1.Thread threads = 4;
+   * Summaries rather than full threads: this endpoint gets polled, and a
+   * configuration dump per thread is the wrong payload for an operational
+   * question.
+   *
+   * @generated from field: repeated arsox.thread.v1.ThreadSummary threads = 4;
    */
-  threads: Thread[];
+  threads: ThreadSummary[];
 
   /**
    * @generated from field: arsox.common.v1.Timestamp started_at = 5;
@@ -167,6 +219,11 @@ export type GetStatusResponse = Message<"arsox.satellite.v1.GetStatusResponse"> 
    * @generated from field: bool insecure_mode = 6;
    */
   insecureMode: boolean;
+
+  /**
+   * @generated from field: arsox.satellite.v1.DiskUsage disk = 7;
+   */
+  disk?: DiskUsage;
 };
 
 /**
@@ -174,5 +231,5 @@ export type GetStatusResponse = Message<"arsox.satellite.v1.GetStatusResponse"> 
  * Use `create(GetStatusResponseSchema)` to create a new message.
  */
 export const GetStatusResponseSchema: GenMessage<GetStatusResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_satellite_v1_satellite, 3);
+  messageDesc(file_arsox_satellite_v1_satellite, 4);
 

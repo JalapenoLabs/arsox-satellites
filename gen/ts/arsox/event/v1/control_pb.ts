@@ -10,6 +10,8 @@ import type { Timestamp } from "../../common/v1/common_pb.js";
 import { file_arsox_common_v1_common } from "../../common/v1/common_pb.js";
 import type { Ceiling } from "./lifecycle_pb.js";
 import { file_arsox_event_v1_lifecycle } from "./lifecycle_pb.js";
+import type { Incident } from "../../incident/v1/incident_pb.js";
+import { file_arsox_incident_v1_incident } from "../../incident/v1/incident_pb.js";
 import type { ThreadState } from "../../thread/v1/thread_pb.js";
 import { file_arsox_thread_v1_thread } from "../../thread/v1/thread_pb.js";
 import type { Message } from "@bufbuild/protobuf";
@@ -18,7 +20,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/event/v1/control.proto.
  */
 export const file_arsox_event_v1_control: GenFile = /*@__PURE__*/
-  fileDesc("ChxhcnNveC9ldmVudC92MS9jb250cm9sLnByb3RvEg5hcnNveC5ldmVudC52MSLfAwoMQ29udHJvbEV2ZW50EhAKCHNlcXVlbmNlGAEgASgEEi8KC29jY3VycmVkX2F0GAIgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBIMCgR0eXBlGAMgASgJEjcKDnRocmVhZF9jcmVhdGVkGBQgASgLMh0uYXJzb3guZXZlbnQudjEuVGhyZWFkQ3JlYXRlZEgAEkIKFHRocmVhZF9zdGF0ZV9jaGFuZ2VkGBUgASgLMiIuYXJzb3guZXZlbnQudjEuVGhyZWFkU3RhdGVDaGFuZ2VkSAASOwoQdGhyZWFkX2Rlc3Ryb3llZBgWIAEoCzIfLmFyc294LmV2ZW50LnYxLlRocmVhZERlc3Ryb3llZEgAEkAKE3F1ZXVlX2RlcHRoX2NoYW5nZWQYFyABKAsyIS5hcnNveC5ldmVudC52MS5RdWV1ZURlcHRoQ2hhbmdlZEgAEjcKDmhlYWx0aF9jaGFuZ2VkGBggASgLMh0uYXJzb3guZXZlbnQudjEuSGVhbHRoQ2hhbmdlZEgAEj4KDmJ1ZGdldF93YXJuaW5nGBkgASgLMiQuYXJzb3guZXZlbnQudjEuQ29udHJvbEJ1ZGdldFdhcm5pbmdIAEIJCgdwYXlsb2FkIiIKDVRocmVhZENyZWF0ZWQSEQoJdGhyZWFkX2lkGAEgASgJIoYBChJUaHJlYWRTdGF0ZUNoYW5nZWQSEQoJdGhyZWFkX2lkGAEgASgJEi4KCHByZXZpb3VzGAIgASgOMhwuYXJzb3gudGhyZWFkLnYxLlRocmVhZFN0YXRlEi0KB2N1cnJlbnQYAyABKA4yHC5hcnNveC50aHJlYWQudjEuVGhyZWFkU3RhdGUiVQoPVGhyZWFkRGVzdHJveWVkEhEKCXRocmVhZF9pZBgBIAEoCRIvCgZyZWFzb24YAiABKA4yHy5hcnNveC5ldmVudC52MS5UaHJlYWRFbmRSZWFzb24iOwoRUXVldWVEZXB0aENoYW5nZWQSEQoJdGhyZWFkX2lkGAEgASgJEhMKC3F1ZXVlX2RlcHRoGAIgASgNIlIKDUhlYWx0aENoYW5nZWQSDQoFcmVhZHkYASABKAgSEgoKY2hlY2tfbmFtZRgCIAEoCRITCgZkZXRhaWwYAyABKAlIAIgBAUIJCgdfZGV0YWlsImkKFENvbnRyb2xCdWRnZXRXYXJuaW5nEhEKCXRocmVhZF9pZBgBIAEoCRIoCgdjZWlsaW5nGAIgASgOMhcuYXJzb3guZXZlbnQudjEuQ2VpbGluZxIUCgxwZXJjZW50X3VzZWQYAyABKA0qlQEKD1RocmVhZEVuZFJlYXNvbhIhCh1USFJFQURfRU5EX1JFQVNPTl9VTlNQRUNJRklFRBAAEh8KG1RIUkVBRF9FTkRfUkVBU09OX0RFU1RST1lFRBABEh0KGVRIUkVBRF9FTkRfUkVBU09OX0VYUElSRUQQAhIfChtUSFJFQURfRU5EX1JFQVNPTl9DT01QTEVURUQQA0J8ChJjb20uYXJzb3guZXZlbnQudjFCDENvbnRyb2xQcm90b1ABogIDQUVYqgIOQXJzb3guRXZlbnQuVjHKAg5BcnNveFxFdmVudFxWMeICGkFyc294XEV2ZW50XFYxXEdQQk1ldGFkYXRh6gIQQXJzb3g6OkV2ZW50OjpWMWIGcHJvdG8z", [file_arsox_common_v1_common, file_arsox_event_v1_lifecycle, file_arsox_thread_v1_thread]);
+  fileDesc("ChxhcnNveC9ldmVudC92MS9jb250cm9sLnByb3RvEg5hcnNveC5ldmVudC52MSKQBAoMQ29udHJvbEV2ZW50EhAKCHNlcXVlbmNlGAEgASgEEi8KC29jY3VycmVkX2F0GAIgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBIMCgR0eXBlGAMgASgJEjcKDnRocmVhZF9jcmVhdGVkGBQgASgLMh0uYXJzb3guZXZlbnQudjEuVGhyZWFkQ3JlYXRlZEgAEkIKFHRocmVhZF9zdGF0ZV9jaGFuZ2VkGBUgASgLMiIuYXJzb3guZXZlbnQudjEuVGhyZWFkU3RhdGVDaGFuZ2VkSAASOwoQdGhyZWFkX2Rlc3Ryb3llZBgWIAEoCzIfLmFyc294LmV2ZW50LnYxLlRocmVhZERlc3Ryb3llZEgAEkAKE3F1ZXVlX2RlcHRoX2NoYW5nZWQYFyABKAsyIS5hcnNveC5ldmVudC52MS5RdWV1ZURlcHRoQ2hhbmdlZEgAEjcKDmhlYWx0aF9jaGFuZ2VkGBggASgLMh0uYXJzb3guZXZlbnQudjEuSGVhbHRoQ2hhbmdlZEgAEj4KDmJ1ZGdldF93YXJuaW5nGBkgASgLMiQuYXJzb3guZXZlbnQudjEuQ29udHJvbEJ1ZGdldFdhcm5pbmdIABIvCghpbmNpZGVudBgaIAEoCzIbLmFyc294LmluY2lkZW50LnYxLkluY2lkZW50SABCCQoHcGF5bG9hZCIiCg1UaHJlYWRDcmVhdGVkEhEKCXRocmVhZF9pZBgBIAEoCSKGAQoSVGhyZWFkU3RhdGVDaGFuZ2VkEhEKCXRocmVhZF9pZBgBIAEoCRIuCghwcmV2aW91cxgCIAEoDjIcLmFyc294LnRocmVhZC52MS5UaHJlYWRTdGF0ZRItCgdjdXJyZW50GAMgASgOMhwuYXJzb3gudGhyZWFkLnYxLlRocmVhZFN0YXRlIlUKD1RocmVhZERlc3Ryb3llZBIRCgl0aHJlYWRfaWQYASABKAkSLwoGcmVhc29uGAIgASgOMh8uYXJzb3guZXZlbnQudjEuVGhyZWFkRW5kUmVhc29uIjsKEVF1ZXVlRGVwdGhDaGFuZ2VkEhEKCXRocmVhZF9pZBgBIAEoCRITCgtxdWV1ZV9kZXB0aBgCIAEoDSJSCg1IZWFsdGhDaGFuZ2VkEg0KBXJlYWR5GAEgASgIEhIKCmNoZWNrX25hbWUYAiABKAkSEwoGZGV0YWlsGAMgASgJSACIAQFCCQoHX2RldGFpbCJpChRDb250cm9sQnVkZ2V0V2FybmluZxIRCgl0aHJlYWRfaWQYASABKAkSKAoHY2VpbGluZxgCIAEoDjIXLmFyc294LmV2ZW50LnYxLkNlaWxpbmcSFAoMcGVyY2VudF91c2VkGAMgASgNKpUBCg9UaHJlYWRFbmRSZWFzb24SIQodVEhSRUFEX0VORF9SRUFTT05fVU5TUEVDSUZJRUQQABIfChtUSFJFQURfRU5EX1JFQVNPTl9ERVNUUk9ZRUQQARIdChlUSFJFQURfRU5EX1JFQVNPTl9FWFBJUkVEEAISHwobVEhSRUFEX0VORF9SRUFTT05fQ09NUExFVEVEEANCfAoSY29tLmFyc294LmV2ZW50LnYxQgxDb250cm9sUHJvdG9QAaICA0FFWKoCDkFyc294LkV2ZW50LlYxygIOQXJzb3hcRXZlbnRcVjHiAhpBcnNveFxFdmVudFxWMVxHUEJNZXRhZGF0YeoCEEFyc294OjpFdmVudDo6VjFiBnByb3RvMw", [file_arsox_common_v1_common, file_arsox_event_v1_lifecycle, file_arsox_incident_v1_incident, file_arsox_thread_v1_thread]);
 
 /**
  * One event on the satellite's control stream.
@@ -90,6 +92,18 @@ export type ControlEvent = Message<"arsox.event.v1.ControlEvent"> & {
      */
     value: ControlBudgetWarning;
     case: "budgetWarning";
+  } | {
+    /**
+     * A failure that belongs to the satellite rather than to any thread, so it
+     * has no thread stream to travel on. Its `thread_id` is absent and its
+     * `sequence` is this stream's.
+     *
+     * Like its thread-scoped counterpart, this arm cannot be switched off.
+     *
+     * @generated from field: arsox.incident.v1.Incident incident = 26;
+     */
+    value: Incident;
+    case: "incident";
   } | { case: undefined; value?: undefined };
 };
 
