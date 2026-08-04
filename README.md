@@ -42,13 +42,26 @@ This authenticates your host application against the satellite's API, so the API
 
 Serve the API over TLS whenever it is reachable outside a trusted network. The secret is a bearer token, so it is only as private as the transport carrying it.
 
+**`ARSOX_SECRET` is never placed in an agent's environment.** It is read by the satellite process at boot and withheld from every harness, member, and brokered command. An agent that could read it could command its own satellite: destroy threads, read other threads' artifacts, rewrite permissions. The secret authenticates your application to the satellite, never the satellite to itself.
+
 <!-- TODO: Enter code details about how to configure it -->
 <!-- TODO: Show SDK examples of how to use it -->
 
-The SDK is available in three programming languages:
-- Rust (via Cargo) <!-- TODO: Put link here when it's available -->
-- Node/Web (via NPM) <!-- TODO: Put link here when it's available -->
-- Python (via PyPi) <!-- TODO: Put link here when it's available -->
+### What Arsox ships
+
+| Output | Built in | Distribution | For |
+|---|---|---|---|
+| Rust SDK | this repo | Cargo <!-- TODO: link --> | Applications |
+| Node/Web SDK | this repo | NPM <!-- TODO: link --> | Applications |
+| Python SDK | this repo | PyPi <!-- TODO: link --> | Applications |
+| Satellite images | this repo | docker.io <!-- TODO: link --> | The satellites themselves |
+| `arsox` CLI | [`JalapenoLabs/arsox-cli`](https://github.com/JalapenoLabs/arsox-cli) | GitHub Releases and `cargo install` | Humans at a terminal |
+
+The three SDKs and the CLI are all clients of the same protobuf API.
+
+**The CLI is built in its own repository and depends on the published Rust SDK.** That boundary is deliberate rather than tidy: a separate repo can only reach the public API, so anything the CLI needs and cannot get is a hole in the SDK rather than something a sibling crate quietly reaches around. It makes the CLI the Rust SDK's first real consumer, and the first honest test of whether the published surface is enough to build something with.
+
+The CLI is an interactive terminal rather than a subcommand tool: you launch it and talk to it, and slash commands handle the rest. Its documentation lives with its source. Design notes written here before that repo existed are parked in [docs/todo-cli.md](./docs/todo-cli.md) and move over when it does.
 
 For setting up the satellite's workspace, you are typically expected to extend the image in your own Dockerfile and install your own tooling on top of it. For example, if you need Go, pull this image with `FROM` and use `RUN` to install it yourself.
 
