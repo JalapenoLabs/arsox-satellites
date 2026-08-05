@@ -22,11 +22,23 @@ authors.workspace = true
 # will not use. Features stay additive: enabling `client` adds items and removes
 # nothing, per M-FEATURES-ADDITIVE.
 default = [ "client" ]
-client = [ ]
+client = [
+  "dep:reqwest",
+  "dep:tokio",
+  "dep:tokio-tungstenite",
+  "dep:futures-util",
+]
 
 [dependencies]
 prost.workspace = true
 prost-types.workspace = true
+
+# The client half. Optional so a satellite can depend on this crate for the
+# contract types alone and never link an HTTP stack it is already serving.
+reqwest = { version = "0.12", default-features = false, features = [ "rustls-tls" ], optional = true }
+tokio = { version = "1", default-features = false, features = [ "time" ], optional = true }
+tokio-tungstenite = { version = "0.24", features = [ "rustls-tls-webpki-roots" ], optional = true }
+futures-util = { version = "0.3", optional = true }
 
 [lints]
 workspace = true

@@ -1,0 +1,86 @@
+# SDKs
+
+Three are planned: Rust, Node, and Python. The Rust one exists.
+
+All three are clients of the same protobuf API, and none of them expose a
+protobuf type by accident. Protobuf is always on the wire; what a consumer holds
+is an ordinary object in their language.
+
+## The client is a feature
+
+`arsox-sdk` ships the generated contract unconditionally and the client behind a
+default-on `client` feature. The satellite depends on the same crate with
+`default-features = false`, so a server build never links an HTTP stack it is
+already serving.
+
+CI builds the crate both ways. Without that, the contract types could quietly
+grow a dependency on the client and nobody would notice until a server build
+broke.
+
+## A handle is not a thread
+
+A `ThreadHandle` holds an id and a connection. Every piece of state lives on the
+satellite, which is what makes handles disposable and threads durable.
+
+Any process with the URL, the secret, and a thread id can `attach` and do
+everything the creating process could. There is no handoff, no lease, and no
+ownership: the process that created a thread may have exited hours ago. That is
+the property a horizontally scaled application depends on, and there is a test
+that attaches from a second client and queues a turn on a thread it did not
+create.
+
+`attach` reads the thread before returning, so attaching to a typo fails there
+rather than at the first operation on the handle.
+
+## The version check happens at connect
+
+`Satellite::connect` calls `/v1/version` and refuses a satellite serving a higher
+proto major, rather than letting the mismatch surface as a decode failure three
+calls later. A higher minor warns once and proceeds, because additive fields the
+SDK does not know about are safely ignored.
+
+## Errors answer three questions
+
+One `Error` type rather than a family. A caller handling a failure almost always
+wants the same things regardless of where it came from:
+
+- `code()`: the contract code, when a satellite named one. Absent for a failure
+  that never reached one.
+- `is_retryable()`: read from the satellite's own flag rather than matched
+  against a list of codes. That is what makes an older SDK safe against a newer
+  satellite, since a code this build has never heard of still gets a usable
+  answer.
+- `is_not_found()`, `is_incompatible()`: the two cases worth branching on
+  directly.
+
+The contents are boxed. A contract error plus a backtrace runs past a hundred
+bytes, and an error that size makes every `Result` in the SDK that large whether
+or not anything went wrong.
+
+## Streams are pinned for you
+
+`events()` and `events_from()` return a boxed, pinned stream, so a caller writes
+an ordinary `while let Some(event) = events.next().await`. The first version
+returned an unpinned `impl Stream` and the integration test would not compile
+without pinning it at the call site. That is an ergonomic tax the SDK exists to
+absorb, and writing the test from a consumer's seat is the only reason it
+surfaced.
+
+## What the aspirational example still needs
+
+`examples/example.rs` at the repository root describes the full surface from the
+README, most of which no satellite serves yet. It does not compile, and it is not
+meant to yet: it is the design target the SDK is being built toward.
+
+Reaching it needs incidents, artifacts, suggestions, plan approval, question
+answering, and the settings those features carry. The SDK grows to match as the
+satellite does.
+
+## Roadmap
+
+- **Node and Python clients**, against the same contract and the same conformance
+  expectations.
+- **Retry and failover** in the client, so a `TURN_QUEUE_FULL` or a restarting
+  satellite is handled rather than surfaced.
+- **`arsox-testkit`**, a fake satellite so a consumer can test their integration
+  without running a container.

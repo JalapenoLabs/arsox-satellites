@@ -50,6 +50,9 @@
 )]
 mod generated;
 
+#[cfg(feature = "client")]
+pub mod client;
+
 pub mod helpers;
 
 #[doc(inline)]
