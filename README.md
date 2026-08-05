@@ -306,6 +306,32 @@ Threads run concurrently with each other, bounded by `ARSOX_MAX_CONCURRENT_THREA
 - **Depth cap.** Once a thread's queue reaches its cap, further submissions are rejected with `TURN_QUEUE_FULL` rather than accumulating without bound.
 - **Persistence.** The queue lives in the embedded database and survives a satellite restart.
 
+#### Pausing, draining, and resuming
+
+Cancelling turns one at a time is the wrong tool for stopping a thread. It races the runner claiming the next one, so an operator clearing a backlog has to win a race to do it, and a thread that keeps accepting work refills behind them.
+
+| Operation | Effect |
+|---|---|
+| `pause` | The thread stops claiming queued work. Turns may still be submitted and still queue; the queue simply does not move. |
+| `resume` | The thread returns to idle and the runner picks the queue back up immediately. |
+| `drain` | Every queued turn is cancelled in one statement. A running turn is left alone and reported back, so you can see what draining deliberately did not touch. |
+
+Pausing is enforced in the same query that claims work, not in the runner, so it holds regardless of what is doing the claiming. Pausing an already paused thread reports the state rather than failing, because an operator racing their own second click has done nothing wrong.
+
+Pause and drain compose. Pause first when the intent is to stop the thread, then drain to clear what had already queued. Draining alone clears a backlog on a thread you want to keep running.
+
+Neither touches the workspace. That is the whole difference between pausing a thread and destroying one.
+
+**A turn interrupted by a restart follows the thread's own policy.** `resumeInterruptedTurns` puts it back in the queue; the default leaves it `INTERRUPTED` until a human looks at it. Automatic resumption is right for an unattended fleet and wrong when somebody would want to see what happened first, which is why it is a setting rather than a behavior.
+
+#### Listing and ordering
+
+Thread and turn listings are filterable and sortable. Threads sort by creation or by last activity, turns by when they queued or when they finished, either direction.
+
+Creation order is the default because it is free: thread ids are UUIDv7 and already sort by time. Last activity is the order an operator scanning a fleet actually wants, and it is the one that needs real work, since a timestamp is not unique. The cursor therefore carries the sort key alongside the id, so paging cannot repeat or skip threads that share a millisecond with the one at a page boundary.
+
+Turns ordered by completion sort the unfinished ones last, so "most recently finished" does not open with everything that has not finished.
+
 ### Health and readiness
 
 | Endpoint | Auth | Purpose |

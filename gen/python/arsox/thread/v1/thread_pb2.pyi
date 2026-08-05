@@ -21,6 +21,13 @@ class ThreadState(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     THREAD_STATE_WATCHING: _ClassVar[ThreadState]
     THREAD_STATE_EXPIRED: _ClassVar[ThreadState]
     THREAD_STATE_DESTROYED: _ClassVar[ThreadState]
+    THREAD_STATE_PAUSED: _ClassVar[ThreadState]
+
+class ThreadOrder(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    THREAD_ORDER_UNSPECIFIED: _ClassVar[ThreadOrder]
+    THREAD_ORDER_CREATED: _ClassVar[ThreadOrder]
+    THREAD_ORDER_LAST_ACTIVITY: _ClassVar[ThreadOrder]
 THREAD_STATE_UNSPECIFIED: ThreadState
 THREAD_STATE_PROVISIONING: ThreadState
 THREAD_STATE_IDLE: ThreadState
@@ -29,6 +36,10 @@ THREAD_STATE_AWAITING_INPUT: ThreadState
 THREAD_STATE_WATCHING: ThreadState
 THREAD_STATE_EXPIRED: ThreadState
 THREAD_STATE_DESTROYED: ThreadState
+THREAD_STATE_PAUSED: ThreadState
+THREAD_ORDER_UNSPECIFIED: ThreadOrder
+THREAD_ORDER_CREATED: ThreadOrder
+THREAD_ORDER_LAST_ACTIVITY: ThreadOrder
 
 class Thread(_message.Message):
     __slots__ = ()
@@ -147,10 +158,14 @@ class ListThreadsRequest(_message.Message):
     STATES_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
     PAGE_FIELD_NUMBER: _ClassVar[int]
+    ORDER_BY_FIELD_NUMBER: _ClassVar[int]
+    DESCENDING_FIELD_NUMBER: _ClassVar[int]
     states: _containers.RepeatedScalarFieldContainer[ThreadState]
     metadata: _containers.ScalarMap[str, str]
     page: _common_pb2.PageRequest
-    def __init__(self, states: _Optional[_Iterable[_Union[ThreadState, str]]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., page: _Optional[_Union[_common_pb2.PageRequest, _Mapping]] = ...) -> None: ...
+    order_by: ThreadOrder
+    descending: bool
+    def __init__(self, states: _Optional[_Iterable[_Union[ThreadState, str]]] = ..., metadata: _Optional[_Mapping[str, str]] = ..., page: _Optional[_Union[_common_pb2.PageRequest, _Mapping]] = ..., order_by: _Optional[_Union[ThreadOrder, str]] = ..., descending: _Optional[bool] = ...) -> None: ...
 
 class ListThreadsResponse(_message.Message):
     __slots__ = ()
@@ -159,6 +174,44 @@ class ListThreadsResponse(_message.Message):
     threads: _containers.RepeatedCompositeFieldContainer[ThreadSummary]
     page: _common_pb2.PageResponse
     def __init__(self, threads: _Optional[_Iterable[_Union[ThreadSummary, _Mapping]]] = ..., page: _Optional[_Union[_common_pb2.PageResponse, _Mapping]] = ...) -> None: ...
+
+class PauseThreadRequest(_message.Message):
+    __slots__ = ()
+    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    thread_id: str
+    def __init__(self, thread_id: _Optional[str] = ...) -> None: ...
+
+class PauseThreadResponse(_message.Message):
+    __slots__ = ()
+    THREAD_FIELD_NUMBER: _ClassVar[int]
+    thread: Thread
+    def __init__(self, thread: _Optional[_Union[Thread, _Mapping]] = ...) -> None: ...
+
+class ResumeThreadRequest(_message.Message):
+    __slots__ = ()
+    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    thread_id: str
+    def __init__(self, thread_id: _Optional[str] = ...) -> None: ...
+
+class ResumeThreadResponse(_message.Message):
+    __slots__ = ()
+    THREAD_FIELD_NUMBER: _ClassVar[int]
+    thread: Thread
+    def __init__(self, thread: _Optional[_Union[Thread, _Mapping]] = ...) -> None: ...
+
+class DrainThreadRequest(_message.Message):
+    __slots__ = ()
+    THREAD_ID_FIELD_NUMBER: _ClassVar[int]
+    thread_id: str
+    def __init__(self, thread_id: _Optional[str] = ...) -> None: ...
+
+class DrainThreadResponse(_message.Message):
+    __slots__ = ()
+    CANCELLED_TURN_IDS_FIELD_NUMBER: _ClassVar[int]
+    RUNNING_TURN_ID_FIELD_NUMBER: _ClassVar[int]
+    cancelled_turn_ids: _containers.RepeatedScalarFieldContainer[str]
+    running_turn_id: str
+    def __init__(self, cancelled_turn_ids: _Optional[_Iterable[str]] = ..., running_turn_id: _Optional[str] = ...) -> None: ...
 
 class DestroyThreadRequest(_message.Message):
     __slots__ = ()

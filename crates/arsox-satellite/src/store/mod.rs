@@ -23,10 +23,10 @@ mod events;
 mod threads;
 mod turns;
 
-pub use claims::ClaimedTurn;
+pub use claims::{ClaimedTurn, Interrupted};
 pub use events::AppendEvent;
-pub use threads::{NewThread, StoredThread, ThreadFilter};
-pub use turns::{NewTurn, StoredTurn};
+pub use threads::{Listing, NewThread, StoredThread, ThreadFilter};
+pub use turns::{Drained, NewTurn, StoredTurn};
 
 use anyhow::{Context as _, Result};
 use arsox_sdk::proto::common::v1::Timestamp;
@@ -279,7 +279,8 @@ mod store_behaviour {
     use super::*;
     use arsox_sdk::proto::event::v1::{AgentMessage, thread_event::Payload};
     use arsox_sdk::proto::settings::v1::{ResourceLimits, ThreadSettings};
-    use arsox_sdk::proto::turn::v1::TurnStatus;
+    use arsox_sdk::proto::thread::v1::{ThreadOrder, ThreadState};
+    use arsox_sdk::proto::turn::v1::{TurnOrder, TurnStatus};
     use std::collections::BTreeMap;
 
     async fn store() -> Store {
@@ -368,11 +369,11 @@ mod store_behaviour {
             .list_threads(&ThreadFilter::default())
             .await
             .expect("should list");
-        assert_eq!(all.len(), 2);
+        assert_eq!(all.threads.len(), 2);
         // UUIDv7 sorts by creation time, so ordering by id is chronological and
         // needs no separate sort key.
-        assert_eq!(all[0].thread_id, acme.thread.thread_id);
-        assert_eq!(all[1].thread_id, other.thread.thread_id);
+        assert_eq!(all.threads[0].thread_id, acme.thread.thread_id);
+        assert_eq!(all.threads[1].thread_id, other.thread.thread_id);
 
         let mut filter = ThreadFilter::default();
         filter
@@ -380,8 +381,8 @@ mod store_behaviour {
             .insert("tenant".to_owned(), "globex".to_owned());
         let filtered = store.list_threads(&filter).await.expect("should filter");
 
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].thread_id, other.thread.thread_id);
+        assert_eq!(filtered.threads.len(), 1);
+        assert_eq!(filtered.threads[0].thread_id, other.thread.thread_id);
     }
 
     #[tokio::test]
@@ -428,7 +429,7 @@ mod store_behaviour {
         assert_eq!(refreshed.current_turn_id, None);
 
         let turns = store
-            .list_turns(&thread.thread_id, &[])
+            .list_turns(&thread.thread_id, &[], TurnOrder::Unspecified, false)
             .await
             .expect("should list");
         assert_eq!(turns.len(), 2);
@@ -606,6 +607,217 @@ mod store_behaviour {
             .expect_err("should not append");
 
         assert!(matches!(error, StoreError::ThreadNotFound(_)));
+    }
+
+    #[tokio::test]
+    async fn a_paused_thread_holds_its_queue_instead_of_running_it() {
+        // The point of pausing: nothing is lost, nothing starts. An operator
+        // stopping a misbehaving thread should not have to destroy its
+        // workspace to do it.
+        let store = store().await;
+        let thread = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("a")
+            .thread;
+
+        store
+            .pause_thread(&thread.thread_id)
+            .await
+            .expect("should pause");
+        store
+            .create_turn(work_on(&thread.thread_id))
+            .await
+            .expect("should still accept work");
+
+        assert!(
+            store.claim_next_turn().await.expect("claim").is_none(),
+            "a paused thread's work must not be claimed"
+        );
+
+        store
+            .resume_thread(&thread.thread_id)
+            .await
+            .expect("should resume");
+
+        assert!(
+            store.claim_next_turn().await.expect("claim").is_some(),
+            "resuming releases the queue"
+        );
+    }
+
+    #[tokio::test]
+    async fn pausing_twice_reports_the_state_rather_than_failing() {
+        // An operator racing their own second click has done nothing wrong.
+        let store = store().await;
+        let thread = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("a")
+            .thread;
+
+        store.pause_thread(&thread.thread_id).await.expect("first");
+        let again = store.pause_thread(&thread.thread_id).await.expect("second");
+
+        assert_eq!(again.state, i32::from(ThreadState::Paused));
+    }
+
+    #[tokio::test]
+    async fn draining_cancels_the_queue_and_leaves_the_running_turn_alone() {
+        let store = store().await;
+        let thread = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("a")
+            .thread;
+
+        for _queued in 0..3 {
+            store
+                .create_turn(work_on(&thread.thread_id))
+                .await
+                .expect("should queue");
+        }
+
+        let running = store
+            .claim_next_turn()
+            .await
+            .expect("claim")
+            .expect("there is work");
+
+        let drained = store
+            .drain_thread(&thread.thread_id)
+            .await
+            .expect("should drain");
+
+        assert_eq!(drained.cancelled_turn_ids.len(), 2);
+        assert_eq!(
+            drained.running_turn_id.as_deref(),
+            Some(running.turn.turn_id.as_str()),
+            "draining reports what it deliberately left alone"
+        );
+
+        let (still_running, _result) = store
+            .turn(&thread.thread_id, &running.turn.turn_id)
+            .await
+            .expect("should read");
+        assert_eq!(still_running.status, i32::from(TurnStatus::Running));
+    }
+
+    #[tokio::test]
+    async fn threads_can_be_ordered_by_most_recent_activity() {
+        // What an operator scanning a fleet wants, and what creation order
+        // cannot approximate on a satellite whose oldest thread is its busiest.
+        let store = store().await;
+        let first = store.create_thread(thread_named("acme")).await.expect("a");
+        let second = store
+            .create_thread(thread_named("globex"))
+            .await
+            .expect("b");
+
+        // Touching the older thread makes it the most recently active.
+        store
+            .touch_thread(&first.thread.thread_id)
+            .await
+            .expect("should touch");
+
+        let filter = ThreadFilter {
+            order_by: ThreadOrder::LastActivity,
+            descending: true,
+            ..ThreadFilter::default()
+        };
+        let listed = store.list_threads(&filter).await.expect("should list");
+
+        assert_eq!(listed.threads[0].thread_id, first.thread.thread_id);
+        assert_eq!(listed.threads[1].thread_id, second.thread.thread_id);
+
+        // Creation order is unchanged and still the default.
+        let default = store
+            .list_threads(&ThreadFilter::default())
+            .await
+            .expect("should list");
+        assert_eq!(default.threads[0].thread_id, first.thread.thread_id);
+        assert_eq!(default.threads[1].thread_id, second.thread.thread_id);
+    }
+
+    #[tokio::test]
+    async fn a_cursor_carries_the_sort_key_so_paging_does_not_skip() {
+        let store = store().await;
+        let mut ids = Vec::new();
+        for tenant in ["a", "b", "c"] {
+            ids.push(
+                store
+                    .create_thread(thread_named(tenant))
+                    .await
+                    .expect("create")
+                    .thread
+                    .thread_id,
+            );
+        }
+
+        let mut seen = Vec::new();
+        let mut cursor = None;
+        loop {
+            let filter = ThreadFilter {
+                limit: 2,
+                after: cursor.clone(),
+                ..ThreadFilter::default()
+            };
+            let page = store.list_threads(&filter).await.expect("should list");
+            if page.threads.is_empty() {
+                break;
+            }
+            seen.extend(page.threads.iter().map(|t| t.thread_id.clone()));
+            cursor = Some(page.next_cursor);
+        }
+
+        assert_eq!(seen, ids, "paging must cover every thread exactly once");
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_turn_is_requeued_only_when_the_thread_asked_for_it() {
+        let store = store().await;
+
+        let opted_in = store
+            .create_thread(NewThread {
+                settings: ThreadSettings {
+                    resume_interrupted_turns: true,
+                    ..Default::default()
+                },
+                metadata: BTreeMap::new(),
+                idempotency_key: None,
+            })
+            .await
+            .expect("a")
+            .thread;
+        let opted_out = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("b")
+            .thread;
+
+        for thread_id in [&opted_in.thread_id, &opted_out.thread_id] {
+            store
+                .create_turn(work_on(thread_id))
+                .await
+                .expect("should queue");
+            store.claim_next_turn().await.expect("claim").expect("work");
+        }
+
+        let settled = store
+            .settle_interrupted_turns()
+            .await
+            .expect("should settle");
+
+        assert_eq!(settled.resumed.len(), 1, "one thread opted in");
+        assert_eq!(settled.left_interrupted.len(), 1, "the other did not");
+
+        // The opted-in turn is claimable again; the other waits for a human.
+        let requeued = store.claim_next_turn().await.expect("claim");
+        assert!(requeued.is_some());
+        assert_eq!(
+            requeued.expect("claimed").turn.thread_id,
+            opted_in.thread_id
+        );
     }
 
     #[tokio::test]

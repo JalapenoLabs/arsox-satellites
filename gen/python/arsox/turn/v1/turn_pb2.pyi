@@ -18,6 +18,12 @@ class TurnStatus(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     TURN_STATUS_CANCELLED: _ClassVar[TurnStatus]
     TURN_STATUS_INTERRUPTED: _ClassVar[TurnStatus]
     TURN_STATUS_WATCHING: _ClassVar[TurnStatus]
+
+class TurnOrder(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    TURN_ORDER_UNSPECIFIED: _ClassVar[TurnOrder]
+    TURN_ORDER_QUEUED: _ClassVar[TurnOrder]
+    TURN_ORDER_FINISHED: _ClassVar[TurnOrder]
 TURN_STATUS_UNSPECIFIED: TurnStatus
 TURN_STATUS_QUEUED: TurnStatus
 TURN_STATUS_RUNNING: TurnStatus
@@ -26,6 +32,9 @@ TURN_STATUS_FAILED: TurnStatus
 TURN_STATUS_CANCELLED: TurnStatus
 TURN_STATUS_INTERRUPTED: TurnStatus
 TURN_STATUS_WATCHING: TurnStatus
+TURN_ORDER_UNSPECIFIED: TurnOrder
+TURN_ORDER_QUEUED: TurnOrder
+TURN_ORDER_FINISHED: TurnOrder
 
 class Turn(_message.Message):
     __slots__ = ()
@@ -146,10 +155,14 @@ class ListTurnsRequest(_message.Message):
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]
     STATUSES_FIELD_NUMBER: _ClassVar[int]
     PAGE_FIELD_NUMBER: _ClassVar[int]
+    ORDER_BY_FIELD_NUMBER: _ClassVar[int]
+    DESCENDING_FIELD_NUMBER: _ClassVar[int]
     thread_id: str
     statuses: _containers.RepeatedScalarFieldContainer[TurnStatus]
     page: _common_pb2.PageRequest
-    def __init__(self, thread_id: _Optional[str] = ..., statuses: _Optional[_Iterable[_Union[TurnStatus, str]]] = ..., page: _Optional[_Union[_common_pb2.PageRequest, _Mapping]] = ...) -> None: ...
+    order_by: TurnOrder
+    descending: bool
+    def __init__(self, thread_id: _Optional[str] = ..., statuses: _Optional[_Iterable[_Union[TurnStatus, str]]] = ..., page: _Optional[_Union[_common_pb2.PageRequest, _Mapping]] = ..., order_by: _Optional[_Union[TurnOrder, str]] = ..., descending: _Optional[bool] = ...) -> None: ...
 
 class ListTurnsResponse(_message.Message):
     __slots__ = ()

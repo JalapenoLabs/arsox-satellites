@@ -36,6 +36,36 @@ A separate structure would be a second source of truth that could fall out of
 step with the turns it describes, and reconciling the two after a crash is a
 problem worth not having.
 
+## Pausing is enforced in the claim, not the runner
+
+`claim_next_turn` joins `threads` and excludes any thread in `PAUSED`, in the
+same statement that takes the turn.
+
+Putting the check in the runner instead would make it a rule the runner has to
+remember, and a second runner appearing later would not know about it. In the
+claim it is structural: whatever does the claiming inherits the guarantee. This
+is the same reasoning that keeps one-turn-at-a-time in the subquery rather than
+in Rust.
+
+Draining is one `UPDATE ... RETURNING` over the thread's queued rows for the same
+reason. Cancelling turns in a loop races the runner claiming the next one, and an
+operator clearing a backlog should not have to win that race.
+
+## A listing cursor carries its sort key
+
+Ordering by creation gets uniqueness for free, since thread ids are UUIDv7. Last
+activity does not: a timestamp is not unique, and a cursor holding only the
+timestamp would repeat or skip every thread sharing a value with the row at the
+page boundary.
+
+So the cursor is `sort_key|thread_id` and the comparison is a row value,
+`(last_activity_at, thread_id) > (?, ?)`. The composite is what makes paging
+total: every thread appears exactly once, which is asserted by a test that pages
+a listing to exhaustion and compares the result against the full set.
+
+The sort direction and column are chosen from a fixed set of literals. Every
+value is still bound, never interpolated.
+
 ## Sequence numbers are issued inside the append
 
 `append_event` increments `threads.latest_sequence` and inserts the row in one

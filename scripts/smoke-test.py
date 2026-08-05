@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pathlib
+import pathlib
 import sys
 import time
 import urllib.error
@@ -62,6 +64,20 @@ def build_settings() -> settings_pb2.ThreadSettings:
     settings.budget.max_cost_per_thread.cost.currency_code = "USD"
     settings.budget.max_cost_per_thread.cost.units = 40
     return settings
+
+
+def create_thread(key: str) -> str:
+    """Creates a thread and returns its id, failing loudly if it did not."""
+    request = thread_pb2.CreateThreadRequest(idempotency_key=key)
+    request.settings.CopyFrom(build_settings())
+
+    status, payload = call("POST", "/v1/threads", request.SerializeToString())
+    if status != 200:
+        raise SystemExit(f"could not create a thread for {key}: {status} {payload!r}")
+
+    response = thread_pb2.CreateThreadResponse()
+    response.ParseFromString(payload)
+    return response.thread.thread_id
 
 
 print("== thread lifecycle ==")
@@ -182,6 +198,82 @@ check("the queue drained", after.thread.queue_depth == 0)
 check("the harness session was recorded", after.thread.harness_session_id != "")
 check("the event log advanced", after.thread.latest_sequence >= 6)
 
+print("== thread control ==")
+
+# A paused thread still accepts work; it simply does not run it. That is what
+# separates pausing from destroying, and it is the whole reason pausing exists.
+control = create_thread(f"control-{RUN}")
+
+status, payload = call("POST", f"/v1/threads/{control}/pause")
+paused = thread_pb2.PauseThreadResponse()
+paused.ParseFromString(payload)
+check("pausing succeeds", status == 200, f"got {status}")
+check("the thread reports paused", paused.thread.state == thread_pb2.THREAD_STATE_PAUSED)
+
+status, _payload = call("POST", f"/v1/threads/{control}/pause")
+check("pausing twice is not an error", status == 200, f"got {status}")
+
+queued = []
+for index in range(3):
+    request = turn_pb2.StartTurnRequest(thread_id=control, prompt=f"queued {index}")
+    status, payload = call(
+        "POST", f"/v1/threads/{control}/turns", request.SerializeToString()
+    )
+    response = turn_pb2.StartTurnResponse()
+    response.ParseFromString(payload)
+    queued.append(response.turn.turn_id)
+
+check("a paused thread still accepts turns", len(queued) == 3)
+
+time.sleep(2)
+status, payload = call("GET", f"/v1/threads/{control}")
+held = thread_pb2.GetThreadResponse()
+held.ParseFromString(payload)
+check("the queue is held, not run", held.thread.queue_depth == 3, f"depth {held.thread.queue_depth}")
+check("nothing started", held.thread.state == thread_pb2.THREAD_STATE_PAUSED)
+
+# Draining clears the backlog without touching the thread or its workspace.
+status, payload = call("POST", f"/v1/threads/{control}/drain")
+drained = thread_pb2.DrainThreadResponse()
+drained.ParseFromString(payload)
+check("draining succeeds", status == 200, f"got {status}")
+check("every queued turn was cancelled", sorted(drained.cancelled_turn_ids) == sorted(queued))
+check("nothing was running to leave alone", not drained.HasField("running_turn_id"))
+
+status, payload = call("POST", f"/v1/threads/{control}/resume")
+resumed = thread_pb2.ResumeThreadResponse()
+resumed.ParseFromString(payload)
+check("resuming succeeds", status == 200, f"got {status}")
+check("the thread returns to idle", resumed.thread.state == thread_pb2.THREAD_STATE_IDLE)
+
+# Ordering. The satellite has several threads by now, so the two orders should
+# disagree, which is the only way to prove the sort is real.
+request = thread_pb2.ListThreadsRequest(
+    order_by=thread_pb2.THREAD_ORDER_LAST_ACTIVITY, descending=True
+)
+status, payload = call("GET", "/v1/threads", request.SerializeToString())
+by_activity = thread_pb2.ListThreadsResponse()
+by_activity.ParseFromString(payload)
+
+request = thread_pb2.ListThreadsRequest()
+status, payload = call("GET", "/v1/threads", request.SerializeToString())
+by_creation = thread_pb2.ListThreadsResponse()
+by_creation.ParseFromString(payload)
+
+check("ordering by activity returns every thread", len(by_activity.threads) == len(by_creation.threads))
+check(
+    "the two orders disagree",
+    [t.thread_id for t in by_activity.threads] != [t.thread_id for t in by_creation.threads],
+    "sorting had no effect",
+)
+check("a cursor comes back", by_activity.page.next_cursor != "")
+
+status, payload = call("POST", f"/v1/threads/{control}/pause", token="wrong-secret")
+check("pausing needs the secret", status == 401, f"got {status}")
+
+status, _payload = call("POST", "/v1/threads/does-not-exist/drain")
+check("draining an unknown thread is 404", status == 404, f"got {status}")
+
 print("== error contract ==")
 
 status, payload = call("GET", "/v1/threads/does-not-exist")
@@ -223,6 +315,12 @@ check(
 )
 
 print(f"\n{passed} passed, {failed} failed")
-with open("smoke-thread-id.txt", "w", encoding="utf-8") as handle:  # noqa: for the restart check
-    handle.write(thread_id)
+
+# Left for the manual restart check: stop the container, start it again, and
+# confirm this thread and its queue came back. Written under target/ so a smoke
+# run never dirties the working tree.
+scratch = pathlib.Path("target")
+scratch.mkdir(exist_ok=True)
+(scratch / "smoke-thread-id.txt").write_text(thread_id, encoding="utf-8")
+
 sys.exit(1 if failed else 0)

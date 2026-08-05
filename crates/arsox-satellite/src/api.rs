@@ -11,8 +11,8 @@ use crate::{Satellite, contract_error, protobuf};
 use arsox_sdk::proto::common::v1::{PageRequest, PageResponse};
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::thread::v1::{
-    CreateThreadRequest, CreateThreadResponse, DestroyThreadResponse, GetThreadResponse,
-    ListThreadsResponse,
+    CreateThreadRequest, CreateThreadResponse, DestroyThreadResponse, DrainThreadResponse,
+    GetThreadResponse, ListThreadsResponse, PauseThreadResponse, ResumeThreadResponse, ThreadOrder,
 };
 use arsox_sdk::proto::turn::v1::{
     CancelTurnResponse, GetTurnResponse, ListTurnsResponse, StartTurnRequest, StartTurnResponse,
@@ -197,28 +197,67 @@ async fn list_threads(
             Some(page.cursor)
         },
         limit: page.limit,
+        order_by: ThreadOrder::try_from(request.order_by).unwrap_or(ThreadOrder::Unspecified),
+        descending: request.descending,
     };
 
     match satellite.store.list_threads(&filter).await {
-        Ok(threads) => {
-            // The cursor is the last id returned. Thread ids are UUIDv7 and sort
-            // chronologically, so the cursor needs to carry nothing else.
-            let next_cursor = threads
-                .last()
-                .map(|summary| summary.thread_id.clone())
-                .unwrap_or_default();
+        Ok(listing) => protobuf(&ListThreadsResponse {
+            threads: listing.threads,
+            page: Some(PageResponse {
+                // Encodes the sort key alongside the id, because ordering by
+                // last activity is not unique and an id-only cursor would repeat
+                // or skip whatever shares a timestamp with the page boundary.
+                next_cursor: listing.next_cursor,
+                // Counting every match would mean a second scan on every page.
+                // Absent says "not computed" rather than claiming a total of
+                // zero.
+                total: None,
+            }),
+        }),
+        Err(error) => store_failure(&error),
+    }
+}
 
-            protobuf(&ListThreadsResponse {
-                threads,
-                page: Some(PageResponse {
-                    next_cursor,
-                    // Counting every match would mean a second scan on every
-                    // page. Absent says "not computed" rather than claiming a
-                    // total of zero.
-                    total: None,
-                }),
+async fn pause_thread(
+    State(satellite): State<Arc<Satellite>>,
+    Path(thread_id): Path<String>,
+) -> Response {
+    match satellite.store.pause_thread(&thread_id).await {
+        Ok(thread) => protobuf(&PauseThreadResponse {
+            thread: Some(thread),
+        }),
+        Err(error) => store_failure(&error),
+    }
+}
+
+async fn resume_thread(
+    State(satellite): State<Arc<Satellite>>,
+    Path(thread_id): Path<String>,
+) -> Response {
+    match satellite.store.resume_thread(&thread_id).await {
+        Ok(thread) => {
+            // A resumed thread may have work waiting, and the runner should not
+            // sit through its idle poll before noticing.
+            satellite.work_queued.notify_one();
+
+            protobuf(&ResumeThreadResponse {
+                thread: Some(thread),
             })
         }
+        Err(error) => store_failure(&error),
+    }
+}
+
+async fn drain_thread(
+    State(satellite): State<Arc<Satellite>>,
+    Path(thread_id): Path<String>,
+) -> Response {
+    match satellite.store.drain_thread(&thread_id).await {
+        Ok(drained) => protobuf(&DrainThreadResponse {
+            cancelled_turn_ids: drained.cancelled_turn_ids,
+            running_turn_id: drained.running_turn_id,
+        }),
         Err(error) => store_failure(&error),
     }
 }
@@ -294,9 +333,12 @@ async fn list_turns(
     Path(thread_id): Path<String>,
     Protobuf(request): Protobuf<arsox_sdk::proto::turn::v1::ListTurnsRequest>,
 ) -> Response {
+    let order = arsox_sdk::proto::turn::v1::TurnOrder::try_from(request.order_by)
+        .unwrap_or(arsox_sdk::proto::turn::v1::TurnOrder::Unspecified);
+
     match satellite
         .store
-        .list_turns(&thread_id, &request.statuses)
+        .list_turns(&thread_id, &request.statuses, order, request.descending)
         .await
     {
         Ok(turns) => protobuf(&ListTurnsResponse {
@@ -336,6 +378,9 @@ pub fn routes() -> Router<Arc<Satellite>> {
         .route("/v1/threads", post(create_thread).get(list_threads))
         .route("/v1/threads/{thread_id}", get(get_thread))
         .route("/v1/threads/{thread_id}", delete(destroy_thread))
+        .route("/v1/threads/{thread_id}/pause", post(pause_thread))
+        .route("/v1/threads/{thread_id}/resume", post(resume_thread))
+        .route("/v1/threads/{thread_id}/drain", post(drain_thread))
         .route(
             "/v1/threads/{thread_id}/turns",
             post(start_turn).get(list_turns),

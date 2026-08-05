@@ -50,6 +50,30 @@ enum ThreadState {
   THREAD_STATE_EXPIRED = 6;
 
   THREAD_STATE_DESTROYED = 7;
+
+  // Alive and holding everything it has, but refusing to start queued work.
+  //
+  // The state an operator reaches for when a thread is misbehaving and
+  // destroying it would lose the workspace. Turns may still be submitted and
+  // still queue; nothing claims them until the thread resumes.
+  //
+  // The idle TTL keeps running, because a paused thread is idle in every sense
+  // that matters to a disk.
+  THREAD_STATE_PAUSED = 8;
+}
+
+// How a thread listing is ordered.
+enum ThreadOrder {
+  // Creation order, ascending. The default, and free: thread ids are UUIDv7, so
+  // ordering by id is ordering by creation time.
+  THREAD_ORDER_UNSPECIFIED = 0;
+
+  THREAD_ORDER_CREATED = 1;
+
+  // Most recently touched. What an operator scanning a fleet almost always
+  // wants, and what creation order cannot approximate on a satellite whose
+  // oldest thread is its busiest.
+  THREAD_ORDER_LAST_ACTIVITY = 2;
 }
 
 // One thread's current state.
@@ -205,12 +229,68 @@ message ListThreadsRequest {
   map<string, string> metadata = 2;
 
   arsox.common.v1.PageRequest page = 3;
+
+  ThreadOrder order_by = 4;
+
+  // Reverses the order. Newest first is the common case for
+  // `THREAD_ORDER_LAST_ACTIVITY`, and the default stays ascending so that
+  // leaving both fields unset gives the same listing it always did.
+  bool descending = 5;
 }
 
 message ListThreadsResponse {
   // Naturally chronological, because thread IDs are UUIDv7.
   repeated ThreadSummary threads = 1;
   arsox.common.v1.PageResponse page = 2;
+}
+
+// POST /v1/threads/{thread_id}/pause
+//
+// Stops the thread claiming queued work without losing anything. Submitting a
+// turn to a paused thread still succeeds and still queues; the queue simply
+// does not move.
+//
+// Pausing an already paused thread is a no-op rather than an error: an operator
+// racing their own second click has done nothing wrong.
+message PauseThreadRequest {
+  string thread_id = 1;
+}
+
+message PauseThreadResponse {
+  Thread thread = 1;
+}
+
+// POST /v1/threads/{thread_id}/resume
+//
+// Returns a paused thread to service. Queued turns start again in the order
+// they were submitted.
+message ResumeThreadRequest {
+  string thread_id = 1;
+}
+
+message ResumeThreadResponse {
+  Thread thread = 1;
+}
+
+// POST /v1/threads/{thread_id}/drain
+//
+// Cancels every queued turn in one call, leaving any running turn alone.
+//
+// Exists because the alternative is cancelling turns one at a time in a loop
+// while the runner claims them from underneath, which is a race an operator
+// should never have to win. Pause first if the intent is to stop the thread
+// rather than to clear a backlog.
+message DrainThreadRequest {
+  string thread_id = 1;
+}
+
+message DrainThreadResponse {
+  // The turns that were cancelled, in the order they had been queued.
+  repeated string cancelled_turn_ids = 1;
+
+  // Absent when nothing was running. Present and untouched otherwise, so the
+  // caller can see what draining deliberately left alone.
+  optional string running_turn_id = 2;
 }
 
 // DELETE /v1/threads/{thread_id}

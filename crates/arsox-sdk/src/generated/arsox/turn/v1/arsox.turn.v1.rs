@@ -141,6 +141,11 @@ pub struct ListTurnsRequest {
     pub statuses: ::prost::alloc::vec::Vec<i32>,
     #[prost(message, optional, tag="3")]
     pub page: ::core::option::Option<super::super::common::v1::PageRequest>,
+    #[prost(enumeration="TurnOrder", tag="4")]
+    pub order_by: i32,
+    /// Reverses the order. Leaving both unset gives the same listing it always did.
+    #[prost(bool, tag="5")]
+    pub descending: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListTurnsResponse {
@@ -198,6 +203,39 @@ impl TurnStatus {
             "TURN_STATUS_CANCELLED" => Some(Self::Cancelled),
             "TURN_STATUS_INTERRUPTED" => Some(Self::Interrupted),
             "TURN_STATUS_WATCHING" => Some(Self::Watching),
+            _ => None,
+        }
+    }
+}
+/// How a turn listing is ordered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum TurnOrder {
+    /// Queue order, ascending. The default, and the order turns actually ran in.
+    Unspecified = 0,
+    Queued = 1,
+    /// When the turn reached a terminal state. Absent for anything still queued or
+    /// running, which sorts last.
+    Finished = 2,
+}
+impl TurnOrder {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "TURN_ORDER_UNSPECIFIED",
+            Self::Queued => "TURN_ORDER_QUEUED",
+            Self::Finished => "TURN_ORDER_FINISHED",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "TURN_ORDER_UNSPECIFIED" => Some(Self::Unspecified),
+            "TURN_ORDER_QUEUED" => Some(Self::Queued),
+            "TURN_ORDER_FINISHED" => Some(Self::Finished),
             _ => None,
         }
     }

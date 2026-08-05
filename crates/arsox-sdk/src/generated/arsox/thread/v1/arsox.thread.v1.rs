@@ -163,6 +163,13 @@ pub struct ListThreadsRequest {
     pub metadata: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
     #[prost(message, optional, tag="3")]
     pub page: ::core::option::Option<super::super::common::v1::PageRequest>,
+    #[prost(enumeration="ThreadOrder", tag="4")]
+    pub order_by: i32,
+    /// Reverses the order. Newest first is the common case for
+    /// `THREAD_ORDER_LAST_ACTIVITY`, and the default stays ascending so that
+    /// leaving both fields unset gives the same listing it always did.
+    #[prost(bool, tag="5")]
+    pub descending: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ListThreadsResponse {
@@ -171,6 +178,61 @@ pub struct ListThreadsResponse {
     pub threads: ::prost::alloc::vec::Vec<ThreadSummary>,
     #[prost(message, optional, tag="2")]
     pub page: ::core::option::Option<super::super::common::v1::PageResponse>,
+}
+/// POST /v1/threads/{thread_id}/pause
+///
+/// Stops the thread claiming queued work without losing anything. Submitting a
+/// turn to a paused thread still succeeds and still queues; the queue simply
+/// does not move.
+///
+/// Pausing an already paused thread is a no-op rather than an error: an operator
+/// racing their own second click has done nothing wrong.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PauseThreadRequest {
+    #[prost(string, tag="1")]
+    pub thread_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PauseThreadResponse {
+    #[prost(message, optional, tag="1")]
+    pub thread: ::core::option::Option<Thread>,
+}
+/// POST /v1/threads/{thread_id}/resume
+///
+/// Returns a paused thread to service. Queued turns start again in the order
+/// they were submitted.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ResumeThreadRequest {
+    #[prost(string, tag="1")]
+    pub thread_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ResumeThreadResponse {
+    #[prost(message, optional, tag="1")]
+    pub thread: ::core::option::Option<Thread>,
+}
+/// POST /v1/threads/{thread_id}/drain
+///
+/// Cancels every queued turn in one call, leaving any running turn alone.
+///
+/// Exists because the alternative is cancelling turns one at a time in a loop
+/// while the runner claims them from underneath, which is a race an operator
+/// should never have to win. Pause first if the intent is to stop the thread
+/// rather than to clear a backlog.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DrainThreadRequest {
+    #[prost(string, tag="1")]
+    pub thread_id: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct DrainThreadResponse {
+    /// The turns that were cancelled, in the order they had been queued.
+    #[prost(string, repeated, tag="1")]
+    pub cancelled_turn_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// Absent when nothing was running. Present and untouched otherwise, so the
+    /// caller can see what draining deliberately left alone.
+    #[prost(string, optional, tag="2")]
+    pub running_turn_id: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// DELETE /v1/threads/{thread_id}
 ///
@@ -217,6 +279,15 @@ pub enum ThreadState {
     /// lifetime statistics survive on their own retention.
     Expired = 6,
     Destroyed = 7,
+    /// Alive and holding everything it has, but refusing to start queued work.
+    ///
+    /// The state an operator reaches for when a thread is misbehaving and
+    /// destroying it would lose the workspace. Turns may still be submitted and
+    /// still queue; nothing claims them until the thread resumes.
+    ///
+    /// The idle TTL keeps running, because a paused thread is idle in every sense
+    /// that matters to a disk.
+    Paused = 8,
 }
 impl ThreadState {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -233,6 +304,7 @@ impl ThreadState {
             Self::Watching => "THREAD_STATE_WATCHING",
             Self::Expired => "THREAD_STATE_EXPIRED",
             Self::Destroyed => "THREAD_STATE_DESTROYED",
+            Self::Paused => "THREAD_STATE_PAUSED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -246,6 +318,42 @@ impl ThreadState {
             "THREAD_STATE_WATCHING" => Some(Self::Watching),
             "THREAD_STATE_EXPIRED" => Some(Self::Expired),
             "THREAD_STATE_DESTROYED" => Some(Self::Destroyed),
+            "THREAD_STATE_PAUSED" => Some(Self::Paused),
+            _ => None,
+        }
+    }
+}
+/// How a thread listing is ordered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ThreadOrder {
+    /// Creation order, ascending. The default, and free: thread ids are UUIDv7, so
+    /// ordering by id is ordering by creation time.
+    Unspecified = 0,
+    Created = 1,
+    /// Most recently touched. What an operator scanning a fleet almost always
+    /// wants, and what creation order cannot approximate on a satellite whose
+    /// oldest thread is its busiest.
+    LastActivity = 2,
+}
+impl ThreadOrder {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "THREAD_ORDER_UNSPECIFIED",
+            Self::Created => "THREAD_ORDER_CREATED",
+            Self::LastActivity => "THREAD_ORDER_LAST_ACTIVITY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "THREAD_ORDER_UNSPECIFIED" => Some(Self::Unspecified),
+            "THREAD_ORDER_CREATED" => Some(Self::Created),
+            "THREAD_ORDER_LAST_ACTIVITY" => Some(Self::LastActivity),
             _ => None,
         }
     }

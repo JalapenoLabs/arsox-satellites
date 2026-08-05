@@ -27,8 +27,9 @@ use crate::proto::harness::v1::GetHarnessResponse;
 use crate::proto::satellite::v1::{GetStatusResponse, GetVersionResponse};
 use crate::proto::settings::v1::ThreadSettings;
 use crate::proto::thread::v1::{
-    CreateThreadRequest, CreateThreadResponse, DestroyThreadResponse, GetThreadResponse,
-    ListThreadsRequest, ListThreadsResponse, Thread, ThreadSummary,
+    CreateThreadRequest, CreateThreadResponse, DestroyThreadResponse, DrainThreadResponse,
+    GetThreadResponse, ListThreadsRequest, ListThreadsResponse, PauseThreadResponse,
+    ResumeThreadResponse, Thread, ThreadOrder, ThreadSummary,
 };
 use crate::proto::turn::v1::{
     CancelTurnResponse, GetTurnResponse, ListTurnsRequest, ListTurnsResponse, StartTurnRequest,
@@ -330,6 +331,25 @@ impl Threads {
     ///
     /// Returns an error when the satellite is unreachable.
     pub async fn list(&self, metadata: BTreeMap<String, String>) -> Result<Vec<ThreadSummary>> {
+        self.list_ordered(metadata, ThreadOrder::Unspecified, false)
+            .await
+    }
+
+    /// Lists threads in a chosen order.
+    ///
+    /// `ThreadOrder::LastActivity` with `descending` is the operator's view: the
+    /// threads that did something most recently, first. Creation order is the
+    /// default because it is free, since thread ids already sort by time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the satellite is unreachable.
+    pub async fn list_ordered(
+        &self,
+        metadata: BTreeMap<String, String>,
+        order: ThreadOrder,
+        descending: bool,
+    ) -> Result<Vec<ThreadSummary>> {
         let response: ListThreadsResponse = self
             .satellite
             .send(
@@ -339,6 +359,8 @@ impl Threads {
                     states: Vec::new(),
                     metadata: metadata.into_iter().collect(),
                     page: Some(PageRequest::default()),
+                    order_by: order.into(),
+                    descending,
                 },
             )
             .await?;
@@ -447,6 +469,8 @@ impl ThreadHandle {
                     thread_id: self.thread_id.clone(),
                     statuses: Vec::new(),
                     page: Some(PageRequest::default()),
+                    order_by: crate::proto::turn::v1::TurnOrder::Unspecified.into(),
+                    descending: false,
                 },
             )
             .await?;
@@ -476,6 +500,76 @@ impl ThreadHandle {
         response
             .thread
             .ok_or_else(|| Error::transport("the satellite destroyed a thread without saying so"))
+    }
+
+    /// Stops the thread claiming queued work, without losing anything.
+    ///
+    /// Turns may still be submitted and still queue; the queue simply does not
+    /// move until the thread resumes. The state an operator reaches for when
+    /// destroying the thread would lose the workspace.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the thread is unknown or the satellite is
+    /// unreachable.
+    pub async fn pause(&self) -> Result<Thread> {
+        let response: PauseThreadResponse = self
+            .satellite
+            .send(
+                reqwest::Method::POST,
+                &format!("/v1/threads/{}/pause", self.thread_id),
+                &(),
+            )
+            .await?;
+
+        response
+            .thread
+            .ok_or_else(|| Error::transport("the satellite paused a thread without saying so"))
+    }
+
+    /// Returns a paused thread to service.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the thread is unknown or the satellite is
+    /// unreachable.
+    pub async fn resume(&self) -> Result<Thread> {
+        let response: ResumeThreadResponse = self
+            .satellite
+            .send(
+                reqwest::Method::POST,
+                &format!("/v1/threads/{}/resume", self.thread_id),
+                &(),
+            )
+            .await?;
+
+        response
+            .thread
+            .ok_or_else(|| Error::transport("the satellite resumed a thread without saying so"))
+    }
+
+    /// Cancels every queued turn, leaving any running turn alone.
+    ///
+    /// One call rather than a loop, because cancelling turns one at a time races
+    /// the runner claiming them, and that is a race an operator should not have
+    /// to win. Pause first if the intent is to stop the thread rather than clear
+    /// a backlog.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the thread is unknown or the satellite is
+    /// unreachable.
+    pub async fn drain(&self) -> Result<Vec<String>> {
+        let response: DrainThreadResponse = self
+            .satellite
+            .send(
+                reqwest::Method::POST,
+                &format!("/v1/threads/{}/drain", self.thread_id),
+                &(),
+            )
+            .await?;
+
+        Ok(response.cancelled_turn_ids)
     }
 
     /// Streams this thread's events, from the beginning of retained history.

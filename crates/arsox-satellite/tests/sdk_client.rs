@@ -20,6 +20,13 @@ use futures_util::StreamExt as _;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
+/// Distinguishes scratch directories created in the same clock tick.
+///
+/// A timestamp alone is not unique: Windows clocks tick at 100 nanoseconds and
+/// these tests run in parallel, so two of them can name the same directory,
+/// share a database file, and race each other's migration.
+static NEXT_SCRATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 const SECRET: &str = "sdk-test-secret";
 
 const TRANSCRIPT: &str = concat!(
@@ -39,8 +46,10 @@ async fn start() -> String {
         }
     });
 
+    let unique = NEXT_SCRATCH.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
     let directory = std::env::temp_dir().join(format!(
-        "arsox-sdk-{}",
+        "arsox-sdk-{unique}-{}",
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|elapsed| elapsed.as_nanos())

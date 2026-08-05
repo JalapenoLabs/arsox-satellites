@@ -50,11 +50,23 @@ mod tempdir {
         }
     }
 
+    /// Distinguishes directories created in the same clock tick.
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+    /// A name no other scratch directory in this process will take.
+    ///
+    /// A timestamp alone is not enough: Windows clocks tick at 100 nanoseconds
+    /// and these tests run in parallel, so two can land on the same value and
+    /// then share a database file.
     fn uuid_like() -> u128 {
-        std::time::SystemTime::now()
+        let unique = u128::from(NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+
+        let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|elapsed| elapsed.as_nanos())
-            .unwrap_or_default()
+            .unwrap_or_default();
+
+        now.wrapping_mul(1_000).wrapping_add(unique)
     }
 }
 
@@ -319,8 +331,13 @@ async fn a_turn_interrupted_by_a_restart_is_marked_rather_than_left_running() {
 
     // Nothing is driving it now, which is exactly the state a restart leaves
     // behind. Left RUNNING it would block its thread forever.
-    let interrupted = store.mark_interrupted_turns().await.expect("should sweep");
-    assert_eq!(interrupted, vec![claimed.turn.turn_id.clone()]);
+    let settled = store
+        .settle_interrupted_turns()
+        .await
+        .expect("should settle");
+    // The thread did not opt into automatic resumption, so it waits.
+    assert_eq!(settled.left_interrupted, vec![claimed.turn.turn_id.clone()]);
+    assert!(settled.resumed.is_empty());
 
     let (turn, _result) = store
         .turn(&thread.thread_id, &claimed.turn.turn_id)

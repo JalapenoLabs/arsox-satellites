@@ -9,7 +9,7 @@
 
 use super::{Store, StoreError, from_nanos, to_nanos};
 use arsox_sdk::proto::common::v1::Timestamp;
-use arsox_sdk::proto::turn::v1::{Turn, TurnResult, TurnStatus};
+use arsox_sdk::proto::turn::v1::{Turn, TurnOrder, TurnResult, TurnStatus};
 use prost::Message as _;
 use sqlx::Row as _;
 use std::collections::BTreeMap;
@@ -27,6 +27,17 @@ pub struct NewTurn {
     /// asking for it.
     pub satellite_initiated: bool,
     pub triggered_by_turn_id: Option<String>,
+}
+
+/// What draining a thread's queue removed.
+#[derive(Debug, Clone)]
+pub struct Drained {
+    /// Cancelled, in the order they had been queued.
+    pub cancelled_turn_ids: Vec<String>,
+
+    /// Left alone. Present when something was running, so a caller can see what
+    /// draining deliberately did not touch.
+    pub running_turn_id: Option<String>,
 }
 
 /// A turn as stored, plus whether this call queued it.
@@ -163,6 +174,8 @@ impl Store {
         &self,
         thread_id: &str,
         statuses: &[i32],
+        order: TurnOrder,
+        descending: bool,
     ) -> Result<Vec<Turn>, StoreError> {
         // Proves the thread exists, so an unknown id is a clear 404 rather than
         // an empty list that looks like a thread with no turns.
@@ -173,7 +186,20 @@ impl Store {
             let slots = vec!["?"; statuses.len()].join(", ");
             write!(sql, " AND status IN ({slots})").expect("writing to a String is infallible");
         }
-        sql.push_str(" ORDER BY queued_at ASC, turn_id ASC");
+        // `finished_at` is null for anything still queued or running, and
+        // SQLite sorts nulls first ascending. Sorting them last instead keeps
+        // "most recently finished" from opening with everything unfinished.
+        let sort_column = match order {
+            TurnOrder::Finished => "finished_at",
+            TurnOrder::Unspecified | TurnOrder::Queued => "queued_at",
+        };
+        let direction = if descending { "DESC" } else { "ASC" };
+
+        write!(
+            sql,
+            " ORDER BY {sort_column} IS NULL, {sort_column} {direction}, turn_id {direction}"
+        )
+        .expect("writing to a String is infallible");
 
         let mut query = sqlx::query(&sql).bind(thread_id);
         for status in statuses {
@@ -225,6 +251,41 @@ impl Store {
             status: TurnStatus::Cancelled.into(),
             finished_at: Some(from_nanos(now)),
             ..turn
+        })
+    }
+
+    /// Cancels every queued turn in one call, leaving any running turn alone.
+    ///
+    /// A single statement rather than a loop, because cancelling one at a time
+    /// races the runner claiming the next, and an operator clearing a backlog
+    /// should not have to win that race.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::ThreadNotFound`] when the id is unknown.
+    pub async fn drain_thread(&self, thread_id: &str) -> Result<Drained, StoreError> {
+        self.thread(thread_id).await?;
+
+        let now = to_nanos(&Timestamp::now());
+
+        let cancelled = sqlx::query(
+            "UPDATE turns SET status = ?, finished_at = ?
+              WHERE thread_id = ? AND status = ?
+             RETURNING turn_id",
+        )
+        .bind(i32::from(TurnStatus::Cancelled))
+        .bind(now)
+        .bind(thread_id)
+        .bind(i32::from(TurnStatus::Queued))
+        .fetch_all(self.pool())
+        .await?;
+
+        let (_depth, running_turn_id) = self.queue_state(thread_id).await?;
+        self.touch_thread(thread_id).await?;
+
+        Ok(Drained {
+            cancelled_turn_ids: cancelled.iter().map(|row| row.get("turn_id")).collect(),
+            running_turn_id,
         })
     }
 

@@ -28,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/thread/v1/thread.proto.
  */
 export const file_arsox_thread_v1_thread: GenFile = /*@__PURE__*/
-  fileDesc("ChxhcnNveC90aHJlYWQvdjEvdGhyZWFkLnByb3RvEg9hcnNveC50aHJlYWQudjEiygUKBlRocmVhZBIRCgl0aHJlYWRfaWQYASABKAkSKwoFc3RhdGUYAiABKA4yHC5hcnNveC50aHJlYWQudjEuVGhyZWFkU3RhdGUSMwoIc2V0dGluZ3MYAyABKAsyIS5hcnNveC5zZXR0aW5ncy52MS5UaHJlYWRTZXR0aW5ncxIuCgpjcmVhdGVkX2F0GAQgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBI0ChBsYXN0X2FjdGl2aXR5X2F0GAUgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBIzCgpleHBpcmVzX2F0GAYgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcEgAiAEBEhMKC3F1ZXVlX2RlcHRoGAcgASgNEhwKD2N1cnJlbnRfdHVybl9pZBgIIAEoCUgBiAEBEkEKEXBlbmRpbmdfcXVlc3Rpb25zGAkgASgLMiEuYXJzb3guaW50ZXJhY3Rpb24udjEuUXVlc3Rpb25TZXRIAogBARI1CgxwZW5kaW5nX3BsYW4YCiABKAsyGi5hcnNveC5pbnRlcmFjdGlvbi52MS5QbGFuSAOIAQESFwoPbGF0ZXN0X3NlcXVlbmNlGAsgASgEEjcKCG1ldGFkYXRhGAwgAygLMiUuYXJzb3gudGhyZWFkLnYxLlRocmVhZC5NZXRhZGF0YUVudHJ5Eh8KEmhhcm5lc3Nfc2Vzc2lvbl9pZBgNIAEoCUgEiAEBGi8KDU1ldGFkYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4AUINCgtfZXhwaXJlc19hdEISChBfY3VycmVudF90dXJuX2lkQhQKEl9wZW5kaW5nX3F1ZXN0aW9uc0IPCg1fcGVuZGluZ19wbGFuQhUKE19oYXJuZXNzX3Nlc3Npb25faWQi4wMKDVRocmVhZFN1bW1hcnkSEQoJdGhyZWFkX2lkGAEgASgJEisKBXN0YXRlGAIgASgOMhwuYXJzb3gudGhyZWFkLnYxLlRocmVhZFN0YXRlEhMKC3F1ZXVlX2RlcHRoGAMgASgNEhwKD2N1cnJlbnRfdHVybl9pZBgEIAEoCUgAiAEBEi4KCmNyZWF0ZWRfYXQYBSABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wEjQKEGxhc3RfYWN0aXZpdHlfYXQYBiABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wEjMKCmV4cGlyZXNfYXQYByABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wSAGIAQESFwoPd29ya3NwYWNlX2J5dGVzGAggASgEEhcKD2xhdGVzdF9zZXF1ZW5jZRgJIAEoBBI+CghtZXRhZGF0YRgKIAMoCzIsLmFyc294LnRocmVhZC52MS5UaHJlYWRTdW1tYXJ5Lk1ldGFkYXRhRW50cnkaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQhIKEF9jdXJyZW50X3R1cm5faWRCDQoLX2V4cGlyZXNfYXQi8wEKE0NyZWF0ZVRocmVhZFJlcXVlc3QSMwoIc2V0dGluZ3MYASABKAsyIS5hcnNveC5zZXR0aW5ncy52MS5UaHJlYWRTZXR0aW5ncxIcCg9pZGVtcG90ZW5jeV9rZXkYAiABKAlIAIgBARJECghtZXRhZGF0YRgDIAMoCzIyLmFyc294LnRocmVhZC52MS5DcmVhdGVUaHJlYWRSZXF1ZXN0Lk1ldGFkYXRhRW50cnkaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQhIKEF9pZGVtcG90ZW5jeV9rZXkiVQoUQ3JlYXRlVGhyZWFkUmVzcG9uc2USJwoGdGhyZWFkGAEgASgLMhcuYXJzb3gudGhyZWFkLnYxLlRocmVhZBIUCgxkZWR1cGxpY2F0ZWQYAiABKAgiJQoQR2V0VGhyZWFkUmVxdWVzdBIRCgl0aHJlYWRfaWQYASABKAkiPAoRR2V0VGhyZWFkUmVzcG9uc2USJwoGdGhyZWFkGAEgASgLMhcuYXJzb3gudGhyZWFkLnYxLlRocmVhZCLkAQoSTGlzdFRocmVhZHNSZXF1ZXN0EiwKBnN0YXRlcxgBIAMoDjIcLmFyc294LnRocmVhZC52MS5UaHJlYWRTdGF0ZRJDCghtZXRhZGF0YRgCIAMoCzIxLmFyc294LnRocmVhZC52MS5MaXN0VGhyZWFkc1JlcXVlc3QuTWV0YWRhdGFFbnRyeRIqCgRwYWdlGAMgASgLMhwuYXJzb3guY29tbW9uLnYxLlBhZ2VSZXF1ZXN0Gi8KDU1ldGFkYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4ASJzChNMaXN0VGhyZWFkc1Jlc3BvbnNlEi8KB3RocmVhZHMYASADKAsyHi5hcnNveC50aHJlYWQudjEuVGhyZWFkU3VtbWFyeRIrCgRwYWdlGAIgASgLMh0uYXJzb3guY29tbW9uLnYxLlBhZ2VSZXNwb25zZSIpChREZXN0cm95VGhyZWFkUmVxdWVzdBIRCgl0aHJlYWRfaWQYASABKAkiQAoVRGVzdHJveVRocmVhZFJlc3BvbnNlEicKBnRocmVhZBgBIAEoCzIXLmFyc294LnRocmVhZC52MS5UaHJlYWQq7QEKC1RocmVhZFN0YXRlEhwKGFRIUkVBRF9TVEFURV9VTlNQRUNJRklFRBAAEh0KGVRIUkVBRF9TVEFURV9QUk9WSVNJT05JTkcQARIVChFUSFJFQURfU1RBVEVfSURMRRACEhgKFFRIUkVBRF9TVEFURV9SVU5OSU5HEAMSHwobVEhSRUFEX1NUQVRFX0FXQUlUSU5HX0lOUFVUEAQSGQoVVEhSRUFEX1NUQVRFX1dBVENISU5HEAUSGAoUVEhSRUFEX1NUQVRFX0VYUElSRUQQBhIaChZUSFJFQURfU1RBVEVfREVTVFJPWUVEEAdCgAEKE2NvbS5hcnNveC50aHJlYWQudjFCC1RocmVhZFByb3RvUAGiAgNBVFiqAg9BcnNveC5UaHJlYWQuVjHKAg9BcnNveFxUaHJlYWRcVjHiAhtBcnNveFxUaHJlYWRcVjFcR1BCTWV0YWRhdGHqAhFBcnNveDo6VGhyZWFkOjpWMWIGcHJvdG8z", [file_arsox_common_v1_common, file_arsox_interaction_v1_plan, file_arsox_interaction_v1_question, file_arsox_settings_v1_settings]);
+  fileDesc("ChxhcnNveC90aHJlYWQvdjEvdGhyZWFkLnByb3RvEg9hcnNveC50aHJlYWQudjEiygUKBlRocmVhZBIRCgl0aHJlYWRfaWQYASABKAkSKwoFc3RhdGUYAiABKA4yHC5hcnNveC50aHJlYWQudjEuVGhyZWFkU3RhdGUSMwoIc2V0dGluZ3MYAyABKAsyIS5hcnNveC5zZXR0aW5ncy52MS5UaHJlYWRTZXR0aW5ncxIuCgpjcmVhdGVkX2F0GAQgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBI0ChBsYXN0X2FjdGl2aXR5X2F0GAUgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBIzCgpleHBpcmVzX2F0GAYgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcEgAiAEBEhMKC3F1ZXVlX2RlcHRoGAcgASgNEhwKD2N1cnJlbnRfdHVybl9pZBgIIAEoCUgBiAEBEkEKEXBlbmRpbmdfcXVlc3Rpb25zGAkgASgLMiEuYXJzb3guaW50ZXJhY3Rpb24udjEuUXVlc3Rpb25TZXRIAogBARI1CgxwZW5kaW5nX3BsYW4YCiABKAsyGi5hcnNveC5pbnRlcmFjdGlvbi52MS5QbGFuSAOIAQESFwoPbGF0ZXN0X3NlcXVlbmNlGAsgASgEEjcKCG1ldGFkYXRhGAwgAygLMiUuYXJzb3gudGhyZWFkLnYxLlRocmVhZC5NZXRhZGF0YUVudHJ5Eh8KEmhhcm5lc3Nfc2Vzc2lvbl9pZBgNIAEoCUgEiAEBGi8KDU1ldGFkYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4AUINCgtfZXhwaXJlc19hdEISChBfY3VycmVudF90dXJuX2lkQhQKEl9wZW5kaW5nX3F1ZXN0aW9uc0IPCg1fcGVuZGluZ19wbGFuQhUKE19oYXJuZXNzX3Nlc3Npb25faWQi4wMKDVRocmVhZFN1bW1hcnkSEQoJdGhyZWFkX2lkGAEgASgJEisKBXN0YXRlGAIgASgOMhwuYXJzb3gudGhyZWFkLnYxLlRocmVhZFN0YXRlEhMKC3F1ZXVlX2RlcHRoGAMgASgNEhwKD2N1cnJlbnRfdHVybl9pZBgEIAEoCUgAiAEBEi4KCmNyZWF0ZWRfYXQYBSABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wEjQKEGxhc3RfYWN0aXZpdHlfYXQYBiABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wEjMKCmV4cGlyZXNfYXQYByABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wSAGIAQESFwoPd29ya3NwYWNlX2J5dGVzGAggASgEEhcKD2xhdGVzdF9zZXF1ZW5jZRgJIAEoBBI+CghtZXRhZGF0YRgKIAMoCzIsLmFyc294LnRocmVhZC52MS5UaHJlYWRTdW1tYXJ5Lk1ldGFkYXRhRW50cnkaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQhIKEF9jdXJyZW50X3R1cm5faWRCDQoLX2V4cGlyZXNfYXQi8wEKE0NyZWF0ZVRocmVhZFJlcXVlc3QSMwoIc2V0dGluZ3MYASABKAsyIS5hcnNveC5zZXR0aW5ncy52MS5UaHJlYWRTZXR0aW5ncxIcCg9pZGVtcG90ZW5jeV9rZXkYAiABKAlIAIgBARJECghtZXRhZGF0YRgDIAMoCzIyLmFyc294LnRocmVhZC52MS5DcmVhdGVUaHJlYWRSZXF1ZXN0Lk1ldGFkYXRhRW50cnkaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQhIKEF9pZGVtcG90ZW5jeV9rZXkiVQoUQ3JlYXRlVGhyZWFkUmVzcG9uc2USJwoGdGhyZWFkGAEgASgLMhcuYXJzb3gudGhyZWFkLnYxLlRocmVhZBIUCgxkZWR1cGxpY2F0ZWQYAiABKAgiJQoQR2V0VGhyZWFkUmVxdWVzdBIRCgl0aHJlYWRfaWQYASABKAkiPAoRR2V0VGhyZWFkUmVzcG9uc2USJwoGdGhyZWFkGAEgASgLMhcuYXJzb3gudGhyZWFkLnYxLlRocmVhZCKoAgoSTGlzdFRocmVhZHNSZXF1ZXN0EiwKBnN0YXRlcxgBIAMoDjIcLmFyc294LnRocmVhZC52MS5UaHJlYWRTdGF0ZRJDCghtZXRhZGF0YRgCIAMoCzIxLmFyc294LnRocmVhZC52MS5MaXN0VGhyZWFkc1JlcXVlc3QuTWV0YWRhdGFFbnRyeRIqCgRwYWdlGAMgASgLMhwuYXJzb3guY29tbW9uLnYxLlBhZ2VSZXF1ZXN0Ei4KCG9yZGVyX2J5GAQgASgOMhwuYXJzb3gudGhyZWFkLnYxLlRocmVhZE9yZGVyEhIKCmRlc2NlbmRpbmcYBSABKAgaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBInMKE0xpc3RUaHJlYWRzUmVzcG9uc2USLwoHdGhyZWFkcxgBIAMoCzIeLmFyc294LnRocmVhZC52MS5UaHJlYWRTdW1tYXJ5EisKBHBhZ2UYAiABKAsyHS5hcnNveC5jb21tb24udjEuUGFnZVJlc3BvbnNlIicKElBhdXNlVGhyZWFkUmVxdWVzdBIRCgl0aHJlYWRfaWQYASABKAkiPgoTUGF1c2VUaHJlYWRSZXNwb25zZRInCgZ0aHJlYWQYASABKAsyFy5hcnNveC50aHJlYWQudjEuVGhyZWFkIigKE1Jlc3VtZVRocmVhZFJlcXVlc3QSEQoJdGhyZWFkX2lkGAEgASgJIj8KFFJlc3VtZVRocmVhZFJlc3BvbnNlEicKBnRocmVhZBgBIAEoCzIXLmFyc294LnRocmVhZC52MS5UaHJlYWQiJwoSRHJhaW5UaHJlYWRSZXF1ZXN0EhEKCXRocmVhZF9pZBgBIAEoCSJjChNEcmFpblRocmVhZFJlc3BvbnNlEhoKEmNhbmNlbGxlZF90dXJuX2lkcxgBIAMoCRIcCg9ydW5uaW5nX3R1cm5faWQYAiABKAlIAIgBAUISChBfcnVubmluZ190dXJuX2lkIikKFERlc3Ryb3lUaHJlYWRSZXF1ZXN0EhEKCXRocmVhZF9pZBgBIAEoCSJAChVEZXN0cm95VGhyZWFkUmVzcG9uc2USJwoGdGhyZWFkGAEgASgLMhcuYXJzb3gudGhyZWFkLnYxLlRocmVhZCqGAgoLVGhyZWFkU3RhdGUSHAoYVEhSRUFEX1NUQVRFX1VOU1BFQ0lGSUVEEAASHQoZVEhSRUFEX1NUQVRFX1BST1ZJU0lPTklORxABEhUKEVRIUkVBRF9TVEFURV9JRExFEAISGAoUVEhSRUFEX1NUQVRFX1JVTk5JTkcQAxIfChtUSFJFQURfU1RBVEVfQVdBSVRJTkdfSU5QVVQQBBIZChVUSFJFQURfU1RBVEVfV0FUQ0hJTkcQBRIYChRUSFJFQURfU1RBVEVfRVhQSVJFRBAGEhoKFlRIUkVBRF9TVEFURV9ERVNUUk9ZRUQQBxIXChNUSFJFQURfU1RBVEVfUEFVU0VEEAgqZQoLVGhyZWFkT3JkZXISHAoYVEhSRUFEX09SREVSX1VOU1BFQ0lGSUVEEAASGAoUVEhSRUFEX09SREVSX0NSRUFURUQQARIeChpUSFJFQURfT1JERVJfTEFTVF9BQ1RJVklUWRACQoABChNjb20uYXJzb3gudGhyZWFkLnYxQgtUaHJlYWRQcm90b1ABogIDQVRYqgIPQXJzb3guVGhyZWFkLlYxygIPQXJzb3hcVGhyZWFkXFYx4gIbQXJzb3hcVGhyZWFkXFYxXEdQQk1ldGFkYXRh6gIRQXJzb3g6OlRocmVhZDo6VjFiBnByb3RvMw", [file_arsox_common_v1_common, file_arsox_interaction_v1_plan, file_arsox_interaction_v1_question, file_arsox_settings_v1_settings]);
 
 /**
  * One thread's current state.
@@ -369,6 +369,20 @@ export type ListThreadsRequest = Message<"arsox.thread.v1.ListThreadsRequest"> &
    * @generated from field: arsox.common.v1.PageRequest page = 3;
    */
   page?: PageRequest;
+
+  /**
+   * @generated from field: arsox.thread.v1.ThreadOrder order_by = 4;
+   */
+  orderBy: ThreadOrder;
+
+  /**
+   * Reverses the order. Newest first is the common case for
+   * `THREAD_ORDER_LAST_ACTIVITY`, and the default stays ascending so that
+   * leaving both fields unset gives the same listing it always did.
+   *
+   * @generated from field: bool descending = 5;
+   */
+  descending: boolean;
 };
 
 /**
@@ -403,6 +417,141 @@ export const ListThreadsResponseSchema: GenMessage<ListThreadsResponse> = /*@__P
   messageDesc(file_arsox_thread_v1_thread, 7);
 
 /**
+ * POST /v1/threads/{thread_id}/pause
+ *
+ * Stops the thread claiming queued work without losing anything. Submitting a
+ * turn to a paused thread still succeeds and still queues; the queue simply
+ * does not move.
+ *
+ * Pausing an already paused thread is a no-op rather than an error: an operator
+ * racing their own second click has done nothing wrong.
+ *
+ * @generated from message arsox.thread.v1.PauseThreadRequest
+ */
+export type PauseThreadRequest = Message<"arsox.thread.v1.PauseThreadRequest"> & {
+  /**
+   * @generated from field: string thread_id = 1;
+   */
+  threadId: string;
+};
+
+/**
+ * Describes the message arsox.thread.v1.PauseThreadRequest.
+ * Use `create(PauseThreadRequestSchema)` to create a new message.
+ */
+export const PauseThreadRequestSchema: GenMessage<PauseThreadRequest> = /*@__PURE__*/
+  messageDesc(file_arsox_thread_v1_thread, 8);
+
+/**
+ * @generated from message arsox.thread.v1.PauseThreadResponse
+ */
+export type PauseThreadResponse = Message<"arsox.thread.v1.PauseThreadResponse"> & {
+  /**
+   * @generated from field: arsox.thread.v1.Thread thread = 1;
+   */
+  thread?: Thread;
+};
+
+/**
+ * Describes the message arsox.thread.v1.PauseThreadResponse.
+ * Use `create(PauseThreadResponseSchema)` to create a new message.
+ */
+export const PauseThreadResponseSchema: GenMessage<PauseThreadResponse> = /*@__PURE__*/
+  messageDesc(file_arsox_thread_v1_thread, 9);
+
+/**
+ * POST /v1/threads/{thread_id}/resume
+ *
+ * Returns a paused thread to service. Queued turns start again in the order
+ * they were submitted.
+ *
+ * @generated from message arsox.thread.v1.ResumeThreadRequest
+ */
+export type ResumeThreadRequest = Message<"arsox.thread.v1.ResumeThreadRequest"> & {
+  /**
+   * @generated from field: string thread_id = 1;
+   */
+  threadId: string;
+};
+
+/**
+ * Describes the message arsox.thread.v1.ResumeThreadRequest.
+ * Use `create(ResumeThreadRequestSchema)` to create a new message.
+ */
+export const ResumeThreadRequestSchema: GenMessage<ResumeThreadRequest> = /*@__PURE__*/
+  messageDesc(file_arsox_thread_v1_thread, 10);
+
+/**
+ * @generated from message arsox.thread.v1.ResumeThreadResponse
+ */
+export type ResumeThreadResponse = Message<"arsox.thread.v1.ResumeThreadResponse"> & {
+  /**
+   * @generated from field: arsox.thread.v1.Thread thread = 1;
+   */
+  thread?: Thread;
+};
+
+/**
+ * Describes the message arsox.thread.v1.ResumeThreadResponse.
+ * Use `create(ResumeThreadResponseSchema)` to create a new message.
+ */
+export const ResumeThreadResponseSchema: GenMessage<ResumeThreadResponse> = /*@__PURE__*/
+  messageDesc(file_arsox_thread_v1_thread, 11);
+
+/**
+ * POST /v1/threads/{thread_id}/drain
+ *
+ * Cancels every queued turn in one call, leaving any running turn alone.
+ *
+ * Exists because the alternative is cancelling turns one at a time in a loop
+ * while the runner claims them from underneath, which is a race an operator
+ * should never have to win. Pause first if the intent is to stop the thread
+ * rather than to clear a backlog.
+ *
+ * @generated from message arsox.thread.v1.DrainThreadRequest
+ */
+export type DrainThreadRequest = Message<"arsox.thread.v1.DrainThreadRequest"> & {
+  /**
+   * @generated from field: string thread_id = 1;
+   */
+  threadId: string;
+};
+
+/**
+ * Describes the message arsox.thread.v1.DrainThreadRequest.
+ * Use `create(DrainThreadRequestSchema)` to create a new message.
+ */
+export const DrainThreadRequestSchema: GenMessage<DrainThreadRequest> = /*@__PURE__*/
+  messageDesc(file_arsox_thread_v1_thread, 12);
+
+/**
+ * @generated from message arsox.thread.v1.DrainThreadResponse
+ */
+export type DrainThreadResponse = Message<"arsox.thread.v1.DrainThreadResponse"> & {
+  /**
+   * The turns that were cancelled, in the order they had been queued.
+   *
+   * @generated from field: repeated string cancelled_turn_ids = 1;
+   */
+  cancelledTurnIds: string[];
+
+  /**
+   * Absent when nothing was running. Present and untouched otherwise, so the
+   * caller can see what draining deliberately left alone.
+   *
+   * @generated from field: optional string running_turn_id = 2;
+   */
+  runningTurnId?: string;
+};
+
+/**
+ * Describes the message arsox.thread.v1.DrainThreadResponse.
+ * Use `create(DrainThreadResponseSchema)` to create a new message.
+ */
+export const DrainThreadResponseSchema: GenMessage<DrainThreadResponse> = /*@__PURE__*/
+  messageDesc(file_arsox_thread_v1_thread, 13);
+
+/**
  * DELETE /v1/threads/{thread_id}
  *
  * Removes the entire workspace subtree, including member worktrees and any
@@ -424,7 +573,7 @@ export type DestroyThreadRequest = Message<"arsox.thread.v1.DestroyThreadRequest
  * Use `create(DestroyThreadRequestSchema)` to create a new message.
  */
 export const DestroyThreadRequestSchema: GenMessage<DestroyThreadRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_thread_v1_thread, 8);
+  messageDesc(file_arsox_thread_v1_thread, 14);
 
 /**
  * @generated from message arsox.thread.v1.DestroyThreadResponse
@@ -441,7 +590,7 @@ export type DestroyThreadResponse = Message<"arsox.thread.v1.DestroyThreadRespon
  * Use `create(DestroyThreadResponseSchema)` to create a new message.
  */
 export const DestroyThreadResponseSchema: GenMessage<DestroyThreadResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_thread_v1_thread, 9);
+  messageDesc(file_arsox_thread_v1_thread, 15);
 
 /**
  * Where a thread is in its life.
@@ -510,6 +659,20 @@ export enum ThreadState {
    * @generated from enum value: THREAD_STATE_DESTROYED = 7;
    */
   DESTROYED = 7,
+
+  /**
+   * Alive and holding everything it has, but refusing to start queued work.
+   *
+   * The state an operator reaches for when a thread is misbehaving and
+   * destroying it would lose the workspace. Turns may still be submitted and
+   * still queue; nothing claims them until the thread resumes.
+   *
+   * The idle TTL keeps running, because a paused thread is idle in every sense
+   * that matters to a disk.
+   *
+   * @generated from enum value: THREAD_STATE_PAUSED = 8;
+   */
+  PAUSED = 8,
 }
 
 /**
@@ -517,4 +680,39 @@ export enum ThreadState {
  */
 export const ThreadStateSchema: GenEnum<ThreadState> = /*@__PURE__*/
   enumDesc(file_arsox_thread_v1_thread, 0);
+
+/**
+ * How a thread listing is ordered.
+ *
+ * @generated from enum arsox.thread.v1.ThreadOrder
+ */
+export enum ThreadOrder {
+  /**
+   * Creation order, ascending. The default, and free: thread ids are UUIDv7, so
+   * ordering by id is ordering by creation time.
+   *
+   * @generated from enum value: THREAD_ORDER_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * @generated from enum value: THREAD_ORDER_CREATED = 1;
+   */
+  CREATED = 1,
+
+  /**
+   * Most recently touched. What an operator scanning a fleet almost always
+   * wants, and what creation order cannot approximate on a satellite whose
+   * oldest thread is its busiest.
+   *
+   * @generated from enum value: THREAD_ORDER_LAST_ACTIVITY = 2;
+   */
+  LAST_ACTIVITY = 2,
+}
+
+/**
+ * Describes the enum arsox.thread.v1.ThreadOrder.
+ */
+export const ThreadOrderSchema: GenEnum<ThreadOrder> = /*@__PURE__*/
+  enumDesc(file_arsox_thread_v1_thread, 1);
 

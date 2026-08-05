@@ -158,10 +158,27 @@ message CancelTurnResponse {
   Turn turn = 1;
 }
 
+// How a turn listing is ordered.
+enum TurnOrder {
+  // Queue order, ascending. The default, and the order turns actually ran in.
+  TURN_ORDER_UNSPECIFIED = 0;
+
+  TURN_ORDER_QUEUED = 1;
+
+  // When the turn reached a terminal state. Absent for anything still queued or
+  // running, which sorts last.
+  TURN_ORDER_FINISHED = 2;
+}
+
 message ListTurnsRequest {
   string thread_id = 1;
   repeated TurnStatus statuses = 2;
   arsox.common.v1.PageRequest page = 3;
+
+  TurnOrder order_by = 4;
+
+  // Reverses the order. Leaving both unset gives the same listing it always did.
+  bool descending = 5;
 }
 
 message ListTurnsResponse {

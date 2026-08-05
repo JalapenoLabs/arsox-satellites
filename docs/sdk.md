@@ -32,6 +32,21 @@ create.
 `attach` reads the thread before returning, so attaching to a typo fails there
 rather than at the first operation on the handle.
 
+## Stopping a thread is three verbs, not a loop
+
+`pause`, `resume`, and `drain` are separate calls because they answer separate
+questions: stop claiming work, start again, and clear what is already queued.
+
+Collapsing them into one "stop" would force a choice nobody wants to make on the
+caller's behalf. Pausing keeps the backlog, which is right when a thread is
+misbehaving and you want to look at what it was about to do. Draining discards
+it, which is right when the backlog itself is the problem. They compose, so the
+caller says which they meant.
+
+`drain` returns the ids it cancelled rather than a count, and the running turn it
+left alone. A caller that needs the thread fully stopped can see there is still
+something running and cancel it explicitly.
+
 ## The version check happens at connect
 
 `Satellite::connect` calls `/v1/version` and refuses a satellite serving a higher

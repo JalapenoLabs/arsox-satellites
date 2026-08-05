@@ -15,6 +15,16 @@ use prost::Message as _;
 use sqlx::Row as _;
 use std::collections::BTreeMap;
 
+/// What a restart left behind, and what was done about it.
+#[derive(Debug, Clone, Default)]
+pub struct Interrupted {
+    /// Put back in the queue, because the thread asked for that.
+    pub resumed: Vec<String>,
+
+    /// Left for a human to decide about.
+    pub left_interrupted: Vec<String>,
+}
+
 /// A turn a runner has taken responsibility for.
 #[derive(Debug, Clone)]
 pub struct ClaimedTurn {
@@ -41,16 +51,18 @@ impl Store {
 
         let mut transaction = self.pool().begin().await?;
 
-        // One turn at a time per thread, forever. The subquery excludes any
-        // thread that already has something running, which is what makes the
-        // rule structural rather than something the runner has to remember.
+        // One turn at a time per thread, forever, and nothing at all from a
+        // paused thread. Both rules live in this subquery rather than in the
+        // runner, which is what makes them hold even if a second runner appears.
         let Some(row) = sqlx::query(
             "UPDATE turns
                 SET status = ?, started_at = ?
               WHERE turn_id = (
                     SELECT candidate.turn_id
                       FROM turns candidate
+                      JOIN threads owner ON owner.thread_id = candidate.thread_id
                      WHERE candidate.status = ?
+                       AND owner.state != ?
                        AND candidate.thread_id NOT IN (
                              SELECT running.thread_id FROM turns running WHERE running.status = ?
                            )
@@ -62,6 +74,7 @@ impl Store {
         .bind(i32::from(TurnStatus::Running))
         .bind(now)
         .bind(i32::from(TurnStatus::Queued))
+        .bind(i32::from(ThreadState::Paused))
         .bind(i32::from(TurnStatus::Running))
         .fetch_optional(&mut *transaction)
         .await?
@@ -219,22 +232,27 @@ impl Store {
         Ok(())
     }
 
-    /// Returns turns left running when the satellite stopped.
+    /// Settles turns left running when the satellite stopped.
     ///
     /// A turn in flight during a restart is not lost work: the thread and its
-    /// workspace survive, and the turn is marked interrupted so a human or a
-    /// policy can decide whether to resume it.
+    /// workspace survive. What happens next is the thread's own decision, taken
+    /// when it was created: `resume_interrupted_turns` puts it back in the queue,
+    /// and otherwise it stays interrupted until a human looks at it.
+    ///
+    /// Automatic resumption is right for an unattended fleet and wrong when
+    /// somebody would want to see what happened first, which is why it is a
+    /// setting rather than a behaviour.
     ///
     /// # Errors
     ///
     /// Returns a database error if the update fails.
-    pub async fn mark_interrupted_turns(&self) -> Result<Vec<String>, StoreError> {
+    pub async fn settle_interrupted_turns(&self) -> Result<Interrupted, StoreError> {
         let now = to_nanos(&Timestamp::now());
 
         let rows = sqlx::query(
             "UPDATE turns SET status = ?, finished_at = ?
               WHERE status = ?
-             RETURNING turn_id",
+             RETURNING turn_id, thread_id",
         )
         .bind(i32::from(TurnStatus::Interrupted))
         .bind(now)
@@ -242,6 +260,38 @@ impl Store {
         .fetch_all(self.pool())
         .await?;
 
-        Ok(rows.iter().map(|row| row.get("turn_id")).collect())
+        let mut settled = Interrupted::default();
+
+        for row in &rows {
+            let turn_id: String = row.get("turn_id");
+            let thread_id: String = row.get("thread_id");
+
+            let resume = self
+                .thread(&thread_id)
+                .await
+                .ok()
+                .and_then(|thread| thread.settings)
+                .is_some_and(|settings| settings.resume_interrupted_turns);
+
+            if resume {
+                // Back to the queue with its start time cleared, so the runner
+                // treats it as work that has never begun rather than work that
+                // began and vanished.
+                sqlx::query(
+                    "UPDATE turns SET status = ?, started_at = NULL, finished_at = NULL
+                      WHERE turn_id = ?",
+                )
+                .bind(i32::from(TurnStatus::Queued))
+                .bind(&turn_id)
+                .execute(self.pool())
+                .await?;
+
+                settled.resumed.push(turn_id);
+            } else {
+                settled.left_interrupted.push(turn_id);
+            }
+        }
+
+        Ok(settled)
     }
 }

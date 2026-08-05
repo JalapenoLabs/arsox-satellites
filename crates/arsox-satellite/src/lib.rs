@@ -422,12 +422,14 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
     // the thread and its workspace survive, and the turn is marked interrupted
     // so a policy or a human can decide whether to resume it. Leaving it
     // RUNNING would block its thread forever behind a turn nothing is driving.
-    match store.mark_interrupted_turns().await {
-        Ok(interrupted) if !interrupted.is_empty() => {
+    match store.settle_interrupted_turns().await {
+        Ok(settled) if !settled.resumed.is_empty() || !settled.left_interrupted.is_empty() => {
             tracing::warn!(
                 event.name = "satellite.boot.interrupted_turns",
-                turn.count = interrupted.len(),
-                "marked {{turn.count}} turns interrupted by a restart",
+                turn.resumed = settled.resumed.len(),
+                turn.left_interrupted = settled.left_interrupted.len(),
+                "a restart interrupted turns: {{turn.resumed}} requeued, \
+                 {{turn.left_interrupted}} awaiting a decision",
             );
         }
         Ok(_none) => {}

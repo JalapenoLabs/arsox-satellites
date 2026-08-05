@@ -5,7 +5,7 @@
 use super::{Store, StoreError, from_nanos, to_nanos};
 use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::settings::v1::ThreadSettings;
-use arsox_sdk::proto::thread::v1::{Thread, ThreadState, ThreadSummary};
+use arsox_sdk::proto::thread::v1::{Thread, ThreadOrder, ThreadState, ThreadSummary};
 use prost::Message as _;
 use sqlx::Row as _;
 use std::collections::BTreeMap;
@@ -17,6 +17,15 @@ pub struct NewThread {
     pub settings: ThreadSettings,
     pub metadata: BTreeMap<String, String>,
     pub idempotency_key: Option<String>,
+}
+
+/// One page of a thread listing.
+#[derive(Debug, Clone)]
+pub struct Listing {
+    pub threads: Vec<ThreadSummary>,
+
+    /// Pass back to continue. Empty when the page was the last one.
+    pub next_cursor: String,
 }
 
 /// A thread as stored, plus whether this call created it.
@@ -38,12 +47,28 @@ pub struct ThreadFilter {
     /// Every entry must match. Empty does not filter.
     pub metadata: BTreeMap<String, String>,
 
-    /// Return threads ordered after this id. Thread ids are `UUIDv7`, so ordering
-    /// by id is ordering by creation time and the cursor needs no separate
-    /// sort key.
+    /// Resume after this opaque cursor, which encodes the sort key and the
+    /// thread id together.
+    ///
+    /// Both are needed. Ordering by last activity alone is not unique, so a
+    /// cursor carrying only the timestamp would either repeat or skip every
+    /// thread that shares a millisecond with the one at the page boundary.
     pub after: Option<String>,
 
     pub limit: u32,
+
+    pub order_by: ThreadOrder,
+    pub descending: bool,
+}
+
+/// Splits a cursor back into its sort key and thread id.
+fn split_cursor(cursor: &str) -> Option<(&str, &str)> {
+    cursor.split_once('|')
+}
+
+/// Builds the cursor a client sends back to continue a listing.
+fn build_cursor(sort_key: &str, thread_id: &str) -> String {
+    format!("{sort_key}|{thread_id}")
 }
 
 /// Page size used when a caller asks for none.
@@ -163,18 +188,28 @@ impl Store {
     /// # Errors
     ///
     /// Returns a database error if the query fails.
-    pub async fn list_threads(
-        &self,
-        filter: &ThreadFilter,
-    ) -> Result<Vec<ThreadSummary>, StoreError> {
+    pub async fn list_threads(&self, filter: &ThreadFilter) -> Result<Listing, StoreError> {
         let limit = match filter.limit {
             0 => DEFAULT_PAGE,
             asked => asked.min(MAX_PAGE),
         };
 
+        // Ordering by last activity needs a second key, because a timestamp is
+        // not unique and a cursor on it alone would repeat or skip whatever
+        // shares a value with the row at the page boundary. Creation order gets
+        // this for free: thread ids are UUIDv7 and already sort by time.
+        let by_activity = matches!(filter.order_by, ThreadOrder::LastActivity);
+        let sort_column = if by_activity {
+            "t.last_activity_at"
+        } else {
+            "t.thread_id"
+        };
+        let comparison = if filter.descending { "<" } else { ">" };
+        let direction = if filter.descending { "DESC" } else { "ASC" };
+
         // Built rather than written out because the filters are optional and
         // SQLite has no array binding. Every value is still bound, never
-        // interpolated.
+        // interpolated: the fragments chosen here are fixed strings.
         let mut sql = String::from("SELECT t.* FROM threads t");
         if !filter.metadata.is_empty() {
             for index in 0..filter.metadata.len() {
@@ -192,9 +227,14 @@ impl Store {
             write!(sql, " AND t.state IN ({slots})").expect("writing to a String is infallible");
         }
         if filter.after.is_some() {
-            sql.push_str(" AND t.thread_id > ?");
+            write!(sql, " AND ({sort_column}, t.thread_id) {comparison} (?, ?)")
+                .expect("writing to a String is infallible");
         }
-        sql.push_str(" ORDER BY t.thread_id ASC LIMIT ?");
+        write!(
+            sql,
+            " ORDER BY {sort_column} {direction}, t.thread_id {direction} LIMIT ?"
+        )
+        .expect("writing to a String is infallible");
 
         let mut query = sqlx::query(&sql);
         for (key, value) in &filter.metadata {
@@ -204,17 +244,31 @@ impl Store {
             query = query.bind(state);
         }
         if let Some(after) = filter.after.as_deref() {
-            query = query.bind(after);
+            let (sort_key, thread_id) = split_cursor(after).unwrap_or((after, after));
+            if by_activity {
+                query = query.bind(sort_key.parse::<i64>().unwrap_or_default());
+            } else {
+                query = query.bind(sort_key);
+            }
+            query = query.bind(thread_id);
         }
         query = query.bind(limit);
 
         let rows = query.fetch_all(self.pool()).await?;
 
         let mut summaries = Vec::with_capacity(rows.len());
+        let mut cursors = Vec::with_capacity(rows.len());
         for row in &rows {
             let thread_id: String = row.get("thread_id");
             let metadata = self.thread_metadata(&thread_id).await?;
             let (queue_depth, current_turn_id) = self.queue_state(&thread_id).await?;
+
+            let sort_key = if by_activity {
+                row.get::<i64, _>("last_activity_at").to_string()
+            } else {
+                thread_id.clone()
+            };
+            cursors.push(build_cursor(&sort_key, &thread_id));
 
             summaries.push(ThreadSummary {
                 thread_id: thread_id.clone(),
@@ -232,7 +286,64 @@ impl Store {
             });
         }
 
-        Ok(summaries)
+        Ok(Listing {
+            next_cursor: cursors.last().cloned().unwrap_or_default(),
+            threads: summaries,
+        })
+    }
+
+    /// Stops a thread claiming queued work, without losing anything.
+    ///
+    /// Pausing an already paused thread is a no-op rather than an error: an
+    /// operator racing their own second click has done nothing wrong.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::ThreadNotFound`] when the id is unknown.
+    pub async fn pause_thread(&self, thread_id: &str) -> Result<Thread, StoreError> {
+        self.set_paused(thread_id, true).await
+    }
+
+    /// Returns a paused thread to service.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::ThreadNotFound`] when the id is unknown.
+    pub async fn resume_thread(&self, thread_id: &str) -> Result<Thread, StoreError> {
+        self.set_paused(thread_id, false).await
+    }
+
+    async fn set_paused(&self, thread_id: &str, paused: bool) -> Result<Thread, StoreError> {
+        let thread = self.thread(thread_id).await?;
+        let current = ThreadState::try_from(thread.state).unwrap_or(ThreadState::Unspecified);
+
+        // Pausing something already paused, or resuming something that was never
+        // paused, reports the state rather than failing: an operator racing
+        // their own second click has done nothing wrong.
+        if (current == ThreadState::Paused) == paused {
+            return Ok(thread);
+        }
+
+        // Resuming returns the thread to idle rather than to whatever it was
+        // doing when it stopped. Anything that had been running was already
+        // settled, so idle is the honest state and the runner takes it from
+        // there.
+        let target = if paused {
+            ThreadState::Paused
+        } else {
+            ThreadState::Idle
+        };
+
+        sqlx::query("UPDATE threads SET state = ? WHERE thread_id = ?")
+            .bind(i32::from(target))
+            .bind(thread_id)
+            .execute(self.pool())
+            .await?;
+
+        Ok(Thread {
+            state: target.into(),
+            ..thread
+        })
     }
 
     /// Marks a thread destroyed and removes its rows.
