@@ -1,0 +1,687 @@
+// Copyright © 2026 Jalapeno Labs
+
+//! Maps Claude CLI `stream-json` output into the canonical contract.
+//!
+//! The satellite drives the CLI with `--print --output-format stream-json`, and
+//! every line of stdout is one native event. [`map_line`] turns each into zero
+//! or more canonical events.
+//!
+//! # What the native vocabulary looks like
+//!
+//! Five line types matter, and two of them are not shaped the way the canonical
+//! contract is:
+//!
+//! - A tool call arrives as an `assistant` line whose `content` array holds a
+//!   `tool_use` block, and its outcome arrives later as a **`user`** line
+//!   holding a `tool_result` block. Claude models a tool result as something the
+//!   user said. The contract models it as `tool.completed`, paired to its start
+//!   by `tool_call_id`.
+//! - One `assistant` line can carry prose and a tool call together, so a single
+//!   native line becomes two canonical events.
+//!
+//! Neither shape is wrong; they are just a different model. Absorbing that
+//! difference is the entire job of this module.
+
+use crate::harness::{HarnessResult, MappedEvent, Mapping};
+use arsox_sdk::proto::common::v1::{Duration, Money, Timestamp};
+use arsox_sdk::proto::error::v1::ErrorCode;
+use arsox_sdk::proto::event::v1::thread_event::Payload;
+use arsox_sdk::proto::event::v1::{
+    AgentMessage, AgentThinking, Author, AuthorKind, RateLimitReported, ToolCompleted, ToolStarted,
+};
+use arsox_sdk::proto::incident::v1::{Disposition, Incident};
+use arsox_sdk::proto::turn::v1::{StopReason, TurnTiming};
+use arsox_sdk::proto::usage::v1::{
+    CostEstimate, ModelStatistics, RateLimitStatus, RateLimitWindow, ServerToolUsage, TokenUsage,
+};
+use serde_json::Value;
+
+/// Billionths in one whole unit, which is how `Money` stores its fraction.
+const NANOS_PER_UNIT: f64 = 1_000_000_000.0;
+
+/// Maps one line of `stream-json` into whatever it represents.
+///
+/// A line that is not valid JSON, or whose `type` this mapper does not know,
+/// produces a `degraded` incident rather than an error or a silent skip. A
+/// harness adding an event type must never take a satellite down, and must never
+/// pass unnoticed either.
+pub fn map_line(line: &str) -> Mapping {
+    let Ok(event) = serde_json::from_str::<Value>(line) else {
+        return Mapping {
+            events: vec![incident(
+                ErrorCode::Internal,
+                Disposition::Degraded,
+                "harness emitted a line that is not valid JSON",
+            )],
+            ..Mapping::default()
+        };
+    };
+
+    let occurred_at = timestamp(event.get("timestamp").and_then(Value::as_str));
+    let author = author(event.get("parent_tool_use_id").and_then(Value::as_str));
+
+    match event.get("type").and_then(Value::as_str) {
+        // Announces the session and the environment. Carries no canonical
+        // event: everything in it is either configuration the satellite already
+        // knows or capability detail reported through `GET /v1/harness`.
+        Some("system") => Mapping {
+            harness_session_id: event
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+            ..Mapping::default()
+        },
+
+        Some("rate_limit_event") => Mapping {
+            events: map_rate_limit(&event, occurred_at),
+            ..Mapping::default()
+        },
+
+        Some("assistant") => Mapping {
+            events: map_assistant(&event, &author, occurred_at.as_ref()),
+            ..Mapping::default()
+        },
+
+        Some("user") => Mapping {
+            events: map_tool_results(&event, &author, occurred_at.as_ref()),
+            ..Mapping::default()
+        },
+
+        Some("result") => Mapping {
+            result: Some(map_result(&event)),
+            ..Mapping::default()
+        },
+
+        unknown => Mapping {
+            events: vec![incident(
+                ErrorCode::Internal,
+                Disposition::Degraded,
+                &format!(
+                    "harness emitted an unrecognized event type {:?}, which was recorded and dropped",
+                    unknown.unwrap_or("<absent>")
+                ),
+            )],
+            ..Mapping::default()
+        },
+    }
+}
+
+/// Attributes an event to the agent that produced it.
+///
+/// Claude identifies a sub-agent by the id of the tool call that spawned it
+/// rather than by a member id, so one is derived from it. Deriving is what keeps
+/// `parent_tool_use_id` out of the contract: a consumer sees a stable member id
+/// and never learns which harness produced its stream.
+fn author(parent_tool_use_id: Option<&str>) -> Author {
+    match parent_tool_use_id {
+        None => Author {
+            kind: AuthorKind::Agent.into(),
+            ..Author::default()
+        },
+        Some(parent) => Author {
+            kind: AuthorKind::Subagent.into(),
+            member_id: Some(format!("subagent-{parent}")),
+            ..Author::default()
+        },
+    }
+}
+
+fn map_assistant(
+    event: &Value,
+    author: &Author,
+    occurred_at: Option<&Timestamp>,
+) -> Vec<MappedEvent> {
+    let Some(blocks) = event.pointer("/message/content").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    // One native line, many canonical events: prose and a tool call frequently
+    // arrive in the same message.
+    blocks
+        .iter()
+        .filter_map(|block| {
+            let payload = match block.get("type").and_then(Value::as_str)? {
+                "text" => Payload::AgentMessage(AgentMessage {
+                    author: Some(author.clone()),
+                    text: string_at(block, "text"),
+                }),
+                "thinking" => Payload::AgentThinking(AgentThinking {
+                    author: Some(author.clone()),
+                    text: string_at(block, "thinking"),
+                }),
+                "tool_use" => Payload::ToolStarted(ToolStarted {
+                    author: Some(author.clone()),
+                    tool_call_id: string_at(block, "id"),
+                    tool_name: string_at(block, "name"),
+                    // Tool inputs are open-ended by nature, so they travel as a
+                    // Struct and are redacted like any other content.
+                    input: block.get("input").and_then(json_to_struct),
+                }),
+                _unrecognized => return None,
+            };
+
+            Some(MappedEvent {
+                type_name: type_name_of(&payload),
+                member_id: author.member_id.clone(),
+                occurred_at: occurred_at.cloned(),
+                payload,
+            })
+        })
+        .collect()
+}
+
+/// Maps the `user` line that carries tool results.
+///
+/// The name is the surprising part of the native protocol. A tool's outcome is
+/// not something a user said, and the contract does not pretend otherwise.
+fn map_tool_results(
+    event: &Value,
+    author: &Author,
+    occurred_at: Option<&Timestamp>,
+) -> Vec<MappedEvent> {
+    let Some(blocks) = event.pointer("/message/content").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+
+    blocks
+        .iter()
+        .filter(|block| block.get("type").and_then(Value::as_str) == Some("tool_result"))
+        .map(|block| {
+            let payload = Payload::ToolCompleted(ToolCompleted {
+                author: Some(author.clone()),
+                tool_call_id: string_at(block, "tool_use_id"),
+                // The native result names only the call, not the tool. The turn
+                // runner pairs it back to its `tool.started` by `tool_call_id`.
+                tool_name: String::new(),
+                ok: !block
+                    .get("is_error")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                output_preview: block.get("content").map(|content| match content.as_str() {
+                    Some(text) => text.to_owned(),
+                    None => content.to_string(),
+                }),
+                // Absent from the native event. The turn runner knows when the
+                // matching `tool.started` was emitted and fills this in.
+                elapsed: None,
+            });
+
+            MappedEvent {
+                type_name: type_name_of(&payload),
+                member_id: author.member_id.clone(),
+                occurred_at: occurred_at.cloned(),
+                payload,
+            }
+        })
+        .collect()
+}
+
+fn map_rate_limit(event: &Value, occurred_at: Option<Timestamp>) -> Vec<MappedEvent> {
+    let Some(info) = event.get("rate_limit_info") else {
+        return Vec::new();
+    };
+
+    let window = RateLimitWindow {
+        window: string_at(info, "rateLimitType"),
+        // The native event reports a status and a reset time but no level, so
+        // the level is genuinely absent rather than zero.
+        percent_used: None,
+        resets_at: info
+            .get("resetsAt")
+            .and_then(Value::as_i64)
+            .map(|seconds| Timestamp {
+                epoch_seconds: seconds,
+                nanos: 0,
+                timezone: arsox_sdk::helpers::DEFAULT_TIMEZONE.to_owned(),
+            }),
+    };
+
+    let payload = Payload::RateLimitReported(RateLimitReported {
+        status: Some(RateLimitStatus {
+            windows: vec![window],
+            throttled: info.get("status").and_then(Value::as_str) != Some("allowed"),
+        }),
+        // The harness reports the provider's quota without naming which
+        // configured endpoint it came from. The turn runner knows which endpoint
+        // is active and fills this in.
+        endpoint_name: String::new(),
+    });
+
+    vec![MappedEvent {
+        type_name: type_name_of(&payload),
+        member_id: None,
+        occurred_at,
+        payload,
+    }]
+}
+
+fn map_result(event: &Value) -> HarnessResult {
+    let usage = event.get("usage");
+
+    HarnessResult {
+        is_error: event
+            .get("is_error")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        summary: string_at(event, "result"),
+        tokens: usage.map(token_usage).unwrap_or_default(),
+        cost: CostEstimate {
+            amount: event
+                .get("total_cost_usd")
+                .and_then(Value::as_f64)
+                .map(money_from_usd),
+            is_partial: false,
+        },
+        by_model: map_model_usage(event),
+        timing: TurnTiming {
+            total: millis(event.get("duration_ms")),
+            llm: millis(event.get("duration_api_ms")),
+            time_to_first_token: millis(event.get("ttft_ms")),
+            // Named for what it is. The harness calls this `num_turns`, but a
+            // harness turn is one model round trip and an Arsox turn is a whole
+            // unit of work.
+            model_round_trips: event
+                .get("num_turns")
+                .and_then(Value::as_u64)
+                .and_then(|count| u32::try_from(count).ok()),
+        },
+        stop_reason: event
+            .get("stop_reason")
+            .and_then(Value::as_str)
+            .and_then(stop_reason),
+        permission_denials: event
+            .get("permission_denials")
+            .and_then(Value::as_array)
+            .map(|denials| denials.iter().map(ToString::to_string).collect())
+            .unwrap_or_default(),
+    }
+}
+
+/// Splits usage by the model that actually answered.
+///
+/// Without this, failover is invisible in the accounting: a run where the first
+/// endpoint burned tokens failing looks identical to a clean run on the second.
+fn map_model_usage(event: &Value) -> Vec<ModelStatistics> {
+    let Some(per_model) = event.get("modelUsage").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+
+    per_model
+        .iter()
+        .map(|(model, stats)| ModelStatistics {
+            model: model.clone(),
+            tokens: Some(TokenUsage {
+                input_tokens: u64_at(stats, "inputTokens"),
+                output_tokens: u64_at(stats, "outputTokens"),
+                total_tokens: u64_at(stats, "inputTokens") + u64_at(stats, "outputTokens"),
+                cache_read_tokens: stats.get("cacheReadInputTokens").and_then(Value::as_u64),
+                cache_write_tokens: stats
+                    .get("cacheCreationInputTokens")
+                    .and_then(Value::as_u64),
+                // This harness folds reasoning into output rather than reporting
+                // it separately, so the field is absent rather than zero.
+                reasoning_output_tokens: None,
+            }),
+            cost: Some(CostEstimate {
+                amount: stats
+                    .get("costUSD")
+                    .and_then(Value::as_f64)
+                    .map(money_from_usd),
+                is_partial: false,
+            }),
+            server_tools: stats
+                .get("webSearchRequests")
+                .and_then(Value::as_u64)
+                .and_then(|count| u32::try_from(count).ok())
+                .map(|requests| ServerToolUsage {
+                    web_search_requests: Some(requests),
+                    web_fetch_requests: None,
+                }),
+        })
+        .collect()
+}
+
+fn token_usage(usage: &Value) -> TokenUsage {
+    let input = u64_at(usage, "input_tokens");
+    let output = u64_at(usage, "output_tokens");
+
+    TokenUsage {
+        input_tokens: input,
+        output_tokens: output,
+        // The native event reports no total, so it is derived. Cache tokens are
+        // deliberately excluded: they are already counted in `input_tokens` and
+        // adding them would double-count every cached request.
+        total_tokens: input + output,
+        cache_read_tokens: usage.get("cache_read_input_tokens").and_then(Value::as_u64),
+        cache_write_tokens: usage
+            .get("cache_creation_input_tokens")
+            .and_then(Value::as_u64),
+        reasoning_output_tokens: None,
+    }
+}
+
+/// Converts a floating point dollar amount into exact integer units.
+///
+/// The harness reports cost as an `f64`, which is the last place a float is
+/// allowed to exist. Everything downstream accumulates in integers, because a
+/// ceiling that drifts from the invoice it was meant to predict is the failure
+/// this type exists to prevent.
+fn money_from_usd(amount: f64) -> Money {
+    let whole = amount.trunc();
+    let fraction = ((amount - whole) * NANOS_PER_UNIT).round();
+
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "a cost beyond i64 dollars or i32 billionths is not a real invoice"
+    )]
+    Money {
+        currency_code: "USD".to_owned(),
+        units: whole as i64,
+        nanos: fraction as i32,
+    }
+}
+
+fn stop_reason(raw: &str) -> Option<StopReason> {
+    match raw {
+        "end_turn" => Some(StopReason::EndTurn),
+        "max_tokens" => Some(StopReason::MaxTokens),
+        "stop_sequence" => Some(StopReason::StopSequence),
+        "refusal" => Some(StopReason::Refusal),
+        // `tool_use` is an intermediate stop, not a terminal one, and any value
+        // added later is better absent than guessed at.
+        _intermediate_or_unknown => None,
+    }
+}
+
+/// The stable wire name for a payload, kept beside the payload it names.
+fn type_name_of(payload: &Payload) -> &'static str {
+    match payload {
+        Payload::AgentMessage(_) => "agent.message",
+        Payload::AgentThinking(_) => "agent.thinking",
+        Payload::ToolStarted(_) => "tool.started",
+        Payload::ToolCompleted(_) => "tool.completed",
+        Payload::RateLimitReported(_) => "rate_limit.reported",
+        Payload::Incident(_) => "incident",
+        _other => "unknown",
+    }
+}
+
+fn incident(code: ErrorCode, disposition: Disposition, message: &str) -> MappedEvent {
+    MappedEvent {
+        type_name: "incident",
+        member_id: None,
+        occurred_at: None,
+        payload: Payload::Incident(Incident {
+            code: code.into(),
+            disposition: disposition.into(),
+            message: message.to_owned(),
+            retryable: false,
+            ..Incident::default()
+        }),
+    }
+}
+
+fn timestamp(raw: Option<&str>) -> Option<Timestamp> {
+    let parsed = chrono::DateTime::parse_from_rfc3339(raw?).ok()?;
+
+    Some(Timestamp {
+        epoch_seconds: parsed.timestamp(),
+        nanos: parsed.timestamp_subsec_nanos(),
+        timezone: arsox_sdk::helpers::DEFAULT_TIMEZONE.to_owned(),
+    })
+}
+
+fn millis(raw: Option<&Value>) -> Option<Duration> {
+    let total = raw?.as_i64()?;
+
+    Some(Duration {
+        seconds: total / 1_000,
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "a millisecond remainder is always under one billion nanoseconds"
+        )]
+        nanos: ((total % 1_000) * 1_000_000) as i32,
+    })
+}
+
+fn string_at(value: &Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn u64_at(value: &Value, key: &str) -> u64 {
+    value.get(key).and_then(Value::as_u64).unwrap_or_default()
+}
+
+/// Converts arbitrary JSON into the protobuf `Struct` the contract carries.
+fn json_to_struct(value: &Value) -> Option<prost_types::Struct> {
+    let object = value.as_object()?;
+
+    Some(prost_types::Struct {
+        fields: object
+            .iter()
+            .map(|(key, value)| (key.clone(), json_to_value(value)))
+            .collect(),
+    })
+}
+
+fn json_to_value(value: &Value) -> prost_types::Value {
+    use prost_types::value::Kind;
+
+    let kind = match value {
+        Value::Null => Kind::NullValue(0),
+        Value::Bool(flag) => Kind::BoolValue(*flag),
+        Value::Number(number) => Kind::NumberValue(number.as_f64().unwrap_or_default()),
+        Value::String(text) => Kind::StringValue(text.clone()),
+        Value::Array(items) => Kind::ListValue(prost_types::ListValue {
+            values: items.iter().map(json_to_value).collect(),
+        }),
+        Value::Object(fields) => Kind::StructValue(prost_types::Struct {
+            fields: fields
+                .iter()
+                .map(|(key, value)| (key.clone(), json_to_value(value)))
+                .collect(),
+        }),
+    };
+
+    prost_types::Value { kind: Some(kind) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A real `stream-json` transcript, captured from the CLI and scrubbed of
+    /// the capturing machine's identifiers.
+    ///
+    /// This is the conformance fixture, and its value is that nobody wrote it
+    /// from imagination. Every field, and every place the native shape disagrees
+    /// with the contract, is something the harness actually emitted.
+    const TOOL_CALL_TRANSCRIPT: &str = include_str!("../../fixtures/claude/tool-call.jsonl");
+
+    fn map_all(transcript: &str) -> Vec<Mapping> {
+        transcript
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(map_line)
+            .collect()
+    }
+
+    fn all_events(transcript: &str) -> Vec<MappedEvent> {
+        map_all(transcript)
+            .into_iter()
+            .flat_map(|mapping| mapping.events)
+            .collect()
+    }
+
+    fn result_of(transcript: &str) -> HarnessResult {
+        map_all(transcript)
+            .into_iter()
+            .find_map(|mapping| mapping.result)
+            .expect("the transcript should end with a result")
+    }
+
+    #[test]
+    fn the_transcript_maps_to_the_expected_canonical_sequence() {
+        let names: Vec<&str> = all_events(TOOL_CALL_TRANSCRIPT)
+            .iter()
+            .map(|event| event.type_name)
+            .collect();
+
+        // Six native lines in, four canonical events out. The `system` line
+        // carries configuration rather than an event, and the `result` line
+        // becomes a HarnessResult rather than an event.
+        assert_eq!(
+            names,
+            vec![
+                "rate_limit.reported",
+                "tool.started",
+                "tool.completed",
+                "agent.message",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tool_result_arrives_as_a_user_line_and_still_pairs_with_its_call() {
+        // The most surprising thing about the native protocol: a tool's outcome
+        // is delivered as something the *user* said. If this pairing ever
+        // breaks, every tool call in the stream is orphaned.
+        let events = all_events(TOOL_CALL_TRANSCRIPT);
+
+        let Payload::ToolStarted(started) = &events[1].payload else {
+            panic!("expected the second event to be a tool call");
+        };
+        let Payload::ToolCompleted(completed) = &events[2].payload else {
+            panic!("expected the third event to be a tool result");
+        };
+
+        assert_eq!(started.tool_name, "Bash");
+        assert!(!started.tool_call_id.is_empty());
+        assert_eq!(started.tool_call_id, completed.tool_call_id);
+        assert!(completed.ok);
+
+        // The command survives into the Struct rather than being flattened to a
+        // string, which is what will let the exec broker inspect it.
+        let input = started
+            .input
+            .as_ref()
+            .expect("tool call should carry input");
+        assert!(input.fields.contains_key("command"));
+    }
+
+    #[test]
+    fn the_harness_session_id_is_captured_from_the_init_line() {
+        let session = map_all(TOOL_CALL_TRANSCRIPT)
+            .into_iter()
+            .find_map(|mapping| mapping.harness_session_id);
+
+        assert_eq!(
+            session.as_deref(),
+            Some("0199c0de-1111-7000-8000-000000000001")
+        );
+    }
+
+    #[test]
+    fn the_result_line_yields_usage_cost_and_timing() {
+        let result = result_of(TOOL_CALL_TRANSCRIPT);
+
+        assert!(!result.is_error);
+        assert_eq!(result.stop_reason, Some(StopReason::EndTurn));
+
+        // Cost crosses from the harness's f64 into exact integer units here,
+        // and this is the only place a float is allowed to touch a cost.
+        let amount = result.cost.amount.expect("a priced run should carry cost");
+        assert_eq!(amount.currency_code, "USD");
+        assert!(amount.units > 0 || amount.nanos > 0);
+
+        assert!(result.timing.total.is_some());
+        assert!(result.timing.time_to_first_token.is_some());
+        // Two round trips, not one: the model was called once to issue the tool
+        // call and again to answer after seeing its result. This is exactly the
+        // distinction the field exists to draw, and it is why it counts model
+        // round trips rather than Arsox turns, of which there was one.
+        assert_eq!(result.timing.model_round_trips, Some(2));
+    }
+
+    #[test]
+    fn reasoning_tokens_are_absent_rather_than_zero() {
+        // This harness folds reasoning into `output_tokens`. Reporting 0 would
+        // claim the run did no reasoning, which is a different and false
+        // statement, and exactly the defect `optional` exists to prevent.
+        let result = result_of(TOOL_CALL_TRANSCRIPT);
+
+        assert_eq!(result.tokens.reasoning_output_tokens, None);
+        assert!(result.tokens.cache_read_tokens.is_some());
+        assert_eq!(
+            result.tokens.total_tokens,
+            result.tokens.input_tokens + result.tokens.output_tokens,
+            "cache tokens are already counted in input and must not be added again"
+        );
+    }
+
+    #[test]
+    fn usage_is_split_by_the_model_that_answered() {
+        // The run used more than one model. Folding them into a single total is
+        // what makes a failover's cost invisible.
+        let result = result_of(TOOL_CALL_TRANSCRIPT);
+
+        assert!(
+            result.by_model.len() >= 2,
+            "expected a per-model breakdown, got {:?}",
+            result.by_model
+        );
+        assert!(result.by_model.iter().all(|model| model.tokens.is_some()));
+    }
+
+    #[test]
+    fn an_unrecognized_event_type_is_recorded_rather_than_dropped() {
+        let mapping = map_line("{\"type\":\"some_future_event\",\"payload\":{}}");
+
+        let [event] = mapping.events.as_slice() else {
+            panic!("an unknown type should produce exactly one incident");
+        };
+        let Payload::Incident(incident) = &event.payload else {
+            panic!("an unknown type should produce an incident");
+        };
+
+        assert_eq!(incident.disposition, Disposition::Degraded as i32);
+        assert!(incident.message.contains("some_future_event"));
+    }
+
+    #[test]
+    fn a_malformed_line_degrades_rather_than_failing_the_turn() {
+        // A harness writing a partial line as it crashes must not take the
+        // satellite down with it.
+        let mapping = map_line("{not json");
+
+        let [event] = mapping.events.as_slice() else {
+            panic!("a malformed line should produce exactly one incident");
+        };
+        assert!(matches!(event.payload, Payload::Incident(_)));
+    }
+
+    #[test]
+    fn dollars_convert_to_exact_integer_units() {
+        assert_eq!(money_from_usd(0.0).units, 0);
+
+        let fraction = money_from_usd(0.114_034);
+        assert_eq!(fraction.units, 0);
+        assert_eq!(fraction.nanos, 114_034_000);
+
+        let whole = money_from_usd(40.5);
+        assert_eq!(whole.units, 40);
+        assert_eq!(whole.nanos, 500_000_000);
+    }
+
+    #[test]
+    fn millisecond_durations_split_into_seconds_and_nanos() {
+        let duration = millis(Some(&serde_json::json!(1_793))).expect("should parse");
+
+        assert_eq!(duration.seconds, 1);
+        assert_eq!(duration.nanos, 793_000_000);
+    }
+}

@@ -20,8 +20,11 @@ authors.workspace = true
 arsox-sdk.workspace = true
 
 anyhow.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
 axum.workspace = true
 prost.workspace = true
+prost-types.workspace = true
 tokio.workspace = true
 subtle.workspace = true
 tracing.workspace = true
