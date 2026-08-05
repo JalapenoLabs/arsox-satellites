@@ -8,8 +8,11 @@
 
 #![cfg(feature = "test-util")]
 
+use arsox_satellite::collector::Collector;
 use arsox_satellite::harness::runner::Runner;
 use arsox_satellite::store::{NewThread, NewTurn, Store};
+use arsox_satellite::stream::EventBus;
+use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
 use arsox_sdk::proto::settings::v1::ThreadSettings;
 use arsox_sdk::proto::turn::v1::TurnStatus;
@@ -25,7 +28,8 @@ const TRANSCRIPT: &str = concat!(
 
 struct Harness {
     store: Store,
-    _workspace: tempdir::TempDir,
+    workspace: tempdir::TempDir,
+    collector: Arc<Collector>,
 }
 
 /// A minimal scratch directory, since the runner creates a workspace per thread.
@@ -71,6 +75,11 @@ mod tempdir {
 }
 
 async fn start(prompt: &str) -> (Harness, String, String) {
+    start_with(prompt, ThreadSettings::default()).await
+}
+
+/// Same, with the thread's settings chosen by the caller.
+async fn start_with(prompt: &str, settings: ThreadSettings) -> (Harness, String, String) {
     // Set once for the process, and identical for every caller, so there is no
     // value here for one test to change out from under another. Anything that
     // does vary per run rides on the prompt instead.
@@ -89,7 +98,7 @@ async fn start(prompt: &str) -> (Harness, String, String) {
 
     let thread = store
         .create_thread(NewThread {
-            settings: ThreadSettings::default(),
+            settings,
             metadata: BTreeMap::new(),
             idempotency_key: None,
         })
@@ -110,18 +119,26 @@ async fn start(prompt: &str) -> (Harness, String, String) {
         .expect("should queue a turn")
         .turn;
 
+    let collector = Arc::new(Collector::new(
+        store.clone(),
+        workspace.path().to_path_buf(),
+        EventBus::new(),
+    ));
+
     let runner = Runner::new(
         store.clone(),
         workspace.path().to_path_buf(),
         Arc::new(tokio::sync::Notify::new()),
         1,
+        Arc::clone(&collector),
     );
     tokio::spawn(runner.dispatch());
 
     (
         Harness {
             store,
-            _workspace: workspace,
+            workspace,
+            collector,
         },
         thread.thread_id,
         turn.turn_id,
@@ -410,4 +427,87 @@ async fn tool_calls_survive_the_round_trip_into_the_log() {
             .as_ref()
             .is_some_and(|input| input.fields.contains_key("command"))
     );
+}
+
+#[tokio::test]
+async fn a_thread_marked_delete_on_complete_takes_its_workspace_with_it() {
+    // The setting exists so an application running one-shot jobs does not have
+    // to wait out an idle TTL, or remember to destroy anything.
+    let (harness, thread_id, _turn_id) = start_with(
+        "say hello",
+        ThreadSettings {
+            delete_on_complete: true,
+            ..Default::default()
+        },
+    )
+    .await;
+
+    // Waited on directly rather than by settling the turn first. The turn goes
+    // with the thread, so polling it races collection. Its result still reached
+    // the stream, which is where a caller watching a one-shot job reads it.
+    let collected = await_collected(&harness.store, &thread_id).await;
+    assert!(collected, "the thread should have been collected");
+
+    let error = harness
+        .store
+        .thread(&thread_id)
+        .await
+        .expect_err("a collected thread is not readable");
+    assert_eq!(error.code(), ErrorCode::ThreadDestroyed);
+
+    assert!(
+        !harness.workspace.path().join(&thread_id).exists(),
+        "the workspace subtree goes with the thread"
+    );
+}
+
+#[tokio::test]
+async fn an_expired_thread_is_swept_and_its_workspace_removed() {
+    // A TTL nothing acts on is a promise the satellite does not keep.
+    let (harness, _thread_id, _turn_id) = start("say hello").await;
+
+    let expiring = harness
+        .store
+        .create_thread(NewThread {
+            settings: ThreadSettings {
+                idle_ttl: Some(arsox_sdk::proto::common::v1::Duration {
+                    seconds: 0,
+                    nanos: 1,
+                }),
+                ..Default::default()
+            },
+            metadata: BTreeMap::new(),
+            idempotency_key: None,
+        })
+        .await
+        .expect("should create")
+        .thread;
+
+    // Stand in for the workspace the runner would have created.
+    let directory = harness.workspace.path().join(&expiring.thread_id);
+    std::fs::create_dir_all(directory.join("repos/api")).expect("should create");
+    std::fs::write(directory.join("repos/api/work.txt"), b"in progress").expect("should write");
+
+    let swept = harness.collector.sweep_once().await;
+
+    assert_eq!(swept, 1, "the expired thread should have been swept");
+    assert!(!directory.exists(), "its workspace goes with it");
+
+    let error = harness
+        .store
+        .thread(&expiring.thread_id)
+        .await
+        .expect_err("an expired thread is not readable");
+    assert_eq!(error.code(), ErrorCode::ThreadExpired);
+}
+
+/// Waits for a thread to become a tombstone, or gives up.
+async fn await_collected(store: &Store, thread_id: &str) -> bool {
+    for _attempt in 0..50 {
+        if store.thread(thread_id).await.is_err() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    false
 }

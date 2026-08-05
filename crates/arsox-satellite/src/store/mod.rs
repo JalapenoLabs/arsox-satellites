@@ -63,6 +63,9 @@ pub enum StoreError {
     #[error("thread {0} has been destroyed")]
     ThreadDestroyed(String),
 
+    #[error("thread {0} expired and its workspace was collected")]
+    ThreadExpired(String),
+
     #[error(transparent)]
     Database(#[from] sqlx::Error),
 }
@@ -76,6 +79,7 @@ impl StoreError {
             Self::TurnNotFound(_) => ErrorCode::TurnNotFound,
             Self::QueueFull(_) => ErrorCode::TurnQueueFull,
             Self::ThreadDestroyed(_) => ErrorCode::ThreadDestroyed,
+            Self::ThreadExpired(_) => ErrorCode::ThreadExpired,
             // A database failure is a satellite bug or a broken volume, not
             // something the caller did.
             Self::Database(_) => ErrorCode::Internal,
@@ -90,7 +94,10 @@ impl StoreError {
             // database failure is usually a lock or a busy volume rather than
             // anything about the request.
             Self::QueueFull(_) | Self::Database(_) => true,
-            Self::ThreadNotFound(_) | Self::TurnNotFound(_) | Self::ThreadDestroyed(_) => false,
+            Self::ThreadNotFound(_)
+            | Self::TurnNotFound(_)
+            | Self::ThreadDestroyed(_)
+            | Self::ThreadExpired(_) => false,
         }
     }
 }
@@ -277,7 +284,9 @@ mod tests {
 #[cfg(test)]
 mod store_behaviour {
     use super::*;
+    use arsox_sdk::proto::common::v1::Duration;
     use arsox_sdk::proto::event::v1::{AgentMessage, thread_event::Payload};
+    use arsox_sdk::proto::incident::v1::{Disposition, Incident};
     use arsox_sdk::proto::settings::v1::{ResourceLimits, ThreadSettings};
     use arsox_sdk::proto::thread::v1::{ThreadOrder, ThreadState};
     use arsox_sdk::proto::turn::v1::{TurnOrder, TurnStatus};
@@ -396,7 +405,9 @@ mod store_behaviour {
     }
 
     #[tokio::test]
-    async fn destroying_a_thread_removes_it() {
+    async fn destroying_a_thread_leaves_a_tombstone() {
+        // Not a deletion. The row stays so a later request can be told the
+        // thread was destroyed rather than that it never existed.
         let store = store().await;
         let created = store.create_thread(thread_named("acme")).await.expect("a");
         let id = created.thread.thread_id;
@@ -405,8 +416,14 @@ mod store_behaviour {
 
         assert!(matches!(
             store.thread(&id).await,
-            Err(StoreError::ThreadNotFound(_))
+            Err(StoreError::ThreadDestroyed(_))
         ));
+
+        let tombstone = store
+            .thread_including_collected(&id)
+            .await
+            .expect("the tombstone is readable");
+        assert_eq!(tombstone.state, i32::from(ThreadState::Destroyed));
     }
 
     #[tokio::test]
@@ -818,6 +835,269 @@ mod store_behaviour {
             requeued.expect("claimed").turn.thread_id,
             opted_in.thread_id
         );
+    }
+
+    #[tokio::test]
+    async fn a_destroyed_thread_answers_destroyed_rather_than_missing() {
+        // These are different facts. "Your id is wrong" and "this thread was
+        // deliberately torn down" lead a caller to do different things, and
+        // deleting the row would collapse them into the first.
+        let store = store().await;
+        let thread = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("a")
+            .thread;
+
+        store
+            .destroy_thread(&thread.thread_id)
+            .await
+            .expect("should destroy");
+
+        let error = store
+            .thread(&thread.thread_id)
+            .await
+            .expect_err("a destroyed thread is not readable");
+
+        assert_eq!(error.code(), ErrorCode::ThreadDestroyed);
+        assert!(!error.retryable());
+    }
+
+    #[tokio::test]
+    async fn collecting_a_thread_takes_its_turns_and_events_with_it() {
+        let store = store().await;
+        let thread = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("a")
+            .thread;
+
+        store
+            .create_turn(work_on(&thread.thread_id))
+            .await
+            .expect("should queue");
+        store
+            .append_event(AppendEvent {
+                thread_id: thread.thread_id.clone(),
+                turn_id: None,
+                member_id: None,
+                type_name: "agent.message".to_owned(),
+                occurred_at: None,
+                payload: Payload::AgentMessage(AgentMessage {
+                    author: None,
+                    text: "something happened".to_owned(),
+                }),
+            })
+            .await
+            .expect("should append");
+
+        store
+            .collect_thread(&thread.thread_id, ThreadState::Expired)
+            .await
+            .expect("should collect");
+
+        // Retained history is bounded by the thread's lifetime, so an expired
+        // thread cannot be replayed.
+        let events = store
+            .events_after(&thread.thread_id, 0, 100)
+            .await
+            .expect("should read");
+        assert!(events.is_empty(), "history goes with the thread");
+
+        // Its turns are gone with it, which the tombstone reports as an empty
+        // queue. Listing them is refused outright, because the thread itself is
+        // no longer readable.
+        let tombstone = store
+            .thread_including_collected(&thread.thread_id)
+            .await
+            .expect("the tombstone is readable");
+        assert_eq!(tombstone.queue_depth, 0, "turns go with the thread");
+
+        assert_eq!(
+            store
+                .list_turns(&thread.thread_id, &[], TurnOrder::Unspecified, false)
+                .await
+                .expect_err("a collected thread lists nothing")
+                .code(),
+            ErrorCode::ThreadExpired
+        );
+    }
+
+    #[tokio::test]
+    async fn incidents_outlive_the_thread_they_describe() {
+        // The one thing in a thread's life that is deliberately not ephemeral.
+        // "Why did last night's run go wrong" is asked after the thread is gone.
+        let store = store().await;
+        let thread = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("a")
+            .thread;
+
+        store
+            .record_incident(&Incident {
+                incident_id: "incident-1".to_owned(),
+                thread_id: Some(thread.thread_id.clone()),
+                code: ErrorCode::HarnessCrashed.into(),
+                disposition: Disposition::Recovered.into(),
+                message: "the harness died and restarted".to_owned(),
+                ..Default::default()
+            })
+            .await
+            .expect("should record");
+
+        store
+            .collect_thread(&thread.thread_id, ThreadState::Expired)
+            .await
+            .expect("should collect");
+
+        let incidents = store
+            .incidents_for_thread(&thread.thread_id)
+            .await
+            .expect("should read");
+
+        assert_eq!(incidents.len(), 1, "the evidence survives the workspace");
+    }
+
+    #[tokio::test]
+    async fn only_threads_past_their_expiry_are_collected() {
+        let store = store().await;
+
+        let expiring = store
+            .create_thread(NewThread {
+                settings: ThreadSettings {
+                    idle_ttl: Some(Duration {
+                        seconds: 0,
+                        nanos: 1,
+                    }),
+                    ..Default::default()
+                },
+                metadata: BTreeMap::new(),
+                idempotency_key: None,
+            })
+            .await
+            .expect("a")
+            .thread;
+
+        let living = store
+            .create_thread(NewThread {
+                settings: ThreadSettings {
+                    idle_ttl: Some(Duration {
+                        seconds: 3_600,
+                        nanos: 0,
+                    }),
+                    ..Default::default()
+                },
+                metadata: BTreeMap::new(),
+                idempotency_key: None,
+            })
+            .await
+            .expect("b")
+            .thread;
+
+        // A thread with no TTL at all cannot be collected on a clock.
+        let forever = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("c")
+            .thread;
+
+        let expired = store.expired_threads(32).await.expect("should query");
+
+        assert_eq!(expired, vec![expiring.thread_id]);
+        assert!(!expired.contains(&living.thread_id));
+        assert!(!expired.contains(&forever.thread_id));
+    }
+
+    #[tokio::test]
+    async fn a_thread_with_work_in_flight_is_never_collected() {
+        // The TTL is idle time. Collecting a thread mid-turn would delete the
+        // work it is doing right now.
+        let store = store().await;
+        let thread = store
+            .create_thread(NewThread {
+                settings: ThreadSettings {
+                    idle_ttl: Some(Duration {
+                        seconds: 0,
+                        nanos: 1,
+                    }),
+                    ..Default::default()
+                },
+                metadata: BTreeMap::new(),
+                idempotency_key: None,
+            })
+            .await
+            .expect("a")
+            .thread;
+
+        store
+            .create_turn(work_on(&thread.thread_id))
+            .await
+            .expect("should queue");
+        store.claim_next_turn().await.expect("claim").expect("work");
+
+        let expired = store.expired_threads(32).await.expect("should query");
+
+        assert!(
+            expired.is_empty(),
+            "a running turn holds the thread against collection"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_tombstone_is_not_collected_twice() {
+        // Its expiry is cleared, so the sweep cannot pick it back up and remove
+        // a workspace that is already gone once a minute forever.
+        let store = store().await;
+        let thread = store
+            .create_thread(NewThread {
+                settings: ThreadSettings {
+                    idle_ttl: Some(Duration {
+                        seconds: 0,
+                        nanos: 1,
+                    }),
+                    ..Default::default()
+                },
+                metadata: BTreeMap::new(),
+                idempotency_key: None,
+            })
+            .await
+            .expect("a")
+            .thread;
+
+        assert_eq!(store.expired_threads(32).await.expect("query").len(), 1);
+
+        store
+            .collect_thread(&thread.thread_id, ThreadState::Expired)
+            .await
+            .expect("should collect");
+
+        assert!(
+            store.expired_threads(32).await.expect("query").is_empty(),
+            "a tombstone has no expiry left to trip over"
+        );
+    }
+
+    #[tokio::test]
+    async fn work_cannot_be_queued_onto_a_collected_thread() {
+        let store = store().await;
+        let thread = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("a")
+            .thread;
+
+        store
+            .collect_thread(&thread.thread_id, ThreadState::Expired)
+            .await
+            .expect("should collect");
+
+        let error = store
+            .create_turn(work_on(&thread.thread_id))
+            .await
+            .expect_err("an expired thread takes no work");
+
+        assert_eq!(error.code(), ErrorCode::ThreadExpired);
     }
 
     #[tokio::test]

@@ -27,24 +27,14 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::store::{NewThread, NewTurn, StoreError, ThreadFilter};
-use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::event::v1::control_event::Payload;
-use arsox_sdk::proto::event::v1::{ControlEvent, ThreadCreated, ThreadDestroyed, ThreadEndReason};
+use arsox_sdk::proto::event::v1::{ThreadCreated, ThreadEndReason};
 
 /// Stamps a satellite lifecycle event.
 ///
 /// The sequence is left at zero: control events are a live feed of what is
 /// happening now, not a log to replay, and a number nothing can resume from
 /// would only look like one.
-fn control_event(type_name: &str, payload: Payload) -> ControlEvent {
-    ControlEvent {
-        sequence: 0,
-        occurred_at: Some(Timestamp::now()),
-        r#type: type_name.to_owned(),
-        payload: Some(payload),
-    }
-}
-
 /// A protobuf request body.
 ///
 /// Protobuf is what the SDK always sends. JSON is offered on responses as a
@@ -103,7 +93,9 @@ where
 fn store_failure(error: &StoreError) -> Response {
     let status = match error.code() {
         ErrorCode::ThreadNotFound | ErrorCode::TurnNotFound => StatusCode::NOT_FOUND,
-        ErrorCode::ThreadDestroyed => StatusCode::GONE,
+        // Gone rather than not found: the thread existed, and saying so is what
+        // lets a caller tell "my id is wrong" from "my thread was collected".
+        ErrorCode::ThreadDestroyed | ErrorCode::ThreadExpired => StatusCode::GONE,
         ErrorCode::TurnQueueFull => StatusCode::TOO_MANY_REQUESTS,
         _internal => StatusCode::INTERNAL_SERVER_ERROR,
     };
@@ -165,7 +157,7 @@ async fn create_thread(
             // did not change the satellite's state, and reporting it as a
             // creation would make a retry look like a second thread.
             if stored.created {
-                satellite.bus.publish_control(control_event(
+                satellite.bus.publish_control(crate::stream::control_event(
                     "thread.created",
                     Payload::ThreadCreated(ThreadCreated {
                         thread_id: stored.thread.thread_id.clone(),
@@ -278,21 +270,29 @@ async fn destroy_thread(
     State(satellite): State<Arc<Satellite>>,
     Path(thread_id): Path<String>,
 ) -> Response {
-    match satellite.store.destroy_thread(&thread_id).await {
-        Ok(thread) => {
-            satellite.bus.publish_control(control_event(
-                "thread.destroyed",
-                Payload::ThreadDestroyed(ThreadDestroyed {
-                    thread_id: thread.thread_id.clone(),
-                    reason: ThreadEndReason::Destroyed.into(),
-                }),
-            ));
+    // Read first, so destroying an unknown or already collected thread answers
+    // with the code for what actually happened rather than succeeding twice.
+    if let Err(error) = satellite.store.thread(&thread_id).await {
+        return store_failure(&error);
+    }
 
-            protobuf(&DestroyThreadResponse {
-                thread: Some(thread),
-            })
-        }
-        Err(error) => store_failure(&error),
+    // Through the collector rather than the store, because destroying a thread
+    // has to take its workspace with it. A tombstone whose files remain is a
+    // leak nothing later looks for.
+    match satellite
+        .collector
+        .collect(&thread_id, ThreadEndReason::Destroyed)
+        .await
+    {
+        Ok(thread) => protobuf(&DestroyThreadResponse {
+            thread: Some(thread),
+        }),
+        Err(crate::collector::CollectError::Store(error)) => store_failure(&error),
+        Err(error) => contract_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            ErrorCode::Internal,
+            &format!("could not collect the thread: {error}"),
+        ),
     }
 }
 

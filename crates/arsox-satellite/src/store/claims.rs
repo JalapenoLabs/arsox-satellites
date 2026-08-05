@@ -232,6 +232,49 @@ impl Store {
         Ok(())
     }
 
+    /// Reads a thread's incidents, oldest first.
+    ///
+    /// Deliberately readable after the thread is gone. Incidents carry no
+    /// foreign key to `threads` and are never removed by collection, because
+    /// "why did last night's run go wrong" is asked after the workspace has
+    /// been reclaimed. Losing the evidence with the thread would defeat them.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error if the query fails.
+    pub async fn incidents_for_thread(
+        &self,
+        thread_id: &str,
+    ) -> Result<Vec<arsox_sdk::proto::incident::v1::Incident>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT * FROM incidents WHERE thread_id = ? ORDER BY occurred_at ASC, incident_id ASC",
+        )
+        .bind(thread_id)
+        .fetch_all(self.pool())
+        .await?;
+
+        Ok(rows
+            .iter()
+            .map(|row| arsox_sdk::proto::incident::v1::Incident {
+                incident_id: row.get("incident_id"),
+                thread_id: row.get("thread_id"),
+                sequence: row
+                    .get::<Option<i64>, _>("sequence")
+                    .map(|value| u64::try_from(value).unwrap_or_default()),
+                turn_id: row.get("turn_id"),
+                member_id: row.get("member_id"),
+                code: row.get("code"),
+                disposition: row.get("disposition"),
+                retryable: row.get::<i32, _>("retryable") != 0,
+                message: row.get("message"),
+                details: row
+                    .get::<Option<Vec<u8>>, _>("details")
+                    .and_then(|bytes| prost::Message::decode(bytes.as_slice()).ok()),
+                occurred_at: Some(from_nanos(row.get("occurred_at"))),
+            })
+            .collect())
+    }
+
     /// Settles turns left running when the satellite stopped.
     ///
     /// A turn in flight during a restart is not lost work: the thread and its

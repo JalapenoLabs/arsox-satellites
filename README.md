@@ -798,9 +798,19 @@ Every thread must declare a lifetime when it is created. This is required, alway
 
 The lifetime is an **idle TTL measured in minutes**. It resets on every turn, and on any SDK interaction with the thread. A thread with a 60 minute TTL that is actively working for three days is never collected, and the same thread sitting untouched for 61 minutes is. This is what you want: the alternative, wall clock from creation, deletes long-running work mid-flight.
 
+The satellite sweeps for expired threads every `ARSOX_COLLECT_INTERVAL` seconds, default `60`. A TTL is measured in minutes, so a minute of slack past an expiry costs nothing, and sweeping much more often would mean an index scan a second to find, almost always, nothing.
+
 You can also mark a thread to delete itself the moment its turns complete.
 
 When a thread is collected, its entire workspace subtree is removed, including member worktrees and any artifacts you did not download.
+
+**A collected thread leaves a tombstone rather than disappearing.** A later request for it returns `THREAD_EXPIRED` or `THREAD_DESTROYED`, never `THREAD_NOT_FOUND`. Those are different facts and they lead you to do different things: a thread that expired means your TTL is shorter than the way your application actually uses it, a thread that was destroyed means something did that on purpose, and a thread that was never found means the id is wrong. Collapsing all three into "not found" would hide the first two behind the bug you are least likely to have.
+
+Its turns, events, and metadata go with the workspace, so an expired thread cannot be replayed. Its [incidents](#incidents) do not.
+
+**A thread is never collected while a turn is running on it**, however old its expiry looks. The TTL is idle time, and the sweep would otherwise delete the work in flight.
+
+A thread marked `delete_on_complete` is collected the moment its queue empties, without waiting out the TTL. The turn's result reaches the [event stream](#event-streaming) before the thread goes, which is where a one-shot job reads it: the turn itself is collected with everything else, so fetching it afterward races the collector.
 
 ### Budgets and cost ceilings
 

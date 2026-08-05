@@ -24,7 +24,7 @@ use crate::store::{AppendEvent, ClaimedTurn, Store};
 use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
-use arsox_sdk::proto::event::v1::{TurnCompleted, TurnStarted};
+use arsox_sdk::proto::event::v1::{ThreadEndReason, TurnCompleted, TurnStarted};
 use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::incident::v1::{Disposition, Incident, IncidentCounts};
 use arsox_sdk::proto::turn::v1::{Stage, StageDisposition, StageOutcome, TurnResult, TurnStatus};
@@ -67,6 +67,9 @@ pub struct Runner {
 
     /// One permit per concurrently running thread.
     capacity: Arc<Semaphore>,
+
+    /// Collects threads that asked to be deleted the moment their work is done.
+    collector: Arc<crate::collector::Collector>,
 }
 
 impl Runner {
@@ -77,12 +80,14 @@ impl Runner {
         workspace_root: PathBuf,
         notify: Arc<Notify>,
         max_concurrent_threads: u32,
+        collector: Arc<crate::collector::Collector>,
     ) -> Self {
         Self {
             store,
             workspace_root,
             notify,
             capacity: Arc::new(Semaphore::new(max_concurrent_threads as usize)),
+            collector,
         }
     }
 
@@ -180,6 +185,44 @@ impl Runner {
             turn.status = ?status,
             "turn finished",
         );
+
+        self.collect_if_finished(&thread_id).await;
+    }
+
+    /// Collects a thread that asked to be deleted once its work is done.
+    ///
+    /// Checked after the turn is recorded rather than before, so the result is
+    /// durable and has already reached the stream. A caller watching for the
+    /// completion still sees it, and then sees the thread end.
+    ///
+    /// The queue has to be empty. `delete_on_complete` means the thread is
+    /// finished, and a thread with three turns still waiting is not, however
+    /// complete the one that just ended was.
+    async fn collect_if_finished(&self, thread_id: &str) {
+        let Ok(thread) = self.store.thread(thread_id).await else {
+            return;
+        };
+
+        let asked = thread
+            .settings
+            .as_ref()
+            .is_some_and(|settings| settings.delete_on_complete);
+
+        if !asked || thread.queue_depth > 0 {
+            return;
+        }
+
+        if let Err(error) = self
+            .collector
+            .collect(thread_id, ThreadEndReason::Completed)
+            .await
+        {
+            tracing::error!(
+                event.name = "thread.collect.failed",
+                thread.id = thread_id,
+                "delete_on_complete was set but the thread could not be collected: {error}",
+            );
+        }
     }
 
     /// Spawns the harness and decides what its run amounted to.

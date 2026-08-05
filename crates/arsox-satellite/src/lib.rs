@@ -16,9 +16,11 @@
 //! explicitly with `ARSOX_ALLOW_INSECURE=true`, which warns loudly on every boot.
 
 mod api;
+pub mod collector;
 pub mod harness;
 pub mod store;
 pub mod stream;
+pub mod workspace;
 
 use anyhow::{Context as _, Result, bail};
 use arsox_sdk::proto::common::v1::Timestamp;
@@ -72,6 +74,13 @@ const DEFAULT_WORKSPACE_ROOT: &str = "/workspace";
 /// Inside the container this directory is expected to be a named volume.
 const DEFAULT_DB_PATH: &str = "/var/arsox/arsox.db";
 
+/// How often expired threads are collected when `ARSOX_COLLECT_INTERVAL` is unset.
+///
+/// A TTL is measured in minutes, so a minute of slack past an expiry costs
+/// nothing. Sweeping much more often would mean an index scan per second to
+/// find, almost always, nothing.
+const DEFAULT_COLLECT_INTERVAL_SECONDS: u32 = 60;
+
 /// The wire type the SDK always speaks. JSON is a debugging affordance offered
 /// through `Accept`, never what an SDK sends.
 const PROTOBUF_CONTENT_TYPE: HeaderValue = HeaderValue::from_static("application/protobuf");
@@ -119,6 +128,9 @@ pub(crate) struct Satellite {
     pub(crate) work_queued: Arc<tokio::sync::Notify>,
 
     pub(crate) bus: stream::EventBus,
+
+    /// Removes threads and the workspaces they own.
+    pub(crate) collector: Arc<collector::Collector>,
 }
 
 impl Satellite {
@@ -346,6 +358,9 @@ pub struct ServeOptions {
     pub database_path: String,
     pub workspace_root: String,
     pub max_concurrent_threads: u32,
+
+    /// How often to sweep for expired threads.
+    pub collect_interval: std::time::Duration,
 }
 
 impl ServeOptions {
@@ -364,6 +379,10 @@ impl ServeOptions {
                 "ARSOX_MAX_CONCURRENT_THREADS",
                 DEFAULT_MAX_CONCURRENT_THREADS,
             ),
+            collect_interval: std::time::Duration::from_secs(u64::from(env_u32(
+                "ARSOX_COLLECT_INTERVAL",
+                DEFAULT_COLLECT_INTERVAL_SECONDS,
+            ))),
         }
     }
 }
@@ -443,11 +462,19 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
 
     let work_queued = Arc::new(tokio::sync::Notify::new());
 
+    let collector = Arc::new(collector::Collector::new(
+        store.clone(),
+        std::path::PathBuf::from(&options.workspace_root),
+        bus.clone(),
+    ));
+    tokio::spawn(Arc::clone(&collector).sweep_forever(options.collect_interval));
+
     let runner = harness::runner::Runner::new(
         store.clone(),
         std::path::PathBuf::from(&options.workspace_root),
         Arc::clone(&work_queued),
         options.max_concurrent_threads,
+        Arc::clone(&collector),
     );
     tokio::spawn(runner.dispatch());
 
@@ -466,6 +493,7 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
             store: store.clone(),
             work_queued,
             bus,
+            collector,
         })),
         store,
     })

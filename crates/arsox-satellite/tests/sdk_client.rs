@@ -65,6 +65,8 @@ async fn start() -> String {
         database_path: directory.join("arsox.db").to_string_lossy().into_owned(),
         workspace_root: directory.to_string_lossy().into_owned(),
         max_concurrent_threads: 2,
+        // Long enough that no test races the collector.
+        collect_interval: std::time::Duration::from_hours(1),
     })
     .await
     .expect("should assemble");
@@ -158,8 +160,15 @@ async fn a_thread_can_be_created_read_listed_and_destroyed() {
 
     created.handle.destroy().await.expect("should destroy");
 
+    // Gone, not missing. A destroyed thread reports what happened to it, so an
+    // application can tell "my record is stale" from "my id is wrong".
     let gone = created.handle.get().await.expect_err("should be gone");
-    assert!(gone.is_not_found());
+    assert!(gone.is_gone());
+    assert!(!gone.is_not_found());
+    assert_eq!(
+        gone.code(),
+        Some(arsox_sdk::proto::error::v1::ErrorCode::ThreadDestroyed)
+    );
 }
 
 #[tokio::test]

@@ -66,6 +66,38 @@ a listing to exhaustion and compares the result against the full set.
 The sort direction and column are chosen from a fixed set of literals. Every
 value is still bound, never interpolated.
 
+## A collected thread is a tombstone
+
+Collection deletes a thread's turns, events, and metadata, and leaves the
+`threads` row carrying `EXPIRED` or `DESTROYED`.
+
+Deleting the row instead would make `THREAD_EXPIRED` and `THREAD_DESTROYED`
+unreachable, since there would be nothing left to distinguish them from an id
+that was never valid. The contract defines all three separately because a caller
+acts on each differently, so the schema has to be able to tell them apart.
+
+The expiry is cleared at the same time. A tombstone that kept its `expires_at`
+would be selected by every subsequent sweep, and the collector would remove an
+already-removed workspace once a minute forever.
+
+Incidents have no foreign key to `threads` and are never touched by collection.
+They carry their own retention, because "why did last night's run go wrong" is a
+question asked after the workspace is gone.
+
+## The workspace goes before the tombstone
+
+`Collector::collect` removes the directory first and writes the tombstone
+second.
+
+Reversed, a process that died between the two steps would leave a thread reading
+as collected while its files remained, and nothing would ever look at that
+thread again: a leak no later sweep can find. In this order the same crash
+leaves a workspace whose thread is still expired, which the next sweep picks
+straight back up.
+
+The removal is deliberately outside the database transaction. A slow unlink
+inside one would hold a write lock against every other thread on the satellite.
+
 ## Sequence numbers are issued inside the append
 
 `append_event` increments `threads.latest_sequence` and inserts the row in one
@@ -113,18 +145,31 @@ other.
 events survive a reopen.
 
 `scripts/smoke-test.py` drives a running container with real protobuf requests:
-thread and turn lifecycle, idempotency, metadata filtering, and every error code
-the endpoints can return. It is written in Python on purpose, because a Python
-client decoding what a Rust satellite encoded is the cross-language contract
-proving itself rather than being asserted.
+thread and turn lifecycle, pause, drain, resume, ordering, collection, expiry,
+idempotency, metadata filtering, and every error code the endpoints can return.
+It is written in Python on purpose, because a Python client decoding what a Rust
+satellite encoded is the cross-language contract proving itself rather than
+being asserted.
+
+The image ships no harness, so the run mounts a fake one. Both mounts are
+required: without the fixture the harness starts and immediately fails, taking
+the turn checks with it. The short collect interval is what makes the expiry
+checks finish in seconds rather than a minute.
 
 ```bash
 docker build -t arsox-satellite:dev .
 docker run -d --name arsox-test -p 18080:8080 \
   -e ARSOX_SECRET=container-secret \
+  -e ARSOX_CLAUDE_BIN=/opt/arsox/fake-harness.sh \
+  -e ARSOX_COLLECT_INTERVAL=2 \
+  -v "$(pwd)/scripts/fake-harness.sh:/opt/arsox/fake-harness.sh:ro" \
+  -v "$(pwd)/crates/arsox-satellite/fixtures/claude:/fixtures:ro" \
   -v arsox-test-db:/var/arsox arsox-satellite:dev
 python scripts/smoke-test.py
 ```
+
+On Windows under Git Bash, prefix the `docker run` with `MSYS_NO_PATHCONV=1` or
+the container-side mount paths are rewritten into Windows paths.
 
 ## Roadmap
 

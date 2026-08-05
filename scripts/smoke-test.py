@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import pathlib
-import pathlib
 import sys
 import time
 import urllib.error
@@ -273,6 +272,68 @@ check("pausing needs the secret", status == 401, f"got {status}")
 
 status, _payload = call("POST", "/v1/threads/does-not-exist/drain")
 check("draining an unknown thread is 404", status == 404, f"got {status}")
+
+print("== collection ==")
+
+# Destroying a thread is not a deletion. The satellite remembers that it existed,
+# so a caller with a stale id learns what happened rather than being told the
+# thread never was.
+doomed = create_thread(f"doomed-{RUN}")
+
+status, payload = call("DELETE", f"/v1/threads/{doomed}")
+destroyed = thread_pb2.DestroyThreadResponse()
+destroyed.ParseFromString(payload)
+check("destroy returns 200", status == 200, f"got {status}")
+check(
+    "the response reports the destroyed state",
+    destroyed.thread.state == thread_pb2.THREAD_STATE_DESTROYED,
+)
+
+status, payload = call("GET", f"/v1/threads/{doomed}")
+check("a destroyed thread is 410, not 404", status == 410, f"got {status}")
+check(
+    "and carries THREAD_DESTROYED",
+    decode_error(payload).code == error_pb2.ERROR_CODE_THREAD_DESTROYED,
+)
+
+status, payload = call("GET", "/v1/threads/019fd000-0000-7000-8000-000000000000")
+check("while an unknown id is still 404", status == 404, f"got {status}")
+check(
+    "and carries THREAD_NOT_FOUND",
+    decode_error(payload).code == error_pb2.ERROR_CODE_THREAD_NOT_FOUND,
+)
+
+# The idle TTL is required precisely so a forgotten thread cannot sit on disk
+# forever. The container runs with a short collect interval so this is testable.
+short = thread_pb2.CreateThreadRequest(idempotency_key=f"short-{RUN}")
+short.settings.CopyFrom(build_settings())
+short.settings.idle_ttl.seconds = 1
+
+status, payload = call("POST", "/v1/threads", short.SerializeToString())
+expiring = thread_pb2.CreateThreadResponse()
+expiring.ParseFromString(payload)
+expiring_id = expiring.thread.thread_id
+check("a short-lived thread is created", status == 200, f"got {status}")
+
+collected = False
+for _attempt in range(30):
+    time.sleep(1)
+    status, payload = call("GET", f"/v1/threads/{expiring_id}")
+    if status == 410:
+        collected = True
+        break
+
+check("an idle thread is collected without being asked", collected)
+if collected:
+    check(
+        "and carries THREAD_EXPIRED",
+        decode_error(payload).code == error_pb2.ERROR_CODE_THREAD_EXPIRED,
+    )
+
+# The thread that has been working this whole run is untouched by the sweep,
+# because the TTL is idle time rather than wall clock from creation.
+status, _payload = call("GET", f"/v1/threads/{thread_id}")
+check("an active thread outlives the sweep", status == 200, f"got {status}")
 
 print("== error contract ==")
 

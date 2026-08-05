@@ -6,6 +6,7 @@ use super::{Store, StoreError, from_nanos, to_nanos};
 use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::settings::v1::ThreadSettings;
 use arsox_sdk::proto::thread::v1::{Thread, ThreadOrder, ThreadState, ThreadSummary};
+use arsox_sdk::proto::turn::v1::TurnStatus;
 use prost::Message as _;
 use sqlx::Row as _;
 use std::collections::BTreeMap;
@@ -171,6 +172,29 @@ impl Store {
     ///
     /// Returns [`StoreError::ThreadNotFound`] when the id is unknown.
     pub async fn thread(&self, thread_id: &str) -> Result<Thread, StoreError> {
+        let thread = self.thread_including_collected(thread_id).await?;
+
+        // A collected thread is a tombstone, and saying which kind it is matters:
+        // "this expired" tells a caller its TTL was too short, and "this was
+        // destroyed" tells it something else did this deliberately. Both are
+        // different facts from "no such thread", and a caller acts on each
+        // differently.
+        match ThreadState::try_from(thread.state).unwrap_or(ThreadState::Unspecified) {
+            ThreadState::Expired => Err(StoreError::ThreadExpired(thread_id.to_owned())),
+            ThreadState::Destroyed => Err(StoreError::ThreadDestroyed(thread_id.to_owned())),
+            _live => Ok(thread),
+        }
+    }
+
+    /// Reads a thread whether or not it has been collected.
+    ///
+    /// The collector needs this, because everything it operates on is either
+    /// about to become a tombstone or already is one.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::ThreadNotFound`] when the id is unknown.
+    pub async fn thread_including_collected(&self, thread_id: &str) -> Result<Thread, StoreError> {
         let row = sqlx::query("SELECT * FROM threads WHERE thread_id = ?")
             .bind(thread_id)
             .fetch_optional(self.pool())
@@ -355,17 +379,107 @@ impl Store {
     ///
     /// Returns [`StoreError::ThreadNotFound`] when the id is unknown.
     pub async fn destroy_thread(&self, thread_id: &str) -> Result<Thread, StoreError> {
-        let thread = self.thread(thread_id).await?;
+        self.thread(thread_id).await?;
+        self.collect_thread(thread_id, ThreadState::Destroyed).await
+    }
 
-        sqlx::query("DELETE FROM threads WHERE thread_id = ?")
+    /// Turns a thread into a tombstone and frees everything it held.
+    ///
+    /// Turns, events, and metadata go. The thread row stays, carrying the state
+    /// it was collected into, so a later request can be told what happened
+    /// rather than that the thread never existed.
+    ///
+    /// Incidents are deliberately untouched. They have no foreign key to the
+    /// thread and their own retention, because "why did last night's run go
+    /// wrong" is a question asked after the thread is gone.
+    ///
+    /// Removing the workspace subtree is the caller's job. Doing it here would
+    /// put a filesystem operation inside a database transaction, where a slow
+    /// unlink holds a write lock against every other thread on the satellite.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::ThreadNotFound`] when the id is unknown.
+    pub async fn collect_thread(
+        &self,
+        thread_id: &str,
+        state: ThreadState,
+    ) -> Result<Thread, StoreError> {
+        let thread = self.thread_including_collected(thread_id).await?;
+
+        let mut transaction = self.pool().begin().await?;
+
+        for statement in [
+            "DELETE FROM events WHERE thread_id = ?",
+            "DELETE FROM turn_metadata WHERE turn_id IN (SELECT turn_id FROM turns WHERE thread_id = ?)",
+            "DELETE FROM turns WHERE thread_id = ?",
+            "DELETE FROM thread_metadata WHERE thread_id = ?",
+        ] {
+            sqlx::query(statement)
+                .bind(thread_id)
+                .execute(&mut *transaction)
+                .await?;
+        }
+
+        // The expiry is cleared so the collector cannot pick the same tombstone
+        // up on its next pass, which would remove a workspace that is already
+        // gone once a minute forever.
+        sqlx::query("UPDATE threads SET state = ?, expires_at = NULL WHERE thread_id = ?")
+            .bind(i32::from(state))
             .bind(thread_id)
-            .execute(self.pool())
+            .execute(&mut *transaction)
             .await?;
 
+        transaction.commit().await?;
+
         Ok(Thread {
-            state: ThreadState::Destroyed.into(),
+            state: state.into(),
+            queue_depth: 0,
+            current_turn_id: None,
+            expires_at: None,
+            metadata: std::collections::HashMap::new(),
             ..thread
         })
+    }
+
+    /// Threads whose idle TTL has elapsed.
+    ///
+    /// A thread with work in flight is never returned, however old its expiry
+    /// looks. The TTL is idle time, and collecting a thread mid-turn would
+    /// delete the work it is doing right now. Activity slides the expiry
+    /// forward, so this only matters for a turn that runs longer than the TTL
+    /// without producing anything, but "only matters rarely" is not a reason to
+    /// leave a race that destroys work.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error if the query fails.
+    pub async fn expired_threads(&self, limit: u32) -> Result<Vec<String>, StoreError> {
+        let now = to_nanos(&Timestamp::now());
+
+        let rows = sqlx::query(
+            "SELECT t.thread_id
+               FROM threads t
+              WHERE t.expires_at IS NOT NULL
+                AND t.expires_at <= ?
+                AND t.state NOT IN (?, ?)
+                AND NOT EXISTS (
+                      SELECT 1 FROM turns running
+                       WHERE running.thread_id = t.thread_id
+                         AND running.status = ?
+                    )
+              ORDER BY t.expires_at ASC
+              LIMIT ?",
+        )
+        .bind(now)
+        .bind(i32::from(ThreadState::Expired))
+        .bind(i32::from(ThreadState::Destroyed))
+        .bind(i32::from(TurnStatus::Running))
+        .bind(limit)
+        .fetch_all(self.pool())
+        .await?;
+
+        Ok(rows.iter().map(|row| row.get("thread_id")).collect())
     }
 
     /// Resets the idle clock.

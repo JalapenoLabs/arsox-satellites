@@ -92,6 +92,24 @@ impl EventBus {
     }
 }
 
+/// Builds a control event ready to publish.
+///
+/// The sequence is left at zero: control events are satellite lifecycle rather
+/// than thread history, so they are never persisted and never replayed, and
+/// there is no per-thread counter for them to draw from.
+#[must_use]
+pub fn control_event(
+    type_name: &str,
+    payload: arsox_sdk::proto::event::v1::control_event::Payload,
+) -> arsox_sdk::proto::event::v1::ControlEvent {
+    arsox_sdk::proto::event::v1::ControlEvent {
+        sequence: 0,
+        occurred_at: Some(arsox_sdk::proto::common::v1::Timestamp::now()),
+        r#type: type_name.to_owned(),
+        payload: Some(payload),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

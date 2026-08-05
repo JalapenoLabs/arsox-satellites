@@ -100,6 +100,25 @@ impl Error {
         )
     }
 
+    /// Whether the thread existed and no longer does.
+    ///
+    /// Distinct from [`Self::is_not_found`] on purpose. A thread that expired or
+    /// was destroyed is a thread your application probably has a record of, and
+    /// the right response is usually to open a new one and carry the work over.
+    /// A thread that was never found is a bad id, and opening a new one would
+    /// paper over the bug.
+    ///
+    /// Use [`Self::code`] when the difference between expired and destroyed
+    /// matters: an expired thread means the TTL was too short for how the
+    /// application actually uses it.
+    #[must_use]
+    pub fn is_gone(&self) -> bool {
+        matches!(
+            self.code(),
+            Some(ErrorCode::ThreadExpired | ErrorCode::ThreadDestroyed)
+        )
+    }
+
     /// Whether this SDK is too old for the satellite it was pointed at.
     #[must_use]
     pub fn is_incompatible(&self) -> bool {

@@ -54,6 +54,8 @@ async fn start() -> Running {
         database_path: database.to_string_lossy().into_owned(),
         workspace_root: directory.to_string_lossy().into_owned(),
         max_concurrent_threads: 1,
+        // Long enough that no test races the collector.
+        collect_interval: std::time::Duration::from_hours(1),
     };
 
     let assembled = assemble(options).await.expect("should assemble");
