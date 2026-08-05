@@ -102,6 +102,13 @@ impl StoreError {
 #[derive(Debug, Clone)]
 pub struct Store {
     pool: Pool<Sqlite>,
+
+    /// Where appended events are published for live consumers.
+    ///
+    /// Held here rather than left to callers because a publish that can be
+    /// forgotten at one call site is a subscriber that silently misses events.
+    /// Absent in tests that only exercise storage.
+    bus: Option<crate::stream::EventBus>,
 }
 
 impl Store {
@@ -163,7 +170,18 @@ impl Store {
             .await
             .context("failed to migrate the satellite database")?;
 
-        Ok(Self { pool })
+        Ok(Self { pool, bus: None })
+    }
+
+    /// Attaches the bus that appended events are published to.
+    #[must_use]
+    pub fn with_bus(mut self, bus: crate::stream::EventBus) -> Self {
+        self.bus = Some(bus);
+        self
+    }
+
+    pub(crate) fn bus(&self) -> Option<&crate::stream::EventBus> {
+        self.bus.as_ref()
     }
 
     pub(crate) fn pool(&self) -> &Pool<Sqlite> {

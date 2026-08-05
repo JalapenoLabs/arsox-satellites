@@ -79,6 +79,13 @@ impl Store {
 
         transaction.commit().await?;
 
+        // Published only after the write commits. Publishing first would let a
+        // live consumer see an event that a reconnecting one could never replay,
+        // which is a difference between two views of the same stream.
+        if let Some(bus) = self.bus() {
+            bus.publish(std::sync::Arc::new(stored.clone()));
+        }
+
         Ok(stored)
     }
 

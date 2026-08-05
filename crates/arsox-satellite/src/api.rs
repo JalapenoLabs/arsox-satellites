@@ -27,6 +27,23 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use crate::store::{NewThread, NewTurn, StoreError, ThreadFilter};
+use arsox_sdk::proto::common::v1::Timestamp;
+use arsox_sdk::proto::event::v1::control_event::Payload;
+use arsox_sdk::proto::event::v1::{ControlEvent, ThreadCreated, ThreadDestroyed, ThreadEndReason};
+
+/// Stamps a satellite lifecycle event.
+///
+/// The sequence is left at zero: control events are a live feed of what is
+/// happening now, not a log to replay, and a number nothing can resume from
+/// would only look like one.
+fn control_event(type_name: &str, payload: Payload) -> ControlEvent {
+    ControlEvent {
+        sequence: 0,
+        occurred_at: Some(Timestamp::now()),
+        r#type: type_name.to_owned(),
+        payload: Some(payload),
+    }
+}
 
 /// A protobuf request body.
 ///
@@ -143,10 +160,24 @@ async fn create_thread(
         })
         .await
     {
-        Ok(stored) => protobuf(&CreateThreadResponse {
-            thread: Some(stored.thread),
-            deduplicated: !stored.created,
-        }),
+        Ok(stored) => {
+            // Only a genuinely new thread is announced. A deduplicated create
+            // did not change the satellite's state, and reporting it as a
+            // creation would make a retry look like a second thread.
+            if stored.created {
+                satellite.bus.publish_control(control_event(
+                    "thread.created",
+                    Payload::ThreadCreated(ThreadCreated {
+                        thread_id: stored.thread.thread_id.clone(),
+                    }),
+                ));
+            }
+
+            protobuf(&CreateThreadResponse {
+                thread: Some(stored.thread),
+                deduplicated: !stored.created,
+            })
+        }
         Err(error) => store_failure(&error),
     }
 }
@@ -209,9 +240,19 @@ async fn destroy_thread(
     Path(thread_id): Path<String>,
 ) -> Response {
     match satellite.store.destroy_thread(&thread_id).await {
-        Ok(thread) => protobuf(&DestroyThreadResponse {
-            thread: Some(thread),
-        }),
+        Ok(thread) => {
+            satellite.bus.publish_control(control_event(
+                "thread.destroyed",
+                Payload::ThreadDestroyed(ThreadDestroyed {
+                    thread_id: thread.thread_id.clone(),
+                    reason: ThreadEndReason::Destroyed.into(),
+                }),
+            ));
+
+            protobuf(&DestroyThreadResponse {
+                thread: Some(thread),
+            })
+        }
         Err(error) => store_failure(&error),
     }
 }

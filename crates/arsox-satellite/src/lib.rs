@@ -18,6 +18,7 @@
 mod api;
 pub mod harness;
 pub mod store;
+pub mod stream;
 
 use anyhow::{Context as _, Result, bail};
 use arsox_sdk::proto::common::v1::Timestamp;
@@ -116,6 +117,8 @@ pub(crate) struct Satellite {
     /// Nudged when a turn is queued, so the runner picks it up immediately
     /// rather than waiting for its idle poll.
     pub(crate) work_queued: Arc<tokio::sync::Notify>,
+
+    pub(crate) bus: stream::EventBus,
 }
 
 impl Satellite {
@@ -288,6 +291,7 @@ fn router(satellite: Arc<Satellite>) -> Router {
     let authenticated = Router::new()
         .route("/v1/status", get(status))
         .merge(api::routes())
+        .merge(stream::sockets::routes())
         .route_layer(from_fn_with_state(Arc::clone(&satellite), require_auth));
 
     Router::new()
@@ -329,18 +333,64 @@ fn env_u32(key: &str, fallback: u32) -> u32 {
     parse_positive_u32(key, std::env::var(key).ok().as_deref(), fallback)
 }
 
-/// Boots the satellite and serves until interrupted.
+/// Everything a satellite needs to boot, with nothing read from the
+/// environment.
+///
+/// Separated from [`serve`] so a test can start a real satellite on an
+/// ephemeral port without setting process-global variables, which is both
+/// unsafe in edition 2024 and a race when tests run in parallel.
+#[derive(Debug, Clone)]
+pub struct ServeOptions {
+    pub secret: Option<String>,
+    pub allow_insecure: bool,
+    pub database_path: String,
+    pub workspace_root: String,
+    pub max_concurrent_threads: u32,
+}
+
+impl ServeOptions {
+    /// Reads the options a container boot uses.
+    #[must_use]
+    pub fn from_environment() -> Self {
+        Self {
+            secret: std::env::var("ARSOX_SECRET").ok(),
+            allow_insecure: std::env::var("ARSOX_ALLOW_INSECURE")
+                .is_ok_and(|value| value == "true"),
+            database_path: std::env::var("ARSOX_DB_PATH")
+                .unwrap_or_else(|_ignored| DEFAULT_DB_PATH.to_owned()),
+            workspace_root: std::env::var("ARSOX_WORKSPACE_ROOT")
+                .unwrap_or_else(|_ignored| DEFAULT_WORKSPACE_ROOT.to_owned()),
+            max_concurrent_threads: env_u32(
+                "ARSOX_MAX_CONCURRENT_THREADS",
+                DEFAULT_MAX_CONCURRENT_THREADS,
+            ),
+        }
+    }
+}
+
+/// A satellite that has been built but is not yet listening.
+#[derive(Debug)]
+pub struct Assembled {
+    pub router: Router,
+
+    /// The store, already wired to the event bus.
+    ///
+    /// Handed back because live delivery is in-process: the bus lives beside
+    /// this handle, and a second `Store` opened on the same file writes the same
+    /// rows while publishing to nobody. That is fine for a satellite, which is
+    /// one process per database, and it is a trap for anything that assumes
+    /// otherwise.
+    pub store: store::Store,
+}
+
+/// Builds everything a satellite is made of, without binding a port.
 ///
 /// # Errors
 ///
-/// Returns an error when `ARSOX_SECRET` is absent without an explicit insecure
-/// opt in, when the listen address cannot be bound, or when the server itself
-/// fails.
-pub async fn serve() -> Result<()> {
-    let auth = resolve_auth(
-        std::env::var("ARSOX_SECRET").ok(),
-        std::env::var("ARSOX_ALLOW_INSECURE").is_ok_and(|value| value == "true"),
-    )?;
+/// Returns an error when the secret is absent without an explicit insecure opt
+/// in, or when the database cannot be opened.
+pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
+    let auth = resolve_auth(options.secret, options.allow_insecure)?;
 
     if matches!(auth, Auth::Insecure) {
         // Event identity travels as `event.name` rather than tracing's `name:`
@@ -355,19 +405,16 @@ pub async fn serve() -> Result<()> {
         );
     }
 
-    // Mount /var/arsox as a named volume. The database holds threads, queued
-    // turns, event history, and incidents, so losing it means losing every
-    // thread you intended to resume and every record of what went wrong.
-    let database_path =
-        std::env::var("ARSOX_DB_PATH").unwrap_or_else(|_ignored| DEFAULT_DB_PATH.to_owned());
+    let bus = stream::EventBus::new();
 
-    let store = store::Store::open(&database_path)
+    let store = store::Store::open(&options.database_path)
         .await
-        .with_context(|| format!("failed to open the database at {database_path}"))?;
+        .with_context(|| format!("failed to open the database at {}", options.database_path))?
+        .with_bus(bus.clone());
 
     tracing::info!(
         event.name = "satellite.boot.database_ready",
-        db.path = %database_path,
+        db.path = %options.database_path,
         "database open and migrated",
     );
 
@@ -392,38 +439,45 @@ pub async fn serve() -> Result<()> {
         }
     }
 
-    let max_concurrent_threads = env_u32(
-        "ARSOX_MAX_CONCURRENT_THREADS",
-        DEFAULT_MAX_CONCURRENT_THREADS,
-    );
-
-    let workspace_root = std::env::var("ARSOX_WORKSPACE_ROOT")
-        .unwrap_or_else(|_ignored| DEFAULT_WORKSPACE_ROOT.to_owned());
-
     let work_queued = Arc::new(tokio::sync::Notify::new());
 
     let runner = harness::runner::Runner::new(
         store.clone(),
-        std::path::PathBuf::from(&workspace_root),
+        std::path::PathBuf::from(&options.workspace_root),
         Arc::clone(&work_queued),
-        max_concurrent_threads,
+        options.max_concurrent_threads,
     );
     tokio::spawn(runner.dispatch());
 
     tracing::info!(
         event.name = "satellite.boot.runner_ready",
-        workspace.root = %workspace_root,
-        thread.max_concurrent = max_concurrent_threads,
+        workspace.root = %options.workspace_root,
+        thread.max_concurrent = options.max_concurrent_threads,
         "turn runner started",
     );
 
-    let satellite = Arc::new(Satellite {
-        auth,
-        max_concurrent_threads,
-        started_at: Timestamp::now(),
+    Ok(Assembled {
+        router: router(Arc::new(Satellite {
+            auth,
+            max_concurrent_threads: options.max_concurrent_threads,
+            started_at: Timestamp::now(),
+            store: store.clone(),
+            work_queued,
+            bus,
+        })),
         store,
-        work_queued,
-    });
+    })
+}
+
+/// Boots the satellite and serves until interrupted.
+///
+/// # Errors
+///
+/// Returns an error when `ARSOX_SECRET` is absent without an explicit insecure
+/// opt in, when the listen address cannot be bound, or when the server itself
+/// fails.
+pub async fn serve() -> Result<()> {
+    let assembled = assemble(ServeOptions::from_environment()).await?;
 
     let listener = tokio::net::TcpListener::bind(LISTEN_ADDR)
         .await
@@ -438,7 +492,7 @@ pub async fn serve() -> Result<()> {
         "satellite listening on {{server.address}}",
     );
 
-    axum::serve(listener, router(satellite))
+    axum::serve(listener, assembled.router)
         .with_graceful_shutdown(async {
             let _ignored = tokio::signal::ctrl_c().await;
             tracing::info!(event.name = "satellite.shutdown.requested", "shutting down");

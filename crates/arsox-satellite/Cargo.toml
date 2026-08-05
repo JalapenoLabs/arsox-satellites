@@ -38,6 +38,7 @@ arsox-sdk.workspace = true
 
 anyhow.workspace = true
 chrono.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
@@ -57,3 +58,9 @@ mimalloc = "0.1"
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+# A real WebSocket client, so the stream is tested over an actual socket rather
+# than against a reimplementation of the handler's own logic.
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
