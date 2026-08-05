@@ -15,7 +15,9 @@
 //! your credentials in it. Running without one is possible and must be asked for
 //! explicitly with `ARSOX_ALLOW_INSECURE=true`, which warns loudly on every boot.
 
+mod api;
 pub mod harness;
+pub mod store;
 
 use anyhow::{Context as _, Result, bail};
 use arsox_sdk::proto::common::v1::Timestamp;
@@ -58,6 +60,11 @@ const LISTEN_ADDR: SocketAddr =
 /// deliberately low. Raise it when the satellite has the CPU and memory.
 const DEFAULT_MAX_CONCURRENT_THREADS: u32 = 4;
 
+/// Where the embedded database lives when `ARSOX_DB_PATH` is unset.
+///
+/// Inside the container this directory is expected to be a named volume.
+const DEFAULT_DB_PATH: &str = "/var/arsox/arsox.db";
+
 /// The wire type the SDK always speaks. JSON is a debugging affordance offered
 /// through `Accept`, never what an SDK sends.
 const PROTOBUF_CONTENT_TYPE: HeaderValue = HeaderValue::from_static("application/protobuf");
@@ -94,10 +101,11 @@ impl Auth {
 
 /// State shared by every request handler.
 #[derive(Debug)]
-struct Satellite {
+pub(crate) struct Satellite {
     auth: Auth,
     max_concurrent_threads: u32,
     started_at: Timestamp,
+    pub(crate) store: store::Store,
 }
 
 impl Satellite {
@@ -130,7 +138,7 @@ fn resolve_auth(secret: Option<String>, allow_insecure: bool) -> Result<Auth> {
 }
 
 /// Renders a protobuf message as a response body.
-fn protobuf<M: prost::Message>(message: &M) -> Response {
+pub(crate) fn protobuf<M: prost::Message>(message: &M) -> Response {
     (
         [(header::CONTENT_TYPE, PROTOBUF_CONTENT_TYPE)],
         message.encode_to_vec(),
@@ -142,13 +150,27 @@ fn protobuf<M: prost::Message>(message: &M) -> Response {
 ///
 /// Clients match on `code`, never on `message`: the wording may change within a
 /// major version, the code may not.
-fn contract_error(status: StatusCode, code: ErrorCode, message: &str) -> Response {
+pub(crate) fn contract_error(status: StatusCode, code: ErrorCode, message: &str) -> Response {
+    // Nothing routed through here is worth retrying unchanged: a malformed body
+    // or a missing field will be just as malformed next time.
+    contract_error_retryable(status, code, message, false)
+}
+
+/// Renders a contract error that a caller may reasonably retry.
+///
+/// Separate from [`contract_error`] because `retryable` is the field an SDK
+/// falls back on when it meets a code it has never heard of, so guessing it is
+/// worse than stating it.
+pub(crate) fn contract_error_retryable(
+    status: StatusCode,
+    code: ErrorCode,
+    message: &str,
+    retryable: bool,
+) -> Response {
     let body = ContractError {
         code: code.into(),
         message: message.to_owned(),
-        // Nothing this function reports is worth retrying unchanged. Retryable
-        // failures are produced where they happen, with their own context.
-        retryable: false,
+        retryable,
         details: None,
         trace_id: None,
     };
@@ -255,6 +277,7 @@ async fn status(State(satellite): State<Arc<Satellite>>) -> Response {
 fn router(satellite: Arc<Satellite>) -> Router {
     let authenticated = Router::new()
         .route("/v1/status", get(status))
+        .merge(api::routes())
         .route_layer(from_fn_with_state(Arc::clone(&satellite), require_auth));
 
     Router::new()
@@ -322,6 +345,22 @@ pub async fn serve() -> Result<()> {
         );
     }
 
+    // Mount /var/arsox as a named volume. The database holds threads, queued
+    // turns, event history, and incidents, so losing it means losing every
+    // thread you intended to resume and every record of what went wrong.
+    let database_path =
+        std::env::var("ARSOX_DB_PATH").unwrap_or_else(|_ignored| DEFAULT_DB_PATH.to_owned());
+
+    let store = store::Store::open(&database_path)
+        .await
+        .with_context(|| format!("failed to open the database at {database_path}"))?;
+
+    tracing::info!(
+        event.name = "satellite.boot.database_ready",
+        db.path = %database_path,
+        "database open and migrated",
+    );
+
     let satellite = Arc::new(Satellite {
         auth,
         max_concurrent_threads: env_u32(
@@ -329,6 +368,7 @@ pub async fn serve() -> Result<()> {
             DEFAULT_MAX_CONCURRENT_THREADS,
         ),
         started_at: Timestamp::now(),
+        store,
     });
 
     let listener = tokio::net::TcpListener::bind(LISTEN_ADDR)
