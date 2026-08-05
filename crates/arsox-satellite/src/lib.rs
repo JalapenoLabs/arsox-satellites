@@ -60,6 +60,12 @@ const LISTEN_ADDR: SocketAddr =
 /// deliberately low. Raise it when the satellite has the CPU and memory.
 const DEFAULT_MAX_CONCURRENT_THREADS: u32 = 4;
 
+/// Where thread workspaces live when `ARSOX_WORKSPACE_ROOT` is unset.
+///
+/// Mount this as a named volume too. Nothing under it survives a container
+/// replacement otherwise, which silently breaks thread resumption.
+const DEFAULT_WORKSPACE_ROOT: &str = "/workspace";
+
 /// Where the embedded database lives when `ARSOX_DB_PATH` is unset.
 ///
 /// Inside the container this directory is expected to be a named volume.
@@ -106,6 +112,10 @@ pub(crate) struct Satellite {
     max_concurrent_threads: u32,
     started_at: Timestamp,
     pub(crate) store: store::Store,
+
+    /// Nudged when a turn is queued, so the runner picks it up immediately
+    /// rather than waiting for its idle poll.
+    pub(crate) work_queued: Arc<tokio::sync::Notify>,
 }
 
 impl Satellite {
@@ -361,14 +371,58 @@ pub async fn serve() -> Result<()> {
         "database open and migrated",
     );
 
+    // A turn that was in flight when the satellite stopped is not lost work:
+    // the thread and its workspace survive, and the turn is marked interrupted
+    // so a policy or a human can decide whether to resume it. Leaving it
+    // RUNNING would block its thread forever behind a turn nothing is driving.
+    match store.mark_interrupted_turns().await {
+        Ok(interrupted) if !interrupted.is_empty() => {
+            tracing::warn!(
+                event.name = "satellite.boot.interrupted_turns",
+                turn.count = interrupted.len(),
+                "marked {{turn.count}} turns interrupted by a restart",
+            );
+        }
+        Ok(_none) => {}
+        Err(error) => {
+            tracing::error!(
+                event.name = "satellite.boot.interrupt_sweep_failed",
+                "could not sweep interrupted turns: {error}",
+            );
+        }
+    }
+
+    let max_concurrent_threads = env_u32(
+        "ARSOX_MAX_CONCURRENT_THREADS",
+        DEFAULT_MAX_CONCURRENT_THREADS,
+    );
+
+    let workspace_root = std::env::var("ARSOX_WORKSPACE_ROOT")
+        .unwrap_or_else(|_ignored| DEFAULT_WORKSPACE_ROOT.to_owned());
+
+    let work_queued = Arc::new(tokio::sync::Notify::new());
+
+    let runner = harness::runner::Runner::new(
+        store.clone(),
+        std::path::PathBuf::from(&workspace_root),
+        Arc::clone(&work_queued),
+        max_concurrent_threads,
+    );
+    tokio::spawn(runner.dispatch());
+
+    tracing::info!(
+        event.name = "satellite.boot.runner_ready",
+        workspace.root = %workspace_root,
+        thread.max_concurrent = max_concurrent_threads,
+        "turn runner started",
+    );
+
     let satellite = Arc::new(Satellite {
         auth,
-        max_concurrent_threads: env_u32(
-            "ARSOX_MAX_CONCURRENT_THREADS",
-            DEFAULT_MAX_CONCURRENT_THREADS,
-        ),
+        max_concurrent_threads,
         started_at: Timestamp::now(),
         store,
+        work_queued,
     });
 
     let listener = tokio::net::TcpListener::bind(LISTEN_ADDR)

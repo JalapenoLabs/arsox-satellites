@@ -235,9 +235,15 @@ async fn start_turn(
         })
         .await
     {
-        Ok(stored) => protobuf(&StartTurnResponse {
-            turn: Some(stored.turn),
-        }),
+        Ok(stored) => {
+            // The runner polls as a safety net, but a queued turn should start
+            // now rather than within a poll interval.
+            satellite.work_queued.notify_one();
+
+            protobuf(&StartTurnResponse {
+                turn: Some(stored.turn),
+            })
+        }
         Err(error) => store_failure(&error),
     }
 }

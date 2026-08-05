@@ -18,10 +18,12 @@
 //! a missing thread is one concept from the query to the HTTP response rather
 //! than being translated twice and drifting apart in the middle.
 
+mod claims;
 mod events;
 mod threads;
 mod turns;
 
+pub use claims::ClaimedTurn;
 pub use events::AppendEvent;
 pub use threads::{NewThread, StoredThread, ThreadFilter};
 pub use turns::{NewTurn, StoredTurn};

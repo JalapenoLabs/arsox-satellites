@@ -24,6 +24,8 @@
 //! against it, and silence is exactly what makes that class of bug survive.
 
 pub mod claude;
+pub mod runner;
+pub mod spawn;
 
 use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::event::v1::thread_event::Payload;

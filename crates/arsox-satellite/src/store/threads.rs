@@ -56,6 +56,10 @@ impl Store {
     /// Opens a thread, or returns the existing one when the idempotency key
     /// matches.
     ///
+    /// The thread opens `IDLE` rather than `PROVISIONING`, because nothing
+    /// provisions a workspace yet and a state the thread never leaves would be a
+    /// lie. `PROVISIONING` returns with repo cloning.
+    ///
     /// The thread id is generated here and never accepted from a client. It
     /// becomes a filesystem path, so a client-supplied one is a path traversal
     /// waiting to happen. `UUIDv7` also sorts by creation time, which is what
@@ -96,7 +100,7 @@ impl Store {
              VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&thread_id)
-        .bind(i32::from(ThreadState::Provisioning))
+        .bind(i32::from(ThreadState::Idle))
         .bind(new.settings.encode_to_vec())
         .bind(now_nanos)
         .bind(now_nanos)
@@ -119,7 +123,7 @@ impl Store {
         Ok(StoredThread {
             thread: Thread {
                 thread_id,
-                state: ThreadState::Provisioning.into(),
+                state: ThreadState::Idle.into(),
                 settings: Some(new.settings),
                 created_at: Some(now.clone()),
                 last_activity_at: Some(now),

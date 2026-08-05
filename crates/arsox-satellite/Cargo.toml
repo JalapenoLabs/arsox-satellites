@@ -14,6 +14,23 @@ repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
 
+[features]
+# Test-only helpers, feature gated per M-TEST-UTIL so a stand-in harness cannot
+# reach a published image.
+test-util = [ ]
+
+# The satellite itself.
+[[bin]]
+name = "arsox-satellite"
+path = "src/main.rs"
+
+# Replays a recorded transcript in place of a real CLI, so the turn runner can
+# be exercised without a model, a network, or a token budget.
+[[bin]]
+name = "arsox-fake-harness"
+path = "src/bin/fake_harness.rs"
+required-features = [ "test-util" ]
+
 [dependencies]
 # Types only. The server has no use for the client half of the SDK, and linking
 # it would drag an HTTP stack into a process that is already serving one.

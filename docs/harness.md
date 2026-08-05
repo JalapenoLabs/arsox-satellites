@@ -89,10 +89,45 @@ claude -p "<prompt>" --output-format stream-json --verbose --allowedTools "Bash"
 `< /dev/null` matters. The CLI waits on stdin for a few seconds otherwise, which
 looks like a hang.
 
+## The runner
+
+The runner claims a queued turn, spawns the harness, streams its stdout through
+the mapper, appends the canonical events to the log, and records the result.
+
+**One turn at a time per thread is enforced by the claim query**, not by the
+runner remembering to check. The claim is a single conditional update whose
+subquery excludes any thread that already has something running, so two runners
+racing produce one winner and one `None` rather than two processes driving one
+conversation.
+
+**A thread resumes its harness session.** The first turn opens a session under an
+id the satellite chooses; later turns pass `--resume`. Without that a thread
+would be a series of unrelated turns rather than a conversation.
+
+**Cancellation is a database write, not a signal.** It arrives as an ordinary
+HTTP request, so the runner learns about it by asking every so often rather than
+being interrupted. Checking every line would be a query per line of output.
+
+**A clean exit with no result line fails the turn.** The harness ended without
+saying what it did, and reporting that as success is exactly the silent failure
+the incident system exists to prevent.
+
+### Testing it without a model
+
+Two stand-in harnesses replay a recorded transcript in place of a real CLI:
+`src/bin/fake_harness.rs` for Rust tests, gated behind the `test-util` feature
+so it cannot reach a published image, and `scripts/fake-harness.sh` for smoke
+testing a built image without rebuilding it.
+
+Both take per-run behaviour from `[[key=value]]` directives **in the prompt**
+rather than from environment variables. That is not a stylistic choice: process
+environment is global, tests run in parallel in one process, and an env-var knob
+is a race in which one test silently reconfigures another. It was one, until two
+tests started failing for reasons that had nothing to do with the code under
+test.
+
 ## Roadmap
 
-- **The turn runner**: spawn the harness, feed it a prompt, assemble
-  `HarnessResult` and the surrounding stages into a full `TurnResult`.
 - **Bidirectional mode.** Both CLIs accept streaming input as well as emitting
   streaming output, which suits a long-lived process per thread better than a
   spawn per turn. It is also what makes cancellation and mid-turn input possible.
