@@ -23,10 +23,68 @@ pub struct TokenUsage {
     /// Getting this distinction wrong turns "this harness has no cache
     /// accounting" into "this run read nothing from cache", which is a silent
     /// defect in a billing-adjacent number.
+    ///
+    /// Not hypothetical: one harness reports a cached-input count and has no
+    /// cache-write concept at all, so its `cache_write_tokens` is genuinely
+    /// absent rather than zero.
     #[prost(uint64, optional, tag="4")]
     pub cache_read_tokens: ::core::option::Option<u64>,
     #[prost(uint64, optional, tag="5")]
     pub cache_write_tokens: ::core::option::Option<u64>,
+    /// Tokens spent on reasoning, when the harness separates them from output.
+    ///
+    /// Absent when the harness folds reasoning into `output_tokens`, which is not
+    /// the same as a run that did no reasoning. Reasoning is usually billed at the
+    /// output rate, so a consumer reconciling a bill needs to know which of the
+    /// two it is looking at.
+    #[prost(uint64, optional, tag="6")]
+    pub reasoning_output_tokens: ::core::option::Option<u64>,
+}
+/// Provider-side tools billed per call rather than per token.
+///
+/// Web search and web fetch execute on the provider's infrastructure and appear
+/// on an invoice as request counts, so a cost reconciliation that only sums
+/// tokens comes up short by exactly this much.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ServerToolUsage {
+    /// Absent when the harness does not report the count. Zero means none ran.
+    #[prost(uint32, optional, tag="1")]
+    pub web_search_requests: ::core::option::Option<u32>,
+    #[prost(uint32, optional, tag="2")]
+    pub web_fetch_requests: ::core::option::Option<u32>,
+}
+/// One quota window a provider enforces.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RateLimitWindow {
+    /// The provider's own label for the window, e.g. "five_hour" or "weekly".
+    ///
+    /// A string rather than an enum: window names are the provider's to choose and
+    /// change, and an enum would force a proto release every time one of them
+    /// renamed a tier.
+    #[prost(string, tag="1")]
+    pub window: ::prost::alloc::string::String,
+    /// Fraction of the window consumed, 0 to 100. Absent when the provider reports
+    /// a reset time without a level.
+    #[prost(uint32, optional, tag="2")]
+    pub percent_used: ::core::option::Option<u32>,
+    /// When the window resets. Absent when the provider does not say.
+    #[prost(message, optional, tag="3")]
+    pub resets_at: ::core::option::Option<super::super::common::v1::Timestamp>,
+}
+/// Where a run stands against its provider's quotas.
+///
+/// Harnesses report this unprompted and it is otherwise invisible: a satellite
+/// slowing down because it is near a limit looks identical to a satellite
+/// working on something hard. Surfacing it is what lets a host application fail
+/// over before the wall rather than after it.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RateLimitStatus {
+    #[prost(message, repeated, tag="1")]
+    pub windows: ::prost::alloc::vec::Vec<RateLimitWindow>,
+    /// True when the provider is refusing or throttling requests, rather than
+    /// merely reporting remaining headroom.
+    #[prost(bool, tag="2")]
+    pub throttled: bool,
 }
 /// What the satellite computed the tokens cost.
 ///
@@ -53,6 +111,10 @@ pub struct ModelStatistics {
     pub tokens: ::core::option::Option<TokenUsage>,
     #[prost(message, optional, tag="3")]
     pub cost: ::core::option::Option<CostEstimate>,
+    /// Absent when the harness reports no server-side tool calls at all, which is
+    /// different from reporting zero of them.
+    #[prost(message, optional, tag="4")]
+    pub server_tools: ::core::option::Option<ServerToolUsage>,
 }
 /// Totals for one thread, across its lifetime.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]

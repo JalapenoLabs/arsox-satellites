@@ -171,6 +171,28 @@ There is one `TokenUsage`. There is deliberately no `ClaudeTokenUsage` and no
 `CodexTokenUsage`: a consumer written against a per-harness message has to be
 rewritten to switch harnesses, which is the cost Arsox exists to remove.
 
+### Shapes are derived from captured output, not imagined
+
+Every field in the contract that describes harness output exists because a real
+transcript or a published schema showed it. Four were added after reading actual
+harness output rather than reasoning about what a harness might emit:
+
+- `TokenUsage.reasoning_output_tokens`, because one harness reports reasoning
+  separately and another folds it into output. Reasoning is usually billed at
+  the output rate, so a reconciliation needs to know which it is looking at.
+- `ServerToolUsage`, because web search and fetch are billed per call rather
+  than per token, and a cost check that only sums tokens comes up short.
+- `RateLimitStatus`, because both harnesses report quota state unprompted. A
+  satellite slowing down near a limit is otherwise indistinguishable from one
+  working on something hard.
+- `TurnTiming` and `StopReason`, because a turn can complete while the model was
+  cut off at its output ceiling, and "it finished" and "it ran out of room" are
+  different answers to give a human.
+
+`TurnTiming.model_round_trips` is deliberately not called "turns". A harness
+counts one request and its response as a turn; Arsox counts a whole unit of work
+as a turn. Reusing the word would put two meanings on one field name.
+
 ### Money is never a float
 
 Costs and cost ceilings are `common.v1.Money`: an ISO 4217 code, whole units,

@@ -21,7 +21,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/usage/v1/usage.proto.
  */
 export const file_arsox_usage_v1_usage: GenFile = /*@__PURE__*/
-  fileDesc("ChphcnNveC91c2FnZS92MS91c2FnZS5wcm90bxIOYXJzb3gudXNhZ2UudjEivQEKClRva2VuVXNhZ2USFAoMaW5wdXRfdG9rZW5zGAEgASgEEhUKDW91dHB1dF90b2tlbnMYAiABKAQSFAoMdG90YWxfdG9rZW5zGAMgASgEEh4KEWNhY2hlX3JlYWRfdG9rZW5zGAQgASgESACIAQESHwoSY2FjaGVfd3JpdGVfdG9rZW5zGAUgASgESAGIAQFCFAoSX2NhY2hlX3JlYWRfdG9rZW5zQhUKE19jYWNoZV93cml0ZV90b2tlbnMiWgoMQ29zdEVzdGltYXRlEisKBmFtb3VudBgBIAEoCzIWLmFyc294LmNvbW1vbi52MS5Nb25leUgAiAEBEhIKCmlzX3BhcnRpYWwYAiABKAhCCQoHX2Ftb3VudCJ4Cg9Nb2RlbFN0YXRpc3RpY3MSDQoFbW9kZWwYASABKAkSKgoGdG9rZW5zGAIgASgLMhouYXJzb3gudXNhZ2UudjEuVG9rZW5Vc2FnZRIqCgRjb3N0GAMgASgLMhwuYXJzb3gudXNhZ2UudjEuQ29zdEVzdGltYXRlIn0KEFRocmVhZFN0YXRpc3RpY3MSEQoJdGhyZWFkX2lkGAEgASgJEioKBnRva2VucxgCIAEoCzIaLmFyc294LnVzYWdlLnYxLlRva2VuVXNhZ2USKgoEY29zdBgDIAEoCzIcLmFyc294LnVzYWdlLnYxLkNvc3RFc3RpbWF0ZSKLAgoSTGlmZXRpbWVTdGF0aXN0aWNzEjEKCGJ5X21vZGVsGAEgAygLMh8uYXJzb3gudXNhZ2UudjEuTW9kZWxTdGF0aXN0aWNzEjMKCWJ5X3RocmVhZBgCIAMoCzIgLmFyc294LnVzYWdlLnYxLlRocmVhZFN0YXRpc3RpY3MSKQoFdG90YWwYAyABKAsyGi5hcnNveC51c2FnZS52MS5Ub2tlblVzYWdlEjAKCnRvdGFsX2Nvc3QYBCABKAsyHC5hcnNveC51c2FnZS52MS5Db3N0RXN0aW1hdGUSMAoMY29sbGVjdGVkX2F0GAUgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcCIqChRHZXRTdGF0aXN0aWNzUmVxdWVzdBISCgp0aHJlYWRfaWRzGAEgAygJIk8KFUdldFN0YXRpc3RpY3NSZXNwb25zZRI2CgpzdGF0aXN0aWNzGAEgASgLMiIuYXJzb3gudXNhZ2UudjEuTGlmZXRpbWVTdGF0aXN0aWNzQnoKEmNvbS5hcnNveC51c2FnZS52MUIKVXNhZ2VQcm90b1ABogIDQVVYqgIOQXJzb3guVXNhZ2UuVjHKAg5BcnNveFxVc2FnZVxWMeICGkFyc294XFVzYWdlXFYxXEdQQk1ldGFkYXRh6gIQQXJzb3g6OlVzYWdlOjpWMWIGcHJvdG8z", [file_arsox_common_v1_common]);
+  fileDesc("ChphcnNveC91c2FnZS92MS91c2FnZS5wcm90bxIOYXJzb3gudXNhZ2UudjEi/wEKClRva2VuVXNhZ2USFAoMaW5wdXRfdG9rZW5zGAEgASgEEhUKDW91dHB1dF90b2tlbnMYAiABKAQSFAoMdG90YWxfdG9rZW5zGAMgASgEEh4KEWNhY2hlX3JlYWRfdG9rZW5zGAQgASgESACIAQESHwoSY2FjaGVfd3JpdGVfdG9rZW5zGAUgASgESAGIAQESJAoXcmVhc29uaW5nX291dHB1dF90b2tlbnMYBiABKARIAogBAUIUChJfY2FjaGVfcmVhZF90b2tlbnNCFQoTX2NhY2hlX3dyaXRlX3Rva2Vuc0IaChhfcmVhc29uaW5nX291dHB1dF90b2tlbnMigwEKD1NlcnZlclRvb2xVc2FnZRIgChN3ZWJfc2VhcmNoX3JlcXVlc3RzGAEgASgNSACIAQESHwoSd2ViX2ZldGNoX3JlcXVlc3RzGAIgASgNSAGIAQFCFgoUX3dlYl9zZWFyY2hfcmVxdWVzdHNCFQoTX3dlYl9mZXRjaF9yZXF1ZXN0cyKPAQoPUmF0ZUxpbWl0V2luZG93Eg4KBndpbmRvdxgBIAEoCRIZCgxwZXJjZW50X3VzZWQYAiABKA1IAIgBARIyCglyZXNldHNfYXQYAyABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wSAGIAQFCDwoNX3BlcmNlbnRfdXNlZEIMCgpfcmVzZXRzX2F0IlYKD1JhdGVMaW1pdFN0YXR1cxIwCgd3aW5kb3dzGAEgAygLMh8uYXJzb3gudXNhZ2UudjEuUmF0ZUxpbWl0V2luZG93EhEKCXRocm90dGxlZBgCIAEoCCJaCgxDb3N0RXN0aW1hdGUSKwoGYW1vdW50GAEgASgLMhYuYXJzb3guY29tbW9uLnYxLk1vbmV5SACIAQESEgoKaXNfcGFydGlhbBgCIAEoCEIJCgdfYW1vdW50IsUBCg9Nb2RlbFN0YXRpc3RpY3MSDQoFbW9kZWwYASABKAkSKgoGdG9rZW5zGAIgASgLMhouYXJzb3gudXNhZ2UudjEuVG9rZW5Vc2FnZRIqCgRjb3N0GAMgASgLMhwuYXJzb3gudXNhZ2UudjEuQ29zdEVzdGltYXRlEjoKDHNlcnZlcl90b29scxgEIAEoCzIfLmFyc294LnVzYWdlLnYxLlNlcnZlclRvb2xVc2FnZUgAiAEBQg8KDV9zZXJ2ZXJfdG9vbHMifQoQVGhyZWFkU3RhdGlzdGljcxIRCgl0aHJlYWRfaWQYASABKAkSKgoGdG9rZW5zGAIgASgLMhouYXJzb3gudXNhZ2UudjEuVG9rZW5Vc2FnZRIqCgRjb3N0GAMgASgLMhwuYXJzb3gudXNhZ2UudjEuQ29zdEVzdGltYXRlIosCChJMaWZldGltZVN0YXRpc3RpY3MSMQoIYnlfbW9kZWwYASADKAsyHy5hcnNveC51c2FnZS52MS5Nb2RlbFN0YXRpc3RpY3MSMwoJYnlfdGhyZWFkGAIgAygLMiAuYXJzb3gudXNhZ2UudjEuVGhyZWFkU3RhdGlzdGljcxIpCgV0b3RhbBgDIAEoCzIaLmFyc294LnVzYWdlLnYxLlRva2VuVXNhZ2USMAoKdG90YWxfY29zdBgEIAEoCzIcLmFyc294LnVzYWdlLnYxLkNvc3RFc3RpbWF0ZRIwCgxjb2xsZWN0ZWRfYXQYBSABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wIioKFEdldFN0YXRpc3RpY3NSZXF1ZXN0EhIKCnRocmVhZF9pZHMYASADKAkiTwoVR2V0U3RhdGlzdGljc1Jlc3BvbnNlEjYKCnN0YXRpc3RpY3MYASABKAsyIi5hcnNveC51c2FnZS52MS5MaWZldGltZVN0YXRpc3RpY3NCegoSY29tLmFyc294LnVzYWdlLnYxQgpVc2FnZVByb3RvUAGiAgNBVViqAg5BcnNveC5Vc2FnZS5WMcoCDkFyc294XFVzYWdlXFYx4gIaQXJzb3hcVXNhZ2VcVjFcR1BCTWV0YWRhdGHqAhBBcnNveDo6VXNhZ2U6OlYxYgZwcm90bzM", [file_arsox_common_v1_common]);
 
 /**
  * Tokens consumed, in one canonical shape.
@@ -60,6 +60,10 @@ export type TokenUsage = Message<"arsox.usage.v1.TokenUsage"> & {
    * accounting" into "this run read nothing from cache", which is a silent
    * defect in a billing-adjacent number.
    *
+   * Not hypothetical: one harness reports a cached-input count and has no
+   * cache-write concept at all, so its `cache_write_tokens` is genuinely
+   * absent rather than zero.
+   *
    * @generated from field: optional uint64 cache_read_tokens = 4;
    */
   cacheReadTokens?: bigint;
@@ -68,6 +72,18 @@ export type TokenUsage = Message<"arsox.usage.v1.TokenUsage"> & {
    * @generated from field: optional uint64 cache_write_tokens = 5;
    */
   cacheWriteTokens?: bigint;
+
+  /**
+   * Tokens spent on reasoning, when the harness separates them from output.
+   *
+   * Absent when the harness folds reasoning into `output_tokens`, which is not
+   * the same as a run that did no reasoning. Reasoning is usually billed at the
+   * output rate, so a consumer reconciling a bill needs to know which of the
+   * two it is looking at.
+   *
+   * @generated from field: optional uint64 reasoning_output_tokens = 6;
+   */
+  reasoningOutputTokens?: bigint;
 };
 
 /**
@@ -76,6 +92,108 @@ export type TokenUsage = Message<"arsox.usage.v1.TokenUsage"> & {
  */
 export const TokenUsageSchema: GenMessage<TokenUsage> = /*@__PURE__*/
   messageDesc(file_arsox_usage_v1_usage, 0);
+
+/**
+ * Provider-side tools billed per call rather than per token.
+ *
+ * Web search and web fetch execute on the provider's infrastructure and appear
+ * on an invoice as request counts, so a cost reconciliation that only sums
+ * tokens comes up short by exactly this much.
+ *
+ * @generated from message arsox.usage.v1.ServerToolUsage
+ */
+export type ServerToolUsage = Message<"arsox.usage.v1.ServerToolUsage"> & {
+  /**
+   * Absent when the harness does not report the count. Zero means none ran.
+   *
+   * @generated from field: optional uint32 web_search_requests = 1;
+   */
+  webSearchRequests?: number;
+
+  /**
+   * @generated from field: optional uint32 web_fetch_requests = 2;
+   */
+  webFetchRequests?: number;
+};
+
+/**
+ * Describes the message arsox.usage.v1.ServerToolUsage.
+ * Use `create(ServerToolUsageSchema)` to create a new message.
+ */
+export const ServerToolUsageSchema: GenMessage<ServerToolUsage> = /*@__PURE__*/
+  messageDesc(file_arsox_usage_v1_usage, 1);
+
+/**
+ * One quota window a provider enforces.
+ *
+ * @generated from message arsox.usage.v1.RateLimitWindow
+ */
+export type RateLimitWindow = Message<"arsox.usage.v1.RateLimitWindow"> & {
+  /**
+   * The provider's own label for the window, e.g. "five_hour" or "weekly".
+   *
+   * A string rather than an enum: window names are the provider's to choose and
+   * change, and an enum would force a proto release every time one of them
+   * renamed a tier.
+   *
+   * @generated from field: string window = 1;
+   */
+  window: string;
+
+  /**
+   * Fraction of the window consumed, 0 to 100. Absent when the provider reports
+   * a reset time without a level.
+   *
+   * @generated from field: optional uint32 percent_used = 2;
+   */
+  percentUsed?: number;
+
+  /**
+   * When the window resets. Absent when the provider does not say.
+   *
+   * @generated from field: optional arsox.common.v1.Timestamp resets_at = 3;
+   */
+  resetsAt?: Timestamp;
+};
+
+/**
+ * Describes the message arsox.usage.v1.RateLimitWindow.
+ * Use `create(RateLimitWindowSchema)` to create a new message.
+ */
+export const RateLimitWindowSchema: GenMessage<RateLimitWindow> = /*@__PURE__*/
+  messageDesc(file_arsox_usage_v1_usage, 2);
+
+/**
+ * Where a run stands against its provider's quotas.
+ *
+ * Harnesses report this unprompted and it is otherwise invisible: a satellite
+ * slowing down because it is near a limit looks identical to a satellite
+ * working on something hard. Surfacing it is what lets a host application fail
+ * over before the wall rather than after it.
+ *
+ * @generated from message arsox.usage.v1.RateLimitStatus
+ */
+export type RateLimitStatus = Message<"arsox.usage.v1.RateLimitStatus"> & {
+  /**
+   * @generated from field: repeated arsox.usage.v1.RateLimitWindow windows = 1;
+   */
+  windows: RateLimitWindow[];
+
+  /**
+   * True when the provider is refusing or throttling requests, rather than
+   * merely reporting remaining headroom.
+   *
+   * @generated from field: bool throttled = 2;
+   */
+  throttled: boolean;
+};
+
+/**
+ * Describes the message arsox.usage.v1.RateLimitStatus.
+ * Use `create(RateLimitStatusSchema)` to create a new message.
+ */
+export const RateLimitStatusSchema: GenMessage<RateLimitStatus> = /*@__PURE__*/
+  messageDesc(file_arsox_usage_v1_usage, 3);
 
 /**
  * What the satellite computed the tokens cost.
@@ -108,7 +226,7 @@ export type CostEstimate = Message<"arsox.usage.v1.CostEstimate"> & {
  * Use `create(CostEstimateSchema)` to create a new message.
  */
 export const CostEstimateSchema: GenMessage<CostEstimate> = /*@__PURE__*/
-  messageDesc(file_arsox_usage_v1_usage, 1);
+  messageDesc(file_arsox_usage_v1_usage, 4);
 
 /**
  * Totals for one model, across the satellite's lifetime.
@@ -132,6 +250,14 @@ export type ModelStatistics = Message<"arsox.usage.v1.ModelStatistics"> & {
    * @generated from field: arsox.usage.v1.CostEstimate cost = 3;
    */
   cost?: CostEstimate;
+
+  /**
+   * Absent when the harness reports no server-side tool calls at all, which is
+   * different from reporting zero of them.
+   *
+   * @generated from field: optional arsox.usage.v1.ServerToolUsage server_tools = 4;
+   */
+  serverTools?: ServerToolUsage;
 };
 
 /**
@@ -139,7 +265,7 @@ export type ModelStatistics = Message<"arsox.usage.v1.ModelStatistics"> & {
  * Use `create(ModelStatisticsSchema)` to create a new message.
  */
 export const ModelStatisticsSchema: GenMessage<ModelStatistics> = /*@__PURE__*/
-  messageDesc(file_arsox_usage_v1_usage, 2);
+  messageDesc(file_arsox_usage_v1_usage, 5);
 
 /**
  * Totals for one thread, across its lifetime.
@@ -168,7 +294,7 @@ export type ThreadStatistics = Message<"arsox.usage.v1.ThreadStatistics"> & {
  * Use `create(ThreadStatisticsSchema)` to create a new message.
  */
 export const ThreadStatisticsSchema: GenMessage<ThreadStatistics> = /*@__PURE__*/
-  messageDesc(file_arsox_usage_v1_usage, 3);
+  messageDesc(file_arsox_usage_v1_usage, 6);
 
 /**
  * Everything the satellite has ever spent.
@@ -209,7 +335,7 @@ export type LifetimeStatistics = Message<"arsox.usage.v1.LifetimeStatistics"> & 
  * Use `create(LifetimeStatisticsSchema)` to create a new message.
  */
 export const LifetimeStatisticsSchema: GenMessage<LifetimeStatistics> = /*@__PURE__*/
-  messageDesc(file_arsox_usage_v1_usage, 4);
+  messageDesc(file_arsox_usage_v1_usage, 7);
 
 /**
  * @generated from message arsox.usage.v1.GetStatisticsRequest
@@ -229,7 +355,7 @@ export type GetStatisticsRequest = Message<"arsox.usage.v1.GetStatisticsRequest"
  * Use `create(GetStatisticsRequestSchema)` to create a new message.
  */
 export const GetStatisticsRequestSchema: GenMessage<GetStatisticsRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_usage_v1_usage, 5);
+  messageDesc(file_arsox_usage_v1_usage, 8);
 
 /**
  * @generated from message arsox.usage.v1.GetStatisticsResponse
@@ -246,5 +372,5 @@ export type GetStatisticsResponse = Message<"arsox.usage.v1.GetStatisticsRespons
  * Use `create(GetStatisticsResponseSchema)` to create a new message.
  */
 export const GetStatisticsResponseSchema: GenMessage<GetStatisticsResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_usage_v1_usage, 6);
+  messageDesc(file_arsox_usage_v1_usage, 9);
 

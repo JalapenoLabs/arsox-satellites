@@ -209,6 +209,25 @@ pub struct StatisticsUpdated {
     #[prost(message, optional, tag="1")]
     pub statistics: ::core::option::Option<super::super::usage::v1::LifetimeStatistics>,
 }
+/// Where the run stands against its provider's quotas.
+///
+/// Emitted when a harness reports quota state, which it does unprompted rather
+/// than on request. Not toggleable through stream settings, for the same reason
+/// budget warnings are not: a satellite slowing down because it is near a limit
+/// is indistinguishable from a satellite working on something hard, and a host
+/// application that cannot see the difference cannot fail over before the wall.
+///
+/// Unlike a budget warning, this is the provider's ceiling rather than one you
+/// set. Nothing in Arsox enforces it and nothing can raise it.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RateLimitReported {
+    #[prost(message, optional, tag="1")]
+    pub status: ::core::option::Option<super::super::usage::v1::RateLimitStatus>,
+    /// Which configured endpoint reported it, by its `ModelEndpoint.name`, so that
+    /// stacked subscriptions can be told apart.
+    #[prost(string, tag="2")]
+    pub endpoint_name: ::prost::alloc::string::String,
+}
 /// Which ceiling is being approached.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -575,7 +594,7 @@ pub struct ThreadEvent {
     /// directly.
     #[prost(string, optional, tag="6")]
     pub member_id: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(oneof="thread_event::Payload", tags="20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44")]
+    #[prost(oneof="thread_event::Payload", tags="20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 45, 44")]
     pub payload: ::core::option::Option<thread_event::Payload>,
 }
 /// Nested message and enum types in `ThreadEvent`.
@@ -630,6 +649,8 @@ pub mod thread_event {
         TurnCompleted(super::TurnCompleted),
         #[prost(message, tag="43")]
         StatisticsUpdated(super::StatisticsUpdated),
+        #[prost(message, tag="45")]
+        RateLimitReported(super::RateLimitReported),
         /// Every failure, at every severity. The one event type that cannot be
         /// switched off: a stream that can be configured to hide failures is worse
         /// than no stream.

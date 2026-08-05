@@ -33,6 +33,14 @@ class StageDisposition(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     STAGE_DISPOSITION_RAN: _ClassVar[StageDisposition]
     STAGE_DISPOSITION_SKIPPED: _ClassVar[StageDisposition]
     STAGE_DISPOSITION_FAILED: _ClassVar[StageDisposition]
+
+class StopReason(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    STOP_REASON_UNSPECIFIED: _ClassVar[StopReason]
+    STOP_REASON_END_TURN: _ClassVar[StopReason]
+    STOP_REASON_MAX_TOKENS: _ClassVar[StopReason]
+    STOP_REASON_STOP_SEQUENCE: _ClassVar[StopReason]
+    STOP_REASON_REFUSAL: _ClassVar[StopReason]
 STAGE_UNSPECIFIED: Stage
 STAGE_PLAN: Stage
 STAGE_TEAM_WORK: Stage
@@ -46,6 +54,11 @@ STAGE_DISPOSITION_UNSPECIFIED: StageDisposition
 STAGE_DISPOSITION_RAN: StageDisposition
 STAGE_DISPOSITION_SKIPPED: StageDisposition
 STAGE_DISPOSITION_FAILED: StageDisposition
+STOP_REASON_UNSPECIFIED: StopReason
+STOP_REASON_END_TURN: StopReason
+STOP_REASON_MAX_TOKENS: StopReason
+STOP_REASON_STOP_SEQUENCE: StopReason
+STOP_REASON_REFUSAL: StopReason
 
 class StageOutcome(_message.Message):
     __slots__ = ()
@@ -58,6 +71,18 @@ class StageOutcome(_message.Message):
     reason: str
     elapsed: _common_pb2.Duration
     def __init__(self, stage: _Optional[_Union[Stage, str]] = ..., disposition: _Optional[_Union[StageDisposition, str]] = ..., reason: _Optional[str] = ..., elapsed: _Optional[_Union[_common_pb2.Duration, _Mapping]] = ...) -> None: ...
+
+class TurnTiming(_message.Message):
+    __slots__ = ()
+    TOTAL_FIELD_NUMBER: _ClassVar[int]
+    LLM_FIELD_NUMBER: _ClassVar[int]
+    TIME_TO_FIRST_TOKEN_FIELD_NUMBER: _ClassVar[int]
+    MODEL_ROUND_TRIPS_FIELD_NUMBER: _ClassVar[int]
+    total: _common_pb2.Duration
+    llm: _common_pb2.Duration
+    time_to_first_token: _common_pb2.Duration
+    model_round_trips: int
+    def __init__(self, total: _Optional[_Union[_common_pb2.Duration, _Mapping]] = ..., llm: _Optional[_Union[_common_pb2.Duration, _Mapping]] = ..., time_to_first_token: _Optional[_Union[_common_pb2.Duration, _Mapping]] = ..., model_round_trips: _Optional[int] = ...) -> None: ...
 
 class PullRequestWatchReport(_message.Message):
     __slots__ = ()
@@ -100,6 +125,9 @@ class TurnResult(_message.Message):
     WATCH_FIELD_NUMBER: _ClassVar[int]
     AGENTS_REPO_COMMIT_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
+    TIMING_FIELD_NUMBER: _ClassVar[int]
+    STOP_REASON_FIELD_NUMBER: _ClassVar[int]
+    RATE_LIMITS_FIELD_NUMBER: _ClassVar[int]
     turn_id: str
     thread_id: str
     status: _turn_pb2.TurnStatus
@@ -120,7 +148,10 @@ class TurnResult(_message.Message):
     watch: PullRequestWatchReport
     agents_repo_commit: str
     metadata: _containers.ScalarMap[str, str]
-    def __init__(self, turn_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., status: _Optional[_Union[_turn_pb2.TurnStatus, str]] = ..., summary: _Optional[str] = ..., tokens: _Optional[_Union[_usage_pb2.TokenUsage, _Mapping]] = ..., cost: _Optional[_Union[_usage_pb2.CostEstimate, _Mapping]] = ..., by_model: _Optional[_Iterable[_Union[_usage_pb2.ModelStatistics, _Mapping]]] = ..., error: _Optional[_Union[_error_pb2.Error, _Mapping]] = ..., incident_counts: _Optional[_Union[_incident_pb2.IncidentCounts, _Mapping]] = ..., members: _Optional[_Iterable[_Union[_turn_pb2.TeamMember, _Mapping]]] = ..., changed_files: _Optional[_Iterable[_Union[_turn_pb2.ChangedFile, _Mapping]]] = ..., integrations: _Optional[_Iterable[_Union[_turn_pb2.IntegrationRecord, _Mapping]]] = ..., checker_results: _Optional[_Iterable[_Union[_turn_pb2.CheckerResult, _Mapping]]] = ..., artifacts: _Optional[_Iterable[_Union[_artifact_pb2.Artifact, _Mapping]]] = ..., suggestions: _Optional[_Union[_suggestion_pb2.SuggestionReport, _Mapping]] = ..., stages: _Optional[_Iterable[_Union[StageOutcome, _Mapping]]] = ..., unanswered_questions: _Optional[_Iterable[_Union[_question_pb2.QuestionSet, _Mapping]]] = ..., watch: _Optional[_Union[PullRequestWatchReport, _Mapping]] = ..., agents_repo_commit: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    timing: TurnTiming
+    stop_reason: StopReason
+    rate_limits: _usage_pb2.RateLimitStatus
+    def __init__(self, turn_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., status: _Optional[_Union[_turn_pb2.TurnStatus, str]] = ..., summary: _Optional[str] = ..., tokens: _Optional[_Union[_usage_pb2.TokenUsage, _Mapping]] = ..., cost: _Optional[_Union[_usage_pb2.CostEstimate, _Mapping]] = ..., by_model: _Optional[_Iterable[_Union[_usage_pb2.ModelStatistics, _Mapping]]] = ..., error: _Optional[_Union[_error_pb2.Error, _Mapping]] = ..., incident_counts: _Optional[_Union[_incident_pb2.IncidentCounts, _Mapping]] = ..., members: _Optional[_Iterable[_Union[_turn_pb2.TeamMember, _Mapping]]] = ..., changed_files: _Optional[_Iterable[_Union[_turn_pb2.ChangedFile, _Mapping]]] = ..., integrations: _Optional[_Iterable[_Union[_turn_pb2.IntegrationRecord, _Mapping]]] = ..., checker_results: _Optional[_Iterable[_Union[_turn_pb2.CheckerResult, _Mapping]]] = ..., artifacts: _Optional[_Iterable[_Union[_artifact_pb2.Artifact, _Mapping]]] = ..., suggestions: _Optional[_Union[_suggestion_pb2.SuggestionReport, _Mapping]] = ..., stages: _Optional[_Iterable[_Union[StageOutcome, _Mapping]]] = ..., unanswered_questions: _Optional[_Iterable[_Union[_question_pb2.QuestionSet, _Mapping]]] = ..., watch: _Optional[_Union[PullRequestWatchReport, _Mapping]] = ..., agents_repo_commit: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., timing: _Optional[_Union[TurnTiming, _Mapping]] = ..., stop_reason: _Optional[_Union[StopReason, str]] = ..., rate_limits: _Optional[_Union[_usage_pb2.RateLimitStatus, _Mapping]] = ...) -> None: ...
 
 class GetTurnRequest(_message.Message):
     __slots__ = ()

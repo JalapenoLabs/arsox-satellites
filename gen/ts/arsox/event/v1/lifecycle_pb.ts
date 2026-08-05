@@ -18,7 +18,7 @@ import type { TurnResult } from "../../turn/v1/result_pb.js";
 import { file_arsox_turn_v1_result } from "../../turn/v1/result_pb.js";
 import type { Turn } from "../../turn/v1/turn_pb.js";
 import { file_arsox_turn_v1_turn } from "../../turn/v1/turn_pb.js";
-import type { LifetimeStatistics } from "../../usage/v1/usage_pb.js";
+import type { LifetimeStatistics, RateLimitStatus } from "../../usage/v1/usage_pb.js";
 import { file_arsox_usage_v1_usage } from "../../usage/v1/usage_pb.js";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -26,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/event/v1/lifecycle.proto.
  */
 export const file_arsox_event_v1_lifecycle: GenFile = /*@__PURE__*/
-  fileDesc("Ch5hcnNveC9ldmVudC92MS9saWZlY3ljbGUucHJvdG8SDmFyc294LmV2ZW50LnYxIk8KDUJ1ZGdldFdhcm5pbmcSKAoHY2VpbGluZxgBIAEoDjIXLmFyc294LmV2ZW50LnYxLkNlaWxpbmcSFAoMcGVyY2VudF91c2VkGAIgASgNIjgKDFBsYW5Qcm9wb3NlZBIoCgRwbGFuGAEgASgLMhouYXJzb3guaW50ZXJhY3Rpb24udjEuUGxhbiJrCgtQbGFuRGVjaWRlZBIPCgdwbGFuX2lkGAEgASgJEjQKCGRlY2lzaW9uGAIgASgOMiIuYXJzb3guaW50ZXJhY3Rpb24udjEuUGxhbkRlY2lzaW9uEhUKDWF1dG9fYXBwcm92ZWQYAyABKAgiSAoNUXVlc3Rpb25Bc2tlZBI3CgxxdWVzdGlvbl9zZXQYASABKAsyIS5hcnNveC5pbnRlcmFjdGlvbi52MS5RdWVzdGlvblNldCJ1ChBRdWVzdGlvbkFuc3dlcmVkEhcKD3F1ZXN0aW9uX3NldF9pZBgBIAEoCRI1CgdhbnN3ZXJzGAIgAygLMiQuYXJzb3guaW50ZXJhY3Rpb24udjEuUXVlc3Rpb25BbnN3ZXISEQoJdGltZWRfb3V0GAMgASgIIkAKD0FydGlmYWN0Q3JlYXRlZBItCghhcnRpZmFjdBgBIAEoCzIbLmFyc294LmFydGlmYWN0LnYxLkFydGlmYWN0InsKE1JlZGFjdGlvbk92ZXJyaWRkZW4SJgoGYXV0aG9yGAEgASgLMhYuYXJzb3guZXZlbnQudjEuQXV0aG9yEhIKCnNlY3JldF9rZXkYAiABKAkSFQoNanVzdGlmaWNhdGlvbhgDIAEoCRIRCglvcGVyYXRpb24YBCABKAkiMAoLVHVyblN0YXJ0ZWQSIQoEdHVybhgBIAEoCzITLmFyc294LnR1cm4udjEuVHVybiI6Cg1UdXJuQ29tcGxldGVkEikKBnJlc3VsdBgBIAEoCzIZLmFyc294LnR1cm4udjEuVHVyblJlc3VsdCJLChFTdGF0aXN0aWNzVXBkYXRlZBI2CgpzdGF0aXN0aWNzGAEgASgLMiIuYXJzb3gudXNhZ2UudjEuTGlmZXRpbWVTdGF0aXN0aWNzKn0KB0NlaWxpbmcSFwoTQ0VJTElOR19VTlNQRUNJRklFRBAAEhsKF0NFSUxJTkdfVE9LRU5TX1BFUl9UVVJOEAESGwoXQ0VJTElOR19DT1NUX1BFUl9USFJFQUQQAhIfChtDRUlMSU5HX1dBTExfQ0xPQ0tfUEVSX1RVUk4QA0J+ChJjb20uYXJzb3guZXZlbnQudjFCDkxpZmVjeWNsZVByb3RvUAGiAgNBRViqAg5BcnNveC5FdmVudC5WMcoCDkFyc294XEV2ZW50XFYx4gIaQXJzb3hcRXZlbnRcVjFcR1BCTWV0YWRhdGHqAhBBcnNveDo6RXZlbnQ6OlYxYgZwcm90bzM", [file_arsox_artifact_v1_artifact, file_arsox_event_v1_author, file_arsox_interaction_v1_plan, file_arsox_interaction_v1_question, file_arsox_turn_v1_result, file_arsox_turn_v1_turn, file_arsox_usage_v1_usage]);
+  fileDesc("Ch5hcnNveC9ldmVudC92MS9saWZlY3ljbGUucHJvdG8SDmFyc294LmV2ZW50LnYxIk8KDUJ1ZGdldFdhcm5pbmcSKAoHY2VpbGluZxgBIAEoDjIXLmFyc294LmV2ZW50LnYxLkNlaWxpbmcSFAoMcGVyY2VudF91c2VkGAIgASgNIjgKDFBsYW5Qcm9wb3NlZBIoCgRwbGFuGAEgASgLMhouYXJzb3guaW50ZXJhY3Rpb24udjEuUGxhbiJrCgtQbGFuRGVjaWRlZBIPCgdwbGFuX2lkGAEgASgJEjQKCGRlY2lzaW9uGAIgASgOMiIuYXJzb3guaW50ZXJhY3Rpb24udjEuUGxhbkRlY2lzaW9uEhUKDWF1dG9fYXBwcm92ZWQYAyABKAgiSAoNUXVlc3Rpb25Bc2tlZBI3CgxxdWVzdGlvbl9zZXQYASABKAsyIS5hcnNveC5pbnRlcmFjdGlvbi52MS5RdWVzdGlvblNldCJ1ChBRdWVzdGlvbkFuc3dlcmVkEhcKD3F1ZXN0aW9uX3NldF9pZBgBIAEoCRI1CgdhbnN3ZXJzGAIgAygLMiQuYXJzb3guaW50ZXJhY3Rpb24udjEuUXVlc3Rpb25BbnN3ZXISEQoJdGltZWRfb3V0GAMgASgIIkAKD0FydGlmYWN0Q3JlYXRlZBItCghhcnRpZmFjdBgBIAEoCzIbLmFyc294LmFydGlmYWN0LnYxLkFydGlmYWN0InsKE1JlZGFjdGlvbk92ZXJyaWRkZW4SJgoGYXV0aG9yGAEgASgLMhYuYXJzb3guZXZlbnQudjEuQXV0aG9yEhIKCnNlY3JldF9rZXkYAiABKAkSFQoNanVzdGlmaWNhdGlvbhgDIAEoCRIRCglvcGVyYXRpb24YBCABKAkiMAoLVHVyblN0YXJ0ZWQSIQoEdHVybhgBIAEoCzITLmFyc294LnR1cm4udjEuVHVybiI6Cg1UdXJuQ29tcGxldGVkEikKBnJlc3VsdBgBIAEoCzIZLmFyc294LnR1cm4udjEuVHVyblJlc3VsdCJLChFTdGF0aXN0aWNzVXBkYXRlZBI2CgpzdGF0aXN0aWNzGAEgASgLMiIuYXJzb3gudXNhZ2UudjEuTGlmZXRpbWVTdGF0aXN0aWNzIlsKEVJhdGVMaW1pdFJlcG9ydGVkEi8KBnN0YXR1cxgBIAEoCzIfLmFyc294LnVzYWdlLnYxLlJhdGVMaW1pdFN0YXR1cxIVCg1lbmRwb2ludF9uYW1lGAIgASgJKn0KB0NlaWxpbmcSFwoTQ0VJTElOR19VTlNQRUNJRklFRBAAEhsKF0NFSUxJTkdfVE9LRU5TX1BFUl9UVVJOEAESGwoXQ0VJTElOR19DT1NUX1BFUl9USFJFQUQQAhIfChtDRUlMSU5HX1dBTExfQ0xPQ0tfUEVSX1RVUk4QA0J+ChJjb20uYXJzb3guZXZlbnQudjFCDkxpZmVjeWNsZVByb3RvUAGiAgNBRViqAg5BcnNveC5FdmVudC5WMcoCDkFyc294XEV2ZW50XFYx4gIaQXJzb3hcRXZlbnRcVjFcR1BCTWV0YWRhdGHqAhBBcnNveDo6RXZlbnQ6OlYxYgZwcm90bzM", [file_arsox_artifact_v1_artifact, file_arsox_event_v1_author, file_arsox_interaction_v1_plan, file_arsox_interaction_v1_question, file_arsox_turn_v1_result, file_arsox_turn_v1_turn, file_arsox_usage_v1_usage]);
 
 /**
  * Emitted at 80% of any ceiling, so the host application can react before the
@@ -265,6 +265,42 @@ export type StatisticsUpdated = Message<"arsox.event.v1.StatisticsUpdated"> & {
  */
 export const StatisticsUpdatedSchema: GenMessage<StatisticsUpdated> = /*@__PURE__*/
   messageDesc(file_arsox_event_v1_lifecycle, 9);
+
+/**
+ * Where the run stands against its provider's quotas.
+ *
+ * Emitted when a harness reports quota state, which it does unprompted rather
+ * than on request. Not toggleable through stream settings, for the same reason
+ * budget warnings are not: a satellite slowing down because it is near a limit
+ * is indistinguishable from a satellite working on something hard, and a host
+ * application that cannot see the difference cannot fail over before the wall.
+ *
+ * Unlike a budget warning, this is the provider's ceiling rather than one you
+ * set. Nothing in Arsox enforces it and nothing can raise it.
+ *
+ * @generated from message arsox.event.v1.RateLimitReported
+ */
+export type RateLimitReported = Message<"arsox.event.v1.RateLimitReported"> & {
+  /**
+   * @generated from field: arsox.usage.v1.RateLimitStatus status = 1;
+   */
+  status?: RateLimitStatus;
+
+  /**
+   * Which configured endpoint reported it, by its `ModelEndpoint.name`, so that
+   * stacked subscriptions can be told apart.
+   *
+   * @generated from field: string endpoint_name = 2;
+   */
+  endpointName: string;
+};
+
+/**
+ * Describes the message arsox.event.v1.RateLimitReported.
+ * Use `create(RateLimitReportedSchema)` to create a new message.
+ */
+export const RateLimitReportedSchema: GenMessage<RateLimitReported> = /*@__PURE__*/
+  messageDesc(file_arsox_event_v1_lifecycle, 10);
 
 /**
  * Which ceiling is being approached.

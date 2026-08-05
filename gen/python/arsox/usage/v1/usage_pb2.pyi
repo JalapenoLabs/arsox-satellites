@@ -14,12 +14,40 @@ class TokenUsage(_message.Message):
     TOTAL_TOKENS_FIELD_NUMBER: _ClassVar[int]
     CACHE_READ_TOKENS_FIELD_NUMBER: _ClassVar[int]
     CACHE_WRITE_TOKENS_FIELD_NUMBER: _ClassVar[int]
+    REASONING_OUTPUT_TOKENS_FIELD_NUMBER: _ClassVar[int]
     input_tokens: int
     output_tokens: int
     total_tokens: int
     cache_read_tokens: int
     cache_write_tokens: int
-    def __init__(self, input_tokens: _Optional[int] = ..., output_tokens: _Optional[int] = ..., total_tokens: _Optional[int] = ..., cache_read_tokens: _Optional[int] = ..., cache_write_tokens: _Optional[int] = ...) -> None: ...
+    reasoning_output_tokens: int
+    def __init__(self, input_tokens: _Optional[int] = ..., output_tokens: _Optional[int] = ..., total_tokens: _Optional[int] = ..., cache_read_tokens: _Optional[int] = ..., cache_write_tokens: _Optional[int] = ..., reasoning_output_tokens: _Optional[int] = ...) -> None: ...
+
+class ServerToolUsage(_message.Message):
+    __slots__ = ()
+    WEB_SEARCH_REQUESTS_FIELD_NUMBER: _ClassVar[int]
+    WEB_FETCH_REQUESTS_FIELD_NUMBER: _ClassVar[int]
+    web_search_requests: int
+    web_fetch_requests: int
+    def __init__(self, web_search_requests: _Optional[int] = ..., web_fetch_requests: _Optional[int] = ...) -> None: ...
+
+class RateLimitWindow(_message.Message):
+    __slots__ = ()
+    WINDOW_FIELD_NUMBER: _ClassVar[int]
+    PERCENT_USED_FIELD_NUMBER: _ClassVar[int]
+    RESETS_AT_FIELD_NUMBER: _ClassVar[int]
+    window: str
+    percent_used: int
+    resets_at: _common_pb2.Timestamp
+    def __init__(self, window: _Optional[str] = ..., percent_used: _Optional[int] = ..., resets_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ...) -> None: ...
+
+class RateLimitStatus(_message.Message):
+    __slots__ = ()
+    WINDOWS_FIELD_NUMBER: _ClassVar[int]
+    THROTTLED_FIELD_NUMBER: _ClassVar[int]
+    windows: _containers.RepeatedCompositeFieldContainer[RateLimitWindow]
+    throttled: bool
+    def __init__(self, windows: _Optional[_Iterable[_Union[RateLimitWindow, _Mapping]]] = ..., throttled: _Optional[bool] = ...) -> None: ...
 
 class CostEstimate(_message.Message):
     __slots__ = ()
@@ -34,10 +62,12 @@ class ModelStatistics(_message.Message):
     MODEL_FIELD_NUMBER: _ClassVar[int]
     TOKENS_FIELD_NUMBER: _ClassVar[int]
     COST_FIELD_NUMBER: _ClassVar[int]
+    SERVER_TOOLS_FIELD_NUMBER: _ClassVar[int]
     model: str
     tokens: TokenUsage
     cost: CostEstimate
-    def __init__(self, model: _Optional[str] = ..., tokens: _Optional[_Union[TokenUsage, _Mapping]] = ..., cost: _Optional[_Union[CostEstimate, _Mapping]] = ...) -> None: ...
+    server_tools: ServerToolUsage
+    def __init__(self, model: _Optional[str] = ..., tokens: _Optional[_Union[TokenUsage, _Mapping]] = ..., cost: _Optional[_Union[CostEstimate, _Mapping]] = ..., server_tools: _Optional[_Union[ServerToolUsage, _Mapping]] = ...) -> None: ...
 
 class ThreadStatistics(_message.Message):
     __slots__ = ()

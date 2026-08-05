@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from arsox.common.v1 import common_pb2 as arsox_dot_common_dot_v1_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1a\x61rsox/usage/v1/usage.proto\x12\x0e\x61rsox.usage.v1\x1a\x1c\x61rsox/common/v1/common.proto\"\x88\x02\n\nTokenUsage\x12!\n\x0cinput_tokens\x18\x01 \x01(\x04R\x0binputTokens\x12#\n\routput_tokens\x18\x02 \x01(\x04R\x0coutputTokens\x12!\n\x0ctotal_tokens\x18\x03 \x01(\x04R\x0btotalTokens\x12/\n\x11\x63\x61\x63he_read_tokens\x18\x04 \x01(\x04H\x00R\x0f\x63\x61\x63heReadTokens\x88\x01\x01\x12\x31\n\x12\x63\x61\x63he_write_tokens\x18\x05 \x01(\x04H\x01R\x10\x63\x61\x63heWriteTokens\x88\x01\x01\x42\x14\n\x12_cache_read_tokensB\x15\n\x13_cache_write_tokens\"m\n\x0c\x43ostEstimate\x12\x33\n\x06\x61mount\x18\x01 \x01(\x0b\x32\x16.arsox.common.v1.MoneyH\x00R\x06\x61mount\x88\x01\x01\x12\x1d\n\nis_partial\x18\x02 \x01(\x08R\tisPartialB\t\n\x07_amount\"\x8d\x01\n\x0fModelStatistics\x12\x14\n\x05model\x18\x01 \x01(\tR\x05model\x12\x32\n\x06tokens\x18\x02 \x01(\x0b\x32\x1a.arsox.usage.v1.TokenUsageR\x06tokens\x12\x30\n\x04\x63ost\x18\x03 \x01(\x0b\x32\x1c.arsox.usage.v1.CostEstimateR\x04\x63ost\"\x95\x01\n\x10ThreadStatistics\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x32\n\x06tokens\x18\x02 \x01(\x0b\x32\x1a.arsox.usage.v1.TokenUsageR\x06tokens\x12\x30\n\x04\x63ost\x18\x03 \x01(\x0b\x32\x1c.arsox.usage.v1.CostEstimateR\x04\x63ost\"\xbd\x02\n\x12LifetimeStatistics\x12:\n\x08\x62y_model\x18\x01 \x03(\x0b\x32\x1f.arsox.usage.v1.ModelStatisticsR\x07\x62yModel\x12=\n\tby_thread\x18\x02 \x03(\x0b\x32 .arsox.usage.v1.ThreadStatisticsR\x08\x62yThread\x12\x30\n\x05total\x18\x03 \x01(\x0b\x32\x1a.arsox.usage.v1.TokenUsageR\x05total\x12;\n\ntotal_cost\x18\x04 \x01(\x0b\x32\x1c.arsox.usage.v1.CostEstimateR\ttotalCost\x12=\n\x0c\x63ollected_at\x18\x05 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\x0b\x63ollectedAt\"5\n\x14GetStatisticsRequest\x12\x1d\n\nthread_ids\x18\x01 \x03(\tR\tthreadIds\"[\n\x15GetStatisticsResponse\x12\x42\n\nstatistics\x18\x01 \x01(\x0b\x32\".arsox.usage.v1.LifetimeStatisticsR\nstatisticsBz\n\x12\x63om.arsox.usage.v1B\nUsageProtoP\x01\xa2\x02\x03\x41UX\xaa\x02\x0e\x41rsox.Usage.V1\xca\x02\x0e\x41rsox\\Usage\\V1\xe2\x02\x1a\x41rsox\\Usage\\V1\\GPBMetadata\xea\x02\x10\x41rsox::Usage::V1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1a\x61rsox/usage/v1/usage.proto\x12\x0e\x61rsox.usage.v1\x1a\x1c\x61rsox/common/v1/common.proto\"\xe1\x02\n\nTokenUsage\x12!\n\x0cinput_tokens\x18\x01 \x01(\x04R\x0binputTokens\x12#\n\routput_tokens\x18\x02 \x01(\x04R\x0coutputTokens\x12!\n\x0ctotal_tokens\x18\x03 \x01(\x04R\x0btotalTokens\x12/\n\x11\x63\x61\x63he_read_tokens\x18\x04 \x01(\x04H\x00R\x0f\x63\x61\x63heReadTokens\x88\x01\x01\x12\x31\n\x12\x63\x61\x63he_write_tokens\x18\x05 \x01(\x04H\x01R\x10\x63\x61\x63heWriteTokens\x88\x01\x01\x12;\n\x17reasoning_output_tokens\x18\x06 \x01(\x04H\x02R\x15reasoningOutputTokens\x88\x01\x01\x42\x14\n\x12_cache_read_tokensB\x15\n\x13_cache_write_tokensB\x1a\n\x18_reasoning_output_tokens\"\xa8\x01\n\x0fServerToolUsage\x12\x33\n\x13web_search_requests\x18\x01 \x01(\rH\x00R\x11webSearchRequests\x88\x01\x01\x12\x31\n\x12web_fetch_requests\x18\x02 \x01(\rH\x01R\x10webFetchRequests\x88\x01\x01\x42\x16\n\x14_web_search_requestsB\x15\n\x13_web_fetch_requests\"\xae\x01\n\x0fRateLimitWindow\x12\x16\n\x06window\x18\x01 \x01(\tR\x06window\x12&\n\x0cpercent_used\x18\x02 \x01(\rH\x00R\x0bpercentUsed\x88\x01\x01\x12<\n\tresets_at\x18\x03 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampH\x01R\x08resetsAt\x88\x01\x01\x42\x0f\n\r_percent_usedB\x0c\n\n_resets_at\"j\n\x0fRateLimitStatus\x12\x39\n\x07windows\x18\x01 \x03(\x0b\x32\x1f.arsox.usage.v1.RateLimitWindowR\x07windows\x12\x1c\n\tthrottled\x18\x02 \x01(\x08R\tthrottled\"m\n\x0c\x43ostEstimate\x12\x33\n\x06\x61mount\x18\x01 \x01(\x0b\x32\x16.arsox.common.v1.MoneyH\x00R\x06\x61mount\x88\x01\x01\x12\x1d\n\nis_partial\x18\x02 \x01(\x08R\tisPartialB\t\n\x07_amount\"\xe7\x01\n\x0fModelStatistics\x12\x14\n\x05model\x18\x01 \x01(\tR\x05model\x12\x32\n\x06tokens\x18\x02 \x01(\x0b\x32\x1a.arsox.usage.v1.TokenUsageR\x06tokens\x12\x30\n\x04\x63ost\x18\x03 \x01(\x0b\x32\x1c.arsox.usage.v1.CostEstimateR\x04\x63ost\x12G\n\x0cserver_tools\x18\x04 \x01(\x0b\x32\x1f.arsox.usage.v1.ServerToolUsageH\x00R\x0bserverTools\x88\x01\x01\x42\x0f\n\r_server_tools\"\x95\x01\n\x10ThreadStatistics\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x32\n\x06tokens\x18\x02 \x01(\x0b\x32\x1a.arsox.usage.v1.TokenUsageR\x06tokens\x12\x30\n\x04\x63ost\x18\x03 \x01(\x0b\x32\x1c.arsox.usage.v1.CostEstimateR\x04\x63ost\"\xbd\x02\n\x12LifetimeStatistics\x12:\n\x08\x62y_model\x18\x01 \x03(\x0b\x32\x1f.arsox.usage.v1.ModelStatisticsR\x07\x62yModel\x12=\n\tby_thread\x18\x02 \x03(\x0b\x32 .arsox.usage.v1.ThreadStatisticsR\x08\x62yThread\x12\x30\n\x05total\x18\x03 \x01(\x0b\x32\x1a.arsox.usage.v1.TokenUsageR\x05total\x12;\n\ntotal_cost\x18\x04 \x01(\x0b\x32\x1c.arsox.usage.v1.CostEstimateR\ttotalCost\x12=\n\x0c\x63ollected_at\x18\x05 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\x0b\x63ollectedAt\"5\n\x14GetStatisticsRequest\x12\x1d\n\nthread_ids\x18\x01 \x03(\tR\tthreadIds\"[\n\x15GetStatisticsResponse\x12\x42\n\nstatistics\x18\x01 \x01(\x0b\x32\".arsox.usage.v1.LifetimeStatisticsR\nstatisticsBz\n\x12\x63om.arsox.usage.v1B\nUsageProtoP\x01\xa2\x02\x03\x41UX\xaa\x02\x0e\x41rsox.Usage.V1\xca\x02\x0e\x41rsox\\Usage\\V1\xe2\x02\x1a\x41rsox\\Usage\\V1\\GPBMetadata\xea\x02\x10\x41rsox::Usage::V1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -34,17 +34,23 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\022com.arsox.usage.v1B\nUsageProtoP\001\242\002\003AUX\252\002\016Arsox.Usage.V1\312\002\016Arsox\\Usage\\V1\342\002\032Arsox\\Usage\\V1\\GPBMetadata\352\002\020Arsox::Usage::V1'
   _globals['_TOKENUSAGE']._serialized_start=77
-  _globals['_TOKENUSAGE']._serialized_end=341
-  _globals['_COSTESTIMATE']._serialized_start=343
-  _globals['_COSTESTIMATE']._serialized_end=452
-  _globals['_MODELSTATISTICS']._serialized_start=455
-  _globals['_MODELSTATISTICS']._serialized_end=596
-  _globals['_THREADSTATISTICS']._serialized_start=599
-  _globals['_THREADSTATISTICS']._serialized_end=748
-  _globals['_LIFETIMESTATISTICS']._serialized_start=751
-  _globals['_LIFETIMESTATISTICS']._serialized_end=1068
-  _globals['_GETSTATISTICSREQUEST']._serialized_start=1070
-  _globals['_GETSTATISTICSREQUEST']._serialized_end=1123
-  _globals['_GETSTATISTICSRESPONSE']._serialized_start=1125
-  _globals['_GETSTATISTICSRESPONSE']._serialized_end=1216
+  _globals['_TOKENUSAGE']._serialized_end=430
+  _globals['_SERVERTOOLUSAGE']._serialized_start=433
+  _globals['_SERVERTOOLUSAGE']._serialized_end=601
+  _globals['_RATELIMITWINDOW']._serialized_start=604
+  _globals['_RATELIMITWINDOW']._serialized_end=778
+  _globals['_RATELIMITSTATUS']._serialized_start=780
+  _globals['_RATELIMITSTATUS']._serialized_end=886
+  _globals['_COSTESTIMATE']._serialized_start=888
+  _globals['_COSTESTIMATE']._serialized_end=997
+  _globals['_MODELSTATISTICS']._serialized_start=1000
+  _globals['_MODELSTATISTICS']._serialized_end=1231
+  _globals['_THREADSTATISTICS']._serialized_start=1234
+  _globals['_THREADSTATISTICS']._serialized_end=1383
+  _globals['_LIFETIMESTATISTICS']._serialized_start=1386
+  _globals['_LIFETIMESTATISTICS']._serialized_end=1703
+  _globals['_GETSTATISTICSREQUEST']._serialized_start=1705
+  _globals['_GETSTATISTICSREQUEST']._serialized_end=1758
+  _globals['_GETSTATISTICSRESPONSE']._serialized_start=1760
+  _globals['_GETSTATISTICSRESPONSE']._serialized_end=1851
 # @@protoc_insertion_point(module_scope)

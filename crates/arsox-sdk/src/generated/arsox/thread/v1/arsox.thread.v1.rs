@@ -66,6 +66,18 @@ pub struct Thread {
     /// with `isSecret`, which is the field that knows how to hide them.
     #[prost(map="string, string", tag="12")]
     pub metadata: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    /// The harness's own session identifier for this thread.
+    ///
+    /// Every harness keeps one, and the satellite sets it rather than discovering
+    /// it, so a thread maps onto exactly one harness session for its whole life.
+    /// Recorded here because it is the join key between an Arsox thread and the
+    /// harness-side logs and transcripts on disk, which is the first thing anyone
+    /// wants when a run goes wrong.
+    ///
+    /// Absent until the first turn starts, since nothing has been spawned before
+    /// then.
+    #[prost(string, optional, tag="13")]
+    pub harness_session_id: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// A thread reduced to what an operator needs to see at a glance.
 ///

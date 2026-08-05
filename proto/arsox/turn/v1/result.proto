@@ -51,6 +51,54 @@ message StageOutcome {
   arsox.common.v1.Duration elapsed = 4;
 }
 
+// Why the agent stopped producing output.
+//
+// Distinct from `TurnStatus`, which says what happened to the turn. A turn can
+// be COMPLETED while the model was cut off mid-sentence at its output ceiling,
+// and a consumer that shows the result to a human needs to know the difference
+// between "it finished" and "it ran out of room".
+enum StopReason {
+  STOP_REASON_UNSPECIFIED = 0;
+
+  // The agent decided it was done.
+  STOP_REASON_END_TURN = 1;
+
+  // The model's output ceiling was reached. The answer is truncated.
+  STOP_REASON_MAX_TOKENS = 2;
+
+  // A configured stop sequence was produced.
+  STOP_REASON_STOP_SEQUENCE = 3;
+
+  // The model declined to continue.
+  STOP_REASON_REFUSAL = 4;
+}
+
+// Where a turn's wall clock actually went.
+//
+// `Turn.started_at` and `finished_at` bound the turn, and say nothing about how
+// the time inside was spent. The split between waiting on a model and running
+// tools is what tells you whether a slow turn is a slow provider or a slow test
+// suite, and those have opposite fixes.
+message TurnTiming {
+  // Start to terminal state, including queue-free time only.
+  arsox.common.v1.Duration total = 1;
+
+  // Time spent waiting on model responses. Absent when the harness does not
+  // separate it from tool execution.
+  optional arsox.common.v1.Duration llm = 2;
+
+  // Time from turn start to the first token of the first response. The number a
+  // human perceives as responsiveness.
+  optional arsox.common.v1.Duration time_to_first_token = 3;
+
+  // How many model round trips the harness needed.
+  //
+  // Deliberately not called "turns". A harness counts a request and its response
+  // as a turn; Arsox counts a whole unit of work as a turn. Reusing the word
+  // here would put two different meanings on one field name in one contract.
+  optional uint32 model_round_trips = 4;
+}
+
 // How a pull request watch window resolved.
 message PullRequestWatchReport {
   uint32 pull_request_number = 1;
@@ -127,6 +175,21 @@ message TurnResult {
   // answer at that moment. Making it look up the Turn first would defeat the
   // point of carrying correlation data at all.
   map<string, string> metadata = 20;
+
+  // Where the turn's wall clock went.
+  TurnTiming timing = 21;
+
+  // Why the agent stopped. Absent when the harness does not report it, and on a
+  // turn that ended for a reason of the satellite's own, such as a cancellation
+  // or an exhausted budget: `status` and `error` cover those.
+  optional StopReason stop_reason = 22;
+
+  // Where the run stood against provider quotas when it ended.
+  //
+  // Absent when no endpoint reported quota state. Worth reading on a turn that
+  // was unexpectedly slow, since throttling and hard work look the same from
+  // the outside.
+  optional arsox.usage.v1.RateLimitStatus rate_limits = 23;
 }
 
 message GetTurnRequest {

@@ -104,6 +104,8 @@ message ThreadEvent {
 
     StatisticsUpdated statistics_updated = 43;
 
+    RateLimitReported rate_limit_reported = 45;
+
     // Every failure, at every severity. The one event type that cannot be
     // switched off: a stream that can be configured to hide failures is worse
     // than no stream.

@@ -20,7 +20,7 @@ import type { SuggestionReport } from "../../suggestion/v1/suggestion_pb.js";
 import { file_arsox_suggestion_v1_suggestion } from "../../suggestion/v1/suggestion_pb.js";
 import type { ChangedFile, CheckerResult, IntegrationRecord, TeamMember, Turn, TurnStatus } from "./turn_pb.js";
 import { file_arsox_turn_v1_turn } from "./turn_pb.js";
-import type { CostEstimate, ModelStatistics, TokenUsage } from "../../usage/v1/usage_pb.js";
+import type { CostEstimate, ModelStatistics, RateLimitStatus, TokenUsage } from "../../usage/v1/usage_pb.js";
 import { file_arsox_usage_v1_usage } from "../../usage/v1/usage_pb.js";
 import type { Message } from "@bufbuild/protobuf";
 
@@ -28,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/turn/v1/result.proto.
  */
 export const file_arsox_turn_v1_result: GenFile = /*@__PURE__*/
-  fileDesc("ChphcnNveC90dXJuL3YxL3Jlc3VsdC5wcm90bxINYXJzb3gudHVybi52MSK1AQoMU3RhZ2VPdXRjb21lEiMKBXN0YWdlGAEgASgOMhQuYXJzb3gudHVybi52MS5TdGFnZRI0CgtkaXNwb3NpdGlvbhgCIAEoDjIfLmFyc294LnR1cm4udjEuU3RhZ2VEaXNwb3NpdGlvbhITCgZyZWFzb24YAyABKAlIAIgBARIqCgdlbGFwc2VkGAQgASgLMhkuYXJzb3guY29tbW9uLnYxLkR1cmF0aW9uQgkKB19yZWFzb24ifwoWUHVsbFJlcXVlc3RXYXRjaFJlcG9ydBIbChNwdWxsX3JlcXVlc3RfbnVtYmVyGAEgASgNEhUKDWF0dGVtcHRzX3VzZWQYAiABKA0SFQoNY2hlY2tzX3Bhc3NlZBgDIAEoCBIaChJ0ZXJtaW5hdGlvbl9yZWFzb24YBCABKAki+QcKClR1cm5SZXN1bHQSDwoHdHVybl9pZBgBIAEoCRIRCgl0aHJlYWRfaWQYAiABKAkSKQoGc3RhdHVzGAMgASgOMhkuYXJzb3gudHVybi52MS5UdXJuU3RhdHVzEg8KB3N1bW1hcnkYBCABKAkSKgoGdG9rZW5zGAUgASgLMhouYXJzb3gudXNhZ2UudjEuVG9rZW5Vc2FnZRIqCgRjb3N0GAYgASgLMhwuYXJzb3gudXNhZ2UudjEuQ29zdEVzdGltYXRlEjEKCGJ5X21vZGVsGBMgAygLMh8uYXJzb3gudXNhZ2UudjEuTW9kZWxTdGF0aXN0aWNzEikKBWVycm9yGAcgASgLMhUuYXJzb3guZXJyb3IudjEuRXJyb3JIAIgBARI6Cg9pbmNpZGVudF9jb3VudHMYCCABKAsyIS5hcnNveC5pbmNpZGVudC52MS5JbmNpZGVudENvdW50cxIqCgdtZW1iZXJzGAkgAygLMhkuYXJzb3gudHVybi52MS5UZWFtTWVtYmVyEjEKDWNoYW5nZWRfZmlsZXMYCiADKAsyGi5hcnNveC50dXJuLnYxLkNoYW5nZWRGaWxlEjYKDGludGVncmF0aW9ucxgLIAMoCzIgLmFyc294LnR1cm4udjEuSW50ZWdyYXRpb25SZWNvcmQSNQoPY2hlY2tlcl9yZXN1bHRzGAwgAygLMhwuYXJzb3gudHVybi52MS5DaGVja2VyUmVzdWx0Ei4KCWFydGlmYWN0cxgNIAMoCzIbLmFyc294LmFydGlmYWN0LnYxLkFydGlmYWN0EjoKC3N1Z2dlc3Rpb25zGA4gASgLMiUuYXJzb3guc3VnZ2VzdGlvbi52MS5TdWdnZXN0aW9uUmVwb3J0EisKBnN0YWdlcxgPIAMoCzIbLmFyc294LnR1cm4udjEuU3RhZ2VPdXRjb21lEj8KFHVuYW5zd2VyZWRfcXVlc3Rpb25zGBAgAygLMiEuYXJzb3guaW50ZXJhY3Rpb24udjEuUXVlc3Rpb25TZXQSOQoFd2F0Y2gYESABKAsyJS5hcnNveC50dXJuLnYxLlB1bGxSZXF1ZXN0V2F0Y2hSZXBvcnRIAYgBARIfChJhZ2VudHNfcmVwb19jb21taXQYEiABKAlIAogBARI5CghtZXRhZGF0YRgUIAMoCzInLmFyc294LnR1cm4udjEuVHVyblJlc3VsdC5NZXRhZGF0YUVudHJ5Gi8KDU1ldGFkYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4AUIICgZfZXJyb3JCCAoGX3dhdGNoQhUKE19hZ2VudHNfcmVwb19jb21taXQiNAoOR2V0VHVyblJlcXVlc3QSEQoJdGhyZWFkX2lkGAEgASgJEg8KB3R1cm5faWQYAiABKAkibwoPR2V0VHVyblJlc3BvbnNlEiEKBHR1cm4YASABKAsyEy5hcnNveC50dXJuLnYxLlR1cm4SLgoGcmVzdWx0GAIgASgLMhkuYXJzb3gudHVybi52MS5UdXJuUmVzdWx0SACIAQFCCQoHX3Jlc3VsdCrJAQoFU3RhZ2USFQoRU1RBR0VfVU5TUEVDSUZJRUQQABIOCgpTVEFHRV9QTEFOEAESEwoPU1RBR0VfVEVBTV9XT1JLEAISEgoOU1RBR0VfQ0hFQ0tFUlMQAxIVChFTVEFHRV9TRUxGX1JFVklFVxAEEg8KC1NUQUdFX01FUkdFEAUSEwoPU1RBR0VfQVJUSUZBQ1RTEAYSFQoRU1RBR0VfU1VHR0VTVElPTlMQBxIcChhTVEFHRV9QVUxMX1JFUVVFU1RfV0FUQ0gQCCqNAQoQU3RhZ2VEaXNwb3NpdGlvbhIhCh1TVEFHRV9ESVNQT1NJVElPTl9VTlNQRUNJRklFRBAAEhkKFVNUQUdFX0RJU1BPU0lUSU9OX1JBThABEh0KGVNUQUdFX0RJU1BPU0lUSU9OX1NLSVBQRUQQAhIcChhTVEFHRV9ESVNQT1NJVElPTl9GQUlMRUQQA0J2ChFjb20uYXJzb3gudHVybi52MUILUmVzdWx0UHJvdG9QAaICA0FUWKoCDUFyc294LlR1cm4uVjHKAg1BcnNveFxUdXJuXFYx4gIZQXJzb3hcVHVyblxWMVxHUEJNZXRhZGF0YeoCD0Fyc294OjpUdXJuOjpWMWIGcHJvdG8z", [file_arsox_artifact_v1_artifact, file_arsox_common_v1_common, file_arsox_error_v1_error, file_arsox_incident_v1_incident, file_arsox_interaction_v1_question, file_arsox_suggestion_v1_suggestion, file_arsox_turn_v1_turn, file_arsox_usage_v1_usage]);
+  fileDesc("ChphcnNveC90dXJuL3YxL3Jlc3VsdC5wcm90bxINYXJzb3gudHVybi52MSK1AQoMU3RhZ2VPdXRjb21lEiMKBXN0YWdlGAEgASgOMhQuYXJzb3gudHVybi52MS5TdGFnZRI0CgtkaXNwb3NpdGlvbhgCIAEoDjIfLmFyc294LnR1cm4udjEuU3RhZ2VEaXNwb3NpdGlvbhITCgZyZWFzb24YAyABKAlIAIgBARIqCgdlbGFwc2VkGAQgASgLMhkuYXJzb3guY29tbW9uLnYxLkR1cmF0aW9uQgkKB19yZWFzb24i9gEKClR1cm5UaW1pbmcSKAoFdG90YWwYASABKAsyGS5hcnNveC5jb21tb24udjEuRHVyYXRpb24SKwoDbGxtGAIgASgLMhkuYXJzb3guY29tbW9uLnYxLkR1cmF0aW9uSACIAQESOwoTdGltZV90b19maXJzdF90b2tlbhgDIAEoCzIZLmFyc294LmNvbW1vbi52MS5EdXJhdGlvbkgBiAEBEh4KEW1vZGVsX3JvdW5kX3RyaXBzGAQgASgNSAKIAQFCBgoEX2xsbUIWChRfdGltZV90b19maXJzdF90b2tlbkIUChJfbW9kZWxfcm91bmRfdHJpcHMifwoWUHVsbFJlcXVlc3RXYXRjaFJlcG9ydBIbChNwdWxsX3JlcXVlc3RfbnVtYmVyGAEgASgNEhUKDWF0dGVtcHRzX3VzZWQYAiABKA0SFQoNY2hlY2tzX3Bhc3NlZBgDIAEoCBIaChJ0ZXJtaW5hdGlvbl9yZWFzb24YBCABKAkitAkKClR1cm5SZXN1bHQSDwoHdHVybl9pZBgBIAEoCRIRCgl0aHJlYWRfaWQYAiABKAkSKQoGc3RhdHVzGAMgASgOMhkuYXJzb3gudHVybi52MS5UdXJuU3RhdHVzEg8KB3N1bW1hcnkYBCABKAkSKgoGdG9rZW5zGAUgASgLMhouYXJzb3gudXNhZ2UudjEuVG9rZW5Vc2FnZRIqCgRjb3N0GAYgASgLMhwuYXJzb3gudXNhZ2UudjEuQ29zdEVzdGltYXRlEjEKCGJ5X21vZGVsGBMgAygLMh8uYXJzb3gudXNhZ2UudjEuTW9kZWxTdGF0aXN0aWNzEikKBWVycm9yGAcgASgLMhUuYXJzb3guZXJyb3IudjEuRXJyb3JIAIgBARI6Cg9pbmNpZGVudF9jb3VudHMYCCABKAsyIS5hcnNveC5pbmNpZGVudC52MS5JbmNpZGVudENvdW50cxIqCgdtZW1iZXJzGAkgAygLMhkuYXJzb3gudHVybi52MS5UZWFtTWVtYmVyEjEKDWNoYW5nZWRfZmlsZXMYCiADKAsyGi5hcnNveC50dXJuLnYxLkNoYW5nZWRGaWxlEjYKDGludGVncmF0aW9ucxgLIAMoCzIgLmFyc294LnR1cm4udjEuSW50ZWdyYXRpb25SZWNvcmQSNQoPY2hlY2tlcl9yZXN1bHRzGAwgAygLMhwuYXJzb3gudHVybi52MS5DaGVja2VyUmVzdWx0Ei4KCWFydGlmYWN0cxgNIAMoCzIbLmFyc294LmFydGlmYWN0LnYxLkFydGlmYWN0EjoKC3N1Z2dlc3Rpb25zGA4gASgLMiUuYXJzb3guc3VnZ2VzdGlvbi52MS5TdWdnZXN0aW9uUmVwb3J0EisKBnN0YWdlcxgPIAMoCzIbLmFyc294LnR1cm4udjEuU3RhZ2VPdXRjb21lEj8KFHVuYW5zd2VyZWRfcXVlc3Rpb25zGBAgAygLMiEuYXJzb3guaW50ZXJhY3Rpb24udjEuUXVlc3Rpb25TZXQSOQoFd2F0Y2gYESABKAsyJS5hcnNveC50dXJuLnYxLlB1bGxSZXF1ZXN0V2F0Y2hSZXBvcnRIAYgBARIfChJhZ2VudHNfcmVwb19jb21taXQYEiABKAlIAogBARI5CghtZXRhZGF0YRgUIAMoCzInLmFyc294LnR1cm4udjEuVHVyblJlc3VsdC5NZXRhZGF0YUVudHJ5EikKBnRpbWluZxgVIAEoCzIZLmFyc294LnR1cm4udjEuVHVyblRpbWluZxIzCgtzdG9wX3JlYXNvbhgWIAEoDjIZLmFyc294LnR1cm4udjEuU3RvcFJlYXNvbkgDiAEBEjkKC3JhdGVfbGltaXRzGBcgASgLMh8uYXJzb3gudXNhZ2UudjEuUmF0ZUxpbWl0U3RhdHVzSASIAQEaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQggKBl9lcnJvckIICgZfd2F0Y2hCFQoTX2FnZW50c19yZXBvX2NvbW1pdEIOCgxfc3RvcF9yZWFzb25CDgoMX3JhdGVfbGltaXRzIjQKDkdldFR1cm5SZXF1ZXN0EhEKCXRocmVhZF9pZBgBIAEoCRIPCgd0dXJuX2lkGAIgASgJIm8KD0dldFR1cm5SZXNwb25zZRIhCgR0dXJuGAEgASgLMhMuYXJzb3gudHVybi52MS5UdXJuEi4KBnJlc3VsdBgCIAEoCzIZLmFyc294LnR1cm4udjEuVHVyblJlc3VsdEgAiAEBQgkKB19yZXN1bHQqyQEKBVN0YWdlEhUKEVNUQUdFX1VOU1BFQ0lGSUVEEAASDgoKU1RBR0VfUExBThABEhMKD1NUQUdFX1RFQU1fV09SSxACEhIKDlNUQUdFX0NIRUNLRVJTEAMSFQoRU1RBR0VfU0VMRl9SRVZJRVcQBBIPCgtTVEFHRV9NRVJHRRAFEhMKD1NUQUdFX0FSVElGQUNUUxAGEhUKEVNUQUdFX1NVR0dFU1RJT05TEAcSHAoYU1RBR0VfUFVMTF9SRVFVRVNUX1dBVENIEAgqjQEKEFN0YWdlRGlzcG9zaXRpb24SIQodU1RBR0VfRElTUE9TSVRJT05fVU5TUEVDSUZJRUQQABIZChVTVEFHRV9ESVNQT1NJVElPTl9SQU4QARIdChlTVEFHRV9ESVNQT1NJVElPTl9TS0lQUEVEEAISHAoYU1RBR0VfRElTUE9TSVRJT05fRkFJTEVEEAMqlwEKClN0b3BSZWFzb24SGwoXU1RPUF9SRUFTT05fVU5TUEVDSUZJRUQQABIYChRTVE9QX1JFQVNPTl9FTkRfVFVSThABEhoKFlNUT1BfUkVBU09OX01BWF9UT0tFTlMQAhIdChlTVE9QX1JFQVNPTl9TVE9QX1NFUVVFTkNFEAMSFwoTU1RPUF9SRUFTT05fUkVGVVNBTBAEQnYKEWNvbS5hcnNveC50dXJuLnYxQgtSZXN1bHRQcm90b1ABogIDQVRYqgINQXJzb3guVHVybi5WMcoCDUFyc294XFR1cm5cVjHiAhlBcnNveFxUdXJuXFYxXEdQQk1ldGFkYXRh6gIPQXJzb3g6OlR1cm46OlYxYgZwcm90bzM", [file_arsox_artifact_v1_artifact, file_arsox_common_v1_common, file_arsox_error_v1_error, file_arsox_incident_v1_incident, file_arsox_interaction_v1_question, file_arsox_suggestion_v1_suggestion, file_arsox_turn_v1_turn, file_arsox_usage_v1_usage]);
 
 /**
  * What each stage of the stack actually did.
@@ -75,6 +75,59 @@ export const StageOutcomeSchema: GenMessage<StageOutcome> = /*@__PURE__*/
   messageDesc(file_arsox_turn_v1_result, 0);
 
 /**
+ * Where a turn's wall clock actually went.
+ *
+ * `Turn.started_at` and `finished_at` bound the turn, and say nothing about how
+ * the time inside was spent. The split between waiting on a model and running
+ * tools is what tells you whether a slow turn is a slow provider or a slow test
+ * suite, and those have opposite fixes.
+ *
+ * @generated from message arsox.turn.v1.TurnTiming
+ */
+export type TurnTiming = Message<"arsox.turn.v1.TurnTiming"> & {
+  /**
+   * Start to terminal state, including queue-free time only.
+   *
+   * @generated from field: arsox.common.v1.Duration total = 1;
+   */
+  total?: Duration;
+
+  /**
+   * Time spent waiting on model responses. Absent when the harness does not
+   * separate it from tool execution.
+   *
+   * @generated from field: optional arsox.common.v1.Duration llm = 2;
+   */
+  llm?: Duration;
+
+  /**
+   * Time from turn start to the first token of the first response. The number a
+   * human perceives as responsiveness.
+   *
+   * @generated from field: optional arsox.common.v1.Duration time_to_first_token = 3;
+   */
+  timeToFirstToken?: Duration;
+
+  /**
+   * How many model round trips the harness needed.
+   *
+   * Deliberately not called "turns". A harness counts a request and its response
+   * as a turn; Arsox counts a whole unit of work as a turn. Reusing the word
+   * here would put two different meanings on one field name in one contract.
+   *
+   * @generated from field: optional uint32 model_round_trips = 4;
+   */
+  modelRoundTrips?: number;
+};
+
+/**
+ * Describes the message arsox.turn.v1.TurnTiming.
+ * Use `create(TurnTimingSchema)` to create a new message.
+ */
+export const TurnTimingSchema: GenMessage<TurnTiming> = /*@__PURE__*/
+  messageDesc(file_arsox_turn_v1_result, 1);
+
+/**
  * How a pull request watch window resolved.
  *
  * @generated from message arsox.turn.v1.PullRequestWatchReport
@@ -114,7 +167,7 @@ export type PullRequestWatchReport = Message<"arsox.turn.v1.PullRequestWatchRepo
  * Use `create(PullRequestWatchReportSchema)` to create a new message.
  */
 export const PullRequestWatchReportSchema: GenMessage<PullRequestWatchReport> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_result, 1);
+  messageDesc(file_arsox_turn_v1_result, 2);
 
 /**
  * Everything one turn produced.
@@ -256,6 +309,33 @@ export type TurnResult = Message<"arsox.turn.v1.TurnResult"> & {
    * @generated from field: map<string, string> metadata = 20;
    */
   metadata: { [key: string]: string };
+
+  /**
+   * Where the turn's wall clock went.
+   *
+   * @generated from field: arsox.turn.v1.TurnTiming timing = 21;
+   */
+  timing?: TurnTiming;
+
+  /**
+   * Why the agent stopped. Absent when the harness does not report it, and on a
+   * turn that ended for a reason of the satellite's own, such as a cancellation
+   * or an exhausted budget: `status` and `error` cover those.
+   *
+   * @generated from field: optional arsox.turn.v1.StopReason stop_reason = 22;
+   */
+  stopReason?: StopReason;
+
+  /**
+   * Where the run stood against provider quotas when it ended.
+   *
+   * Absent when no endpoint reported quota state. Worth reading on a turn that
+   * was unexpectedly slow, since throttling and hard work look the same from
+   * the outside.
+   *
+   * @generated from field: optional arsox.usage.v1.RateLimitStatus rate_limits = 23;
+   */
+  rateLimits?: RateLimitStatus;
 };
 
 /**
@@ -263,7 +343,7 @@ export type TurnResult = Message<"arsox.turn.v1.TurnResult"> & {
  * Use `create(TurnResultSchema)` to create a new message.
  */
 export const TurnResultSchema: GenMessage<TurnResult> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_result, 2);
+  messageDesc(file_arsox_turn_v1_result, 3);
 
 /**
  * @generated from message arsox.turn.v1.GetTurnRequest
@@ -285,7 +365,7 @@ export type GetTurnRequest = Message<"arsox.turn.v1.GetTurnRequest"> & {
  * Use `create(GetTurnRequestSchema)` to create a new message.
  */
 export const GetTurnRequestSchema: GenMessage<GetTurnRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_result, 3);
+  messageDesc(file_arsox_turn_v1_result, 4);
 
 /**
  * @generated from message arsox.turn.v1.GetTurnResponse
@@ -309,7 +389,7 @@ export type GetTurnResponse = Message<"arsox.turn.v1.GetTurnResponse"> & {
  * Use `create(GetTurnResponseSchema)` to create a new message.
  */
 export const GetTurnResponseSchema: GenMessage<GetTurnResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_result, 4);
+  messageDesc(file_arsox_turn_v1_result, 5);
 
 /**
  * A stage of the per-turn stack.
@@ -399,4 +479,55 @@ export enum StageDisposition {
  */
 export const StageDispositionSchema: GenEnum<StageDisposition> = /*@__PURE__*/
   enumDesc(file_arsox_turn_v1_result, 1);
+
+/**
+ * Why the agent stopped producing output.
+ *
+ * Distinct from `TurnStatus`, which says what happened to the turn. A turn can
+ * be COMPLETED while the model was cut off mid-sentence at its output ceiling,
+ * and a consumer that shows the result to a human needs to know the difference
+ * between "it finished" and "it ran out of room".
+ *
+ * @generated from enum arsox.turn.v1.StopReason
+ */
+export enum StopReason {
+  /**
+   * @generated from enum value: STOP_REASON_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * The agent decided it was done.
+   *
+   * @generated from enum value: STOP_REASON_END_TURN = 1;
+   */
+  END_TURN = 1,
+
+  /**
+   * The model's output ceiling was reached. The answer is truncated.
+   *
+   * @generated from enum value: STOP_REASON_MAX_TOKENS = 2;
+   */
+  MAX_TOKENS = 2,
+
+  /**
+   * A configured stop sequence was produced.
+   *
+   * @generated from enum value: STOP_REASON_STOP_SEQUENCE = 3;
+   */
+  STOP_SEQUENCE = 3,
+
+  /**
+   * The model declined to continue.
+   *
+   * @generated from enum value: STOP_REASON_REFUSAL = 4;
+   */
+  REFUSAL = 4,
+}
+
+/**
+ * Describes the enum arsox.turn.v1.StopReason.
+ */
+export const StopReasonSchema: GenEnum<StopReason> = /*@__PURE__*/
+  enumDesc(file_arsox_turn_v1_result, 2);
 

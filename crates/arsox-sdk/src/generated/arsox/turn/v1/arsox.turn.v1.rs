@@ -222,6 +222,33 @@ pub struct StageOutcome {
     #[prost(message, optional, tag="4")]
     pub elapsed: ::core::option::Option<super::super::common::v1::Duration>,
 }
+/// Where a turn's wall clock actually went.
+///
+/// `Turn.started_at` and `finished_at` bound the turn, and say nothing about how
+/// the time inside was spent. The split between waiting on a model and running
+/// tools is what tells you whether a slow turn is a slow provider or a slow test
+/// suite, and those have opposite fixes.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TurnTiming {
+    /// Start to terminal state, including queue-free time only.
+    #[prost(message, optional, tag="1")]
+    pub total: ::core::option::Option<super::super::common::v1::Duration>,
+    /// Time spent waiting on model responses. Absent when the harness does not
+    /// separate it from tool execution.
+    #[prost(message, optional, tag="2")]
+    pub llm: ::core::option::Option<super::super::common::v1::Duration>,
+    /// Time from turn start to the first token of the first response. The number a
+    /// human perceives as responsiveness.
+    #[prost(message, optional, tag="3")]
+    pub time_to_first_token: ::core::option::Option<super::super::common::v1::Duration>,
+    /// How many model round trips the harness needed.
+    ///
+    /// Deliberately not called "turns". A harness counts a request and its response
+    /// as a turn; Arsox counts a whole unit of work as a turn. Reusing the word
+    /// here would put two different meanings on one field name in one contract.
+    #[prost(uint32, optional, tag="4")]
+    pub model_round_trips: ::core::option::Option<u32>,
+}
 /// How a pull request watch window resolved.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PullRequestWatchReport {
@@ -306,6 +333,21 @@ pub struct TurnResult {
     /// point of carrying correlation data at all.
     #[prost(map="string, string", tag="20")]
     pub metadata: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    /// Where the turn's wall clock went.
+    #[prost(message, optional, tag="21")]
+    pub timing: ::core::option::Option<TurnTiming>,
+    /// Why the agent stopped. Absent when the harness does not report it, and on a
+    /// turn that ended for a reason of the satellite's own, such as a cancellation
+    /// or an exhausted budget: `status` and `error` cover those.
+    #[prost(enumeration="StopReason", optional, tag="22")]
+    pub stop_reason: ::core::option::Option<i32>,
+    /// Where the run stood against provider quotas when it ended.
+    ///
+    /// Absent when no endpoint reported quota state. Worth reading on a turn that
+    /// was unexpectedly slow, since throttling and hard work look the same from
+    /// the outside.
+    #[prost(message, optional, tag="23")]
+    pub rate_limits: ::core::option::Option<super::super::usage::v1::RateLimitStatus>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GetTurnRequest {
@@ -398,6 +440,51 @@ impl StageDisposition {
             "STAGE_DISPOSITION_RAN" => Some(Self::Ran),
             "STAGE_DISPOSITION_SKIPPED" => Some(Self::Skipped),
             "STAGE_DISPOSITION_FAILED" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+/// Why the agent stopped producing output.
+///
+/// Distinct from `TurnStatus`, which says what happened to the turn. A turn can
+/// be COMPLETED while the model was cut off mid-sentence at its output ceiling,
+/// and a consumer that shows the result to a human needs to know the difference
+/// between "it finished" and "it ran out of room".
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum StopReason {
+    Unspecified = 0,
+    /// The agent decided it was done.
+    EndTurn = 1,
+    /// The model's output ceiling was reached. The answer is truncated.
+    MaxTokens = 2,
+    /// A configured stop sequence was produced.
+    StopSequence = 3,
+    /// The model declined to continue.
+    Refusal = 4,
+}
+impl StopReason {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "STOP_REASON_UNSPECIFIED",
+            Self::EndTurn => "STOP_REASON_END_TURN",
+            Self::MaxTokens => "STOP_REASON_MAX_TOKENS",
+            Self::StopSequence => "STOP_REASON_STOP_SEQUENCE",
+            Self::Refusal => "STOP_REASON_REFUSAL",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "STOP_REASON_UNSPECIFIED" => Some(Self::Unspecified),
+            "STOP_REASON_END_TURN" => Some(Self::EndTurn),
+            "STOP_REASON_MAX_TOKENS" => Some(Self::MaxTokens),
+            "STOP_REASON_STOP_SEQUENCE" => Some(Self::StopSequence),
+            "STOP_REASON_REFUSAL" => Some(Self::Refusal),
             _ => None,
         }
     }

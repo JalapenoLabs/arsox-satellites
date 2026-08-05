@@ -92,3 +92,21 @@ message TurnCompleted {
 message StatisticsUpdated {
   arsox.usage.v1.LifetimeStatistics statistics = 1;
 }
+
+// Where the run stands against its provider's quotas.
+//
+// Emitted when a harness reports quota state, which it does unprompted rather
+// than on request. Not toggleable through stream settings, for the same reason
+// budget warnings are not: a satellite slowing down because it is near a limit
+// is indistinguishable from a satellite working on something hard, and a host
+// application that cannot see the difference cannot fail over before the wall.
+//
+// Unlike a budget warning, this is the provider's ceiling rather than one you
+// set. Nothing in Arsox enforces it and nothing can raise it.
+message RateLimitReported {
+  arsox.usage.v1.RateLimitStatus status = 1;
+
+  // Which configured endpoint reported it, by its `ModelEndpoint.name`, so that
+  // stacked subscriptions can be told apart.
+  string endpoint_name = 2;
+}

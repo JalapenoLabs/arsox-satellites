@@ -32,8 +32,62 @@ message TokenUsage {
   // Getting this distinction wrong turns "this harness has no cache
   // accounting" into "this run read nothing from cache", which is a silent
   // defect in a billing-adjacent number.
+  //
+  // Not hypothetical: one harness reports a cached-input count and has no
+  // cache-write concept at all, so its `cache_write_tokens` is genuinely
+  // absent rather than zero.
   optional uint64 cache_read_tokens = 4;
   optional uint64 cache_write_tokens = 5;
+
+  // Tokens spent on reasoning, when the harness separates them from output.
+  //
+  // Absent when the harness folds reasoning into `output_tokens`, which is not
+  // the same as a run that did no reasoning. Reasoning is usually billed at the
+  // output rate, so a consumer reconciling a bill needs to know which of the
+  // two it is looking at.
+  optional uint64 reasoning_output_tokens = 6;
+}
+
+// Provider-side tools billed per call rather than per token.
+//
+// Web search and web fetch execute on the provider's infrastructure and appear
+// on an invoice as request counts, so a cost reconciliation that only sums
+// tokens comes up short by exactly this much.
+message ServerToolUsage {
+  // Absent when the harness does not report the count. Zero means none ran.
+  optional uint32 web_search_requests = 1;
+  optional uint32 web_fetch_requests = 2;
+}
+
+// One quota window a provider enforces.
+message RateLimitWindow {
+  // The provider's own label for the window, e.g. "five_hour" or "weekly".
+  //
+  // A string rather than an enum: window names are the provider's to choose and
+  // change, and an enum would force a proto release every time one of them
+  // renamed a tier.
+  string window = 1;
+
+  // Fraction of the window consumed, 0 to 100. Absent when the provider reports
+  // a reset time without a level.
+  optional uint32 percent_used = 2;
+
+  // When the window resets. Absent when the provider does not say.
+  optional arsox.common.v1.Timestamp resets_at = 3;
+}
+
+// Where a run stands against its provider's quotas.
+//
+// Harnesses report this unprompted and it is otherwise invisible: a satellite
+// slowing down because it is near a limit looks identical to a satellite
+// working on something hard. Surfacing it is what lets a host application fail
+// over before the wall rather than after it.
+message RateLimitStatus {
+  repeated RateLimitWindow windows = 1;
+
+  // True when the provider is refusing or throttling requests, rather than
+  // merely reporting remaining headroom.
+  bool throttled = 2;
 }
 
 // What the satellite computed the tokens cost.
@@ -57,6 +111,10 @@ message ModelStatistics {
 
   TokenUsage tokens = 2;
   CostEstimate cost = 3;
+
+  // Absent when the harness reports no server-side tool calls at all, which is
+  // different from reporting zero of them.
+  optional ServerToolUsage server_tools = 4;
 }
 
 // Totals for one thread, across its lifetime.

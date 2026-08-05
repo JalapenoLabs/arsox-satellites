@@ -381,7 +381,11 @@ Getting this wrong turns "this harness has no cache accounting" into "this run r
 
 A mapping layer that silently drops a field looks correct until somebody reconciles a bill against it. So the mapping is tested rather than asserted.
 
-For every harness the repo carries a captured native transcript and the canonical output it must produce. Adding a harness means writing a mapper and passing the existing suite. A harness that cannot produce a valid canonical `TokenUsage` fails at build time rather than in production.
+Each supported harness carries a captured native transcript and the canonical output it must produce. Adding a harness means writing a mapper and passing the existing suite. A harness that cannot produce a valid canonical `TokenUsage` fails at build time rather than in production.
+
+**Claude is the harness implemented today, and the suite has one entry.** That is a smaller claim than it will be, and worth stating plainly rather than implying a suite that already spans several. `GET /v1/harness` reports what a given satellite actually supports, so a consumer never has to infer it.
+
+The canonical shapes are nonetheless designed against more than one vocabulary, because a contract derived from a single harness is that harness wearing different field names. Reading a second harness's published schema is what surfaced `reasoning_output_tokens`, confirmed that `cache_write_tokens` must be genuinely absent rather than zero for a harness with no cache-write concept, and turned rate limits from one CLI's quirk into a shape the contract carries. None of those would have been found from one transcript.
 
 This suite is the normalization claim expressed as tests. It is what makes "swap the harness, keep your code" a guarantee instead of an intention, and it is worth writing alongside the proto rather than after it.
 
@@ -802,9 +806,9 @@ They compose freely, which is the interesting part. You can run an Anthropic mod
 
 #### The harness axis
 
-Pick the Claude CLI harness or the Codex CLI harness. Claude is the default.
+The Claude CLI harness is implemented and is the default. Codex is next on this axis, and the contract is already designed against its published schema.
 
-Adding a harness is a satellite-side change: write the mapper from its native events into the canonical shapes and pass the [conformance suite](#conformance-tests). Nothing in your application changes, and no SDK release is required to make an existing consumer work with a new harness. Gemini CLI, Grok CLI, and Kimi CLI are all plausible additions on this axis, because each has behavior that makes it worth choosing for a given job.
+Adding a harness is a satellite-side change: write the mapper from its native events into the canonical shapes and pass the [conformance suite](#conformance-tests). Nothing in your application changes, and no SDK release is required to make an existing consumer work with a new harness. That is the property worth protecting, and it is why the axis exists even while one harness occupies it. Gemini CLI, Grok CLI, and Kimi CLI are all plausible additions, because each has behavior that makes it worth choosing for a given job.
 
 #### Harness capabilities
 

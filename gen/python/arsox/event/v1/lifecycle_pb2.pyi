@@ -100,3 +100,11 @@ class StatisticsUpdated(_message.Message):
     STATISTICS_FIELD_NUMBER: _ClassVar[int]
     statistics: _usage_pb2.LifetimeStatistics
     def __init__(self, statistics: _Optional[_Union[_usage_pb2.LifetimeStatistics, _Mapping]] = ...) -> None: ...
+
+class RateLimitReported(_message.Message):
+    __slots__ = ()
+    STATUS_FIELD_NUMBER: _ClassVar[int]
+    ENDPOINT_NAME_FIELD_NUMBER: _ClassVar[int]
+    status: _usage_pb2.RateLimitStatus
+    endpoint_name: str
+    def __init__(self, status: _Optional[_Union[_usage_pb2.RateLimitStatus, _Mapping]] = ..., endpoint_name: _Optional[str] = ...) -> None: ...

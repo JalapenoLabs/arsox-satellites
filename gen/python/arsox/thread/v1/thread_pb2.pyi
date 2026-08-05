@@ -51,6 +51,7 @@ class Thread(_message.Message):
     PENDING_PLAN_FIELD_NUMBER: _ClassVar[int]
     LATEST_SEQUENCE_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
+    HARNESS_SESSION_ID_FIELD_NUMBER: _ClassVar[int]
     thread_id: str
     state: ThreadState
     settings: _settings_pb2.ThreadSettings
@@ -63,7 +64,8 @@ class Thread(_message.Message):
     pending_plan: _plan_pb2.Plan
     latest_sequence: int
     metadata: _containers.ScalarMap[str, str]
-    def __init__(self, thread_id: _Optional[str] = ..., state: _Optional[_Union[ThreadState, str]] = ..., settings: _Optional[_Union[_settings_pb2.ThreadSettings, _Mapping]] = ..., created_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., last_activity_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., expires_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., queue_depth: _Optional[int] = ..., current_turn_id: _Optional[str] = ..., pending_questions: _Optional[_Union[_question_pb2.QuestionSet, _Mapping]] = ..., pending_plan: _Optional[_Union[_plan_pb2.Plan, _Mapping]] = ..., latest_sequence: _Optional[int] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    harness_session_id: str
+    def __init__(self, thread_id: _Optional[str] = ..., state: _Optional[_Union[ThreadState, str]] = ..., settings: _Optional[_Union[_settings_pb2.ThreadSettings, _Mapping]] = ..., created_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., last_activity_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., expires_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., queue_depth: _Optional[int] = ..., current_turn_id: _Optional[str] = ..., pending_questions: _Optional[_Union[_question_pb2.QuestionSet, _Mapping]] = ..., pending_plan: _Optional[_Union[_plan_pb2.Plan, _Mapping]] = ..., latest_sequence: _Optional[int] = ..., metadata: _Optional[_Mapping[str, str]] = ..., harness_session_id: _Optional[str] = ...) -> None: ...
 
 class ThreadSummary(_message.Message):
     __slots__ = ()

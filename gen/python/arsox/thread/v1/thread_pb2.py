@@ -28,7 +28,7 @@ from arsox.interaction.v1 import question_pb2 as arsox_dot_interaction_dot_v1_do
 from arsox.settings.v1 import settings_pb2 as arsox_dot_settings_dot_v1_dot_settings__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1c\x61rsox/thread/v1/thread.proto\x12\x0f\x61rsox.thread.v1\x1a\x1c\x61rsox/common/v1/common.proto\x1a\x1f\x61rsox/interaction/v1/plan.proto\x1a#arsox/interaction/v1/question.proto\x1a arsox/settings/v1/settings.proto\"\xb3\x06\n\x06Thread\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x32\n\x05state\x18\x02 \x01(\x0e\x32\x1c.arsox.thread.v1.ThreadStateR\x05state\x12=\n\x08settings\x18\x03 \x01(\x0b\x32!.arsox.settings.v1.ThreadSettingsR\x08settings\x12\x39\n\ncreated_at\x18\x04 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\tcreatedAt\x12\x44\n\x10last_activity_at\x18\x05 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\x0elastActivityAt\x12>\n\nexpires_at\x18\x06 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampH\x00R\texpiresAt\x88\x01\x01\x12\x1f\n\x0bqueue_depth\x18\x07 \x01(\rR\nqueueDepth\x12+\n\x0f\x63urrent_turn_id\x18\x08 \x01(\tH\x01R\rcurrentTurnId\x88\x01\x01\x12S\n\x11pending_questions\x18\t \x01(\x0b\x32!.arsox.interaction.v1.QuestionSetH\x02R\x10pendingQuestions\x88\x01\x01\x12\x42\n\x0cpending_plan\x18\n \x01(\x0b\x32\x1a.arsox.interaction.v1.PlanH\x03R\x0bpendingPlan\x88\x01\x01\x12\'\n\x0flatest_sequence\x18\x0b \x01(\x04R\x0elatestSequence\x12\x41\n\x08metadata\x18\x0c \x03(\x0b\x32%.arsox.thread.v1.Thread.MetadataEntryR\x08metadata\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\x42\r\n\x0b_expires_atB\x12\n\x10_current_turn_idB\x14\n\x12_pending_questionsB\x0f\n\r_pending_plan\"\xeb\x04\n\rThreadSummary\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x32\n\x05state\x18\x02 \x01(\x0e\x32\x1c.arsox.thread.v1.ThreadStateR\x05state\x12\x1f\n\x0bqueue_depth\x18\x03 \x01(\rR\nqueueDepth\x12+\n\x0f\x63urrent_turn_id\x18\x04 \x01(\tH\x00R\rcurrentTurnId\x88\x01\x01\x12\x39\n\ncreated_at\x18\x05 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\tcreatedAt\x12\x44\n\x10last_activity_at\x18\x06 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\x0elastActivityAt\x12>\n\nexpires_at\x18\x07 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampH\x01R\texpiresAt\x88\x01\x01\x12\'\n\x0fworkspace_bytes\x18\x08 \x01(\x04R\x0eworkspaceBytes\x12\'\n\x0flatest_sequence\x18\t \x01(\x04R\x0elatestSequence\x12H\n\x08metadata\x18\n \x03(\x0b\x32,.arsox.thread.v1.ThreadSummary.MetadataEntryR\x08metadata\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\x42\x12\n\x10_current_turn_idB\r\n\x0b_expires_at\"\xa3\x02\n\x13\x43reateThreadRequest\x12=\n\x08settings\x18\x01 \x01(\x0b\x32!.arsox.settings.v1.ThreadSettingsR\x08settings\x12,\n\x0fidempotency_key\x18\x02 \x01(\tH\x00R\x0eidempotencyKey\x88\x01\x01\x12N\n\x08metadata\x18\x03 \x03(\x0b\x32\x32.arsox.thread.v1.CreateThreadRequest.MetadataEntryR\x08metadata\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\x42\x12\n\x10_idempotency_key\"k\n\x14\x43reateThreadResponse\x12/\n\x06thread\x18\x01 \x01(\x0b\x32\x17.arsox.thread.v1.ThreadR\x06thread\x12\"\n\x0c\x64\x65\x64uplicated\x18\x02 \x01(\x08R\x0c\x64\x65\x64uplicated\"/\n\x10GetThreadRequest\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\"D\n\x11GetThreadResponse\x12/\n\x06thread\x18\x01 \x01(\x0b\x32\x17.arsox.thread.v1.ThreadR\x06thread\"\x88\x02\n\x12ListThreadsRequest\x12\x34\n\x06states\x18\x01 \x03(\x0e\x32\x1c.arsox.thread.v1.ThreadStateR\x06states\x12M\n\x08metadata\x18\x02 \x03(\x0b\x32\x31.arsox.thread.v1.ListThreadsRequest.MetadataEntryR\x08metadata\x12\x30\n\x04page\x18\x03 \x01(\x0b\x32\x1c.arsox.common.v1.PageRequestR\x04page\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\x82\x01\n\x13ListThreadsResponse\x12\x38\n\x07threads\x18\x01 \x03(\x0b\x32\x1e.arsox.thread.v1.ThreadSummaryR\x07threads\x12\x31\n\x04page\x18\x02 \x01(\x0b\x32\x1d.arsox.common.v1.PageResponseR\x04page\"3\n\x14\x44\x65stroyThreadRequest\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\"H\n\x15\x44\x65stroyThreadResponse\x12/\n\x06thread\x18\x01 \x01(\x0b\x32\x17.arsox.thread.v1.ThreadR\x06thread*\xed\x01\n\x0bThreadState\x12\x1c\n\x18THREAD_STATE_UNSPECIFIED\x10\x00\x12\x1d\n\x19THREAD_STATE_PROVISIONING\x10\x01\x12\x15\n\x11THREAD_STATE_IDLE\x10\x02\x12\x18\n\x14THREAD_STATE_RUNNING\x10\x03\x12\x1f\n\x1bTHREAD_STATE_AWAITING_INPUT\x10\x04\x12\x19\n\x15THREAD_STATE_WATCHING\x10\x05\x12\x18\n\x14THREAD_STATE_EXPIRED\x10\x06\x12\x1a\n\x16THREAD_STATE_DESTROYED\x10\x07\x42\x80\x01\n\x13\x63om.arsox.thread.v1B\x0bThreadProtoP\x01\xa2\x02\x03\x41TX\xaa\x02\x0f\x41rsox.Thread.V1\xca\x02\x0f\x41rsox\\Thread\\V1\xe2\x02\x1b\x41rsox\\Thread\\V1\\GPBMetadata\xea\x02\x11\x41rsox::Thread::V1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\x1c\x61rsox/thread/v1/thread.proto\x12\x0f\x61rsox.thread.v1\x1a\x1c\x61rsox/common/v1/common.proto\x1a\x1f\x61rsox/interaction/v1/plan.proto\x1a#arsox/interaction/v1/question.proto\x1a arsox/settings/v1/settings.proto\"\xfd\x06\n\x06Thread\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x32\n\x05state\x18\x02 \x01(\x0e\x32\x1c.arsox.thread.v1.ThreadStateR\x05state\x12=\n\x08settings\x18\x03 \x01(\x0b\x32!.arsox.settings.v1.ThreadSettingsR\x08settings\x12\x39\n\ncreated_at\x18\x04 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\tcreatedAt\x12\x44\n\x10last_activity_at\x18\x05 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\x0elastActivityAt\x12>\n\nexpires_at\x18\x06 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampH\x00R\texpiresAt\x88\x01\x01\x12\x1f\n\x0bqueue_depth\x18\x07 \x01(\rR\nqueueDepth\x12+\n\x0f\x63urrent_turn_id\x18\x08 \x01(\tH\x01R\rcurrentTurnId\x88\x01\x01\x12S\n\x11pending_questions\x18\t \x01(\x0b\x32!.arsox.interaction.v1.QuestionSetH\x02R\x10pendingQuestions\x88\x01\x01\x12\x42\n\x0cpending_plan\x18\n \x01(\x0b\x32\x1a.arsox.interaction.v1.PlanH\x03R\x0bpendingPlan\x88\x01\x01\x12\'\n\x0flatest_sequence\x18\x0b \x01(\x04R\x0elatestSequence\x12\x41\n\x08metadata\x18\x0c \x03(\x0b\x32%.arsox.thread.v1.Thread.MetadataEntryR\x08metadata\x12\x31\n\x12harness_session_id\x18\r \x01(\tH\x04R\x10harnessSessionId\x88\x01\x01\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\x42\r\n\x0b_expires_atB\x12\n\x10_current_turn_idB\x14\n\x12_pending_questionsB\x0f\n\r_pending_planB\x15\n\x13_harness_session_id\"\xeb\x04\n\rThreadSummary\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x32\n\x05state\x18\x02 \x01(\x0e\x32\x1c.arsox.thread.v1.ThreadStateR\x05state\x12\x1f\n\x0bqueue_depth\x18\x03 \x01(\rR\nqueueDepth\x12+\n\x0f\x63urrent_turn_id\x18\x04 \x01(\tH\x00R\rcurrentTurnId\x88\x01\x01\x12\x39\n\ncreated_at\x18\x05 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\tcreatedAt\x12\x44\n\x10last_activity_at\x18\x06 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\x0elastActivityAt\x12>\n\nexpires_at\x18\x07 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampH\x01R\texpiresAt\x88\x01\x01\x12\'\n\x0fworkspace_bytes\x18\x08 \x01(\x04R\x0eworkspaceBytes\x12\'\n\x0flatest_sequence\x18\t \x01(\x04R\x0elatestSequence\x12H\n\x08metadata\x18\n \x03(\x0b\x32,.arsox.thread.v1.ThreadSummary.MetadataEntryR\x08metadata\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\x42\x12\n\x10_current_turn_idB\r\n\x0b_expires_at\"\xa3\x02\n\x13\x43reateThreadRequest\x12=\n\x08settings\x18\x01 \x01(\x0b\x32!.arsox.settings.v1.ThreadSettingsR\x08settings\x12,\n\x0fidempotency_key\x18\x02 \x01(\tH\x00R\x0eidempotencyKey\x88\x01\x01\x12N\n\x08metadata\x18\x03 \x03(\x0b\x32\x32.arsox.thread.v1.CreateThreadRequest.MetadataEntryR\x08metadata\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\x42\x12\n\x10_idempotency_key\"k\n\x14\x43reateThreadResponse\x12/\n\x06thread\x18\x01 \x01(\x0b\x32\x17.arsox.thread.v1.ThreadR\x06thread\x12\"\n\x0c\x64\x65\x64uplicated\x18\x02 \x01(\x08R\x0c\x64\x65\x64uplicated\"/\n\x10GetThreadRequest\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\"D\n\x11GetThreadResponse\x12/\n\x06thread\x18\x01 \x01(\x0b\x32\x17.arsox.thread.v1.ThreadR\x06thread\"\x88\x02\n\x12ListThreadsRequest\x12\x34\n\x06states\x18\x01 \x03(\x0e\x32\x1c.arsox.thread.v1.ThreadStateR\x06states\x12M\n\x08metadata\x18\x02 \x03(\x0b\x32\x31.arsox.thread.v1.ListThreadsRequest.MetadataEntryR\x08metadata\x12\x30\n\x04page\x18\x03 \x01(\x0b\x32\x1c.arsox.common.v1.PageRequestR\x04page\x1a;\n\rMetadataEntry\x12\x10\n\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n\x05value\x18\x02 \x01(\tR\x05value:\x02\x38\x01\"\x82\x01\n\x13ListThreadsResponse\x12\x38\n\x07threads\x18\x01 \x03(\x0b\x32\x1e.arsox.thread.v1.ThreadSummaryR\x07threads\x12\x31\n\x04page\x18\x02 \x01(\x0b\x32\x1d.arsox.common.v1.PageResponseR\x04page\"3\n\x14\x44\x65stroyThreadRequest\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\"H\n\x15\x44\x65stroyThreadResponse\x12/\n\x06thread\x18\x01 \x01(\x0b\x32\x17.arsox.thread.v1.ThreadR\x06thread*\xed\x01\n\x0bThreadState\x12\x1c\n\x18THREAD_STATE_UNSPECIFIED\x10\x00\x12\x1d\n\x19THREAD_STATE_PROVISIONING\x10\x01\x12\x15\n\x11THREAD_STATE_IDLE\x10\x02\x12\x18\n\x14THREAD_STATE_RUNNING\x10\x03\x12\x1f\n\x1bTHREAD_STATE_AWAITING_INPUT\x10\x04\x12\x19\n\x15THREAD_STATE_WATCHING\x10\x05\x12\x18\n\x14THREAD_STATE_EXPIRED\x10\x06\x12\x1a\n\x16THREAD_STATE_DESTROYED\x10\x07\x42\x80\x01\n\x13\x63om.arsox.thread.v1B\x0bThreadProtoP\x01\xa2\x02\x03\x41TX\xaa\x02\x0f\x41rsox.Thread.V1\xca\x02\x0f\x41rsox\\Thread\\V1\xe2\x02\x1b\x41rsox\\Thread\\V1\\GPBMetadata\xea\x02\x11\x41rsox::Thread::V1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -44,34 +44,34 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_CREATETHREADREQUEST_METADATAENTRY']._serialized_options = b'8\001'
   _globals['_LISTTHREADSREQUEST_METADATAENTRY']._loaded_options = None
   _globals['_LISTTHREADSREQUEST_METADATAENTRY']._serialized_options = b'8\001'
-  _globals['_THREADSTATE']._serialized_start=2677
-  _globals['_THREADSTATE']._serialized_end=2914
+  _globals['_THREADSTATE']._serialized_start=2751
+  _globals['_THREADSTATE']._serialized_end=2988
   _globals['_THREAD']._serialized_start=184
-  _globals['_THREAD']._serialized_end=1003
-  _globals['_THREAD_METADATAENTRY']._serialized_start=870
-  _globals['_THREAD_METADATAENTRY']._serialized_end=929
-  _globals['_THREADSUMMARY']._serialized_start=1006
-  _globals['_THREADSUMMARY']._serialized_end=1625
-  _globals['_THREADSUMMARY_METADATAENTRY']._serialized_start=870
-  _globals['_THREADSUMMARY_METADATAENTRY']._serialized_end=929
-  _globals['_CREATETHREADREQUEST']._serialized_start=1628
-  _globals['_CREATETHREADREQUEST']._serialized_end=1919
-  _globals['_CREATETHREADREQUEST_METADATAENTRY']._serialized_start=870
-  _globals['_CREATETHREADREQUEST_METADATAENTRY']._serialized_end=929
-  _globals['_CREATETHREADRESPONSE']._serialized_start=1921
-  _globals['_CREATETHREADRESPONSE']._serialized_end=2028
-  _globals['_GETTHREADREQUEST']._serialized_start=2030
-  _globals['_GETTHREADREQUEST']._serialized_end=2077
-  _globals['_GETTHREADRESPONSE']._serialized_start=2079
-  _globals['_GETTHREADRESPONSE']._serialized_end=2147
-  _globals['_LISTTHREADSREQUEST']._serialized_start=2150
-  _globals['_LISTTHREADSREQUEST']._serialized_end=2414
-  _globals['_LISTTHREADSREQUEST_METADATAENTRY']._serialized_start=870
-  _globals['_LISTTHREADSREQUEST_METADATAENTRY']._serialized_end=929
-  _globals['_LISTTHREADSRESPONSE']._serialized_start=2417
-  _globals['_LISTTHREADSRESPONSE']._serialized_end=2547
-  _globals['_DESTROYTHREADREQUEST']._serialized_start=2549
-  _globals['_DESTROYTHREADREQUEST']._serialized_end=2600
-  _globals['_DESTROYTHREADRESPONSE']._serialized_start=2602
-  _globals['_DESTROYTHREADRESPONSE']._serialized_end=2674
+  _globals['_THREAD']._serialized_end=1077
+  _globals['_THREAD_METADATAENTRY']._serialized_start=921
+  _globals['_THREAD_METADATAENTRY']._serialized_end=980
+  _globals['_THREADSUMMARY']._serialized_start=1080
+  _globals['_THREADSUMMARY']._serialized_end=1699
+  _globals['_THREADSUMMARY_METADATAENTRY']._serialized_start=921
+  _globals['_THREADSUMMARY_METADATAENTRY']._serialized_end=980
+  _globals['_CREATETHREADREQUEST']._serialized_start=1702
+  _globals['_CREATETHREADREQUEST']._serialized_end=1993
+  _globals['_CREATETHREADREQUEST_METADATAENTRY']._serialized_start=921
+  _globals['_CREATETHREADREQUEST_METADATAENTRY']._serialized_end=980
+  _globals['_CREATETHREADRESPONSE']._serialized_start=1995
+  _globals['_CREATETHREADRESPONSE']._serialized_end=2102
+  _globals['_GETTHREADREQUEST']._serialized_start=2104
+  _globals['_GETTHREADREQUEST']._serialized_end=2151
+  _globals['_GETTHREADRESPONSE']._serialized_start=2153
+  _globals['_GETTHREADRESPONSE']._serialized_end=2221
+  _globals['_LISTTHREADSREQUEST']._serialized_start=2224
+  _globals['_LISTTHREADSREQUEST']._serialized_end=2488
+  _globals['_LISTTHREADSREQUEST_METADATAENTRY']._serialized_start=921
+  _globals['_LISTTHREADSREQUEST_METADATAENTRY']._serialized_end=980
+  _globals['_LISTTHREADSRESPONSE']._serialized_start=2491
+  _globals['_LISTTHREADSRESPONSE']._serialized_end=2621
+  _globals['_DESTROYTHREADREQUEST']._serialized_start=2623
+  _globals['_DESTROYTHREADREQUEST']._serialized_end=2674
+  _globals['_DESTROYTHREADRESPONSE']._serialized_start=2676
+  _globals['_DESTROYTHREADRESPONSE']._serialized_end=2748
 # @@protoc_insertion_point(module_scope)
