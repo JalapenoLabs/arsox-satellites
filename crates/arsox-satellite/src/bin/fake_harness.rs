@@ -21,6 +21,9 @@
 //! - `[[exit=N]]` exits with N rather than 0, for the crash path.
 //! - `[[truncate=N]]` stops after N lines, for a harness that dies mid-run
 //!   without reporting a result.
+//! - `[[report_env=NAME]]` writes what the child can see of `NAME` to stderr,
+//!   so a test can assert on the environment an agent actually receives rather
+//!   than on the environment the satellite intended to give it.
 
 use std::io::Write as _;
 
@@ -51,6 +54,14 @@ fn main() {
     let truncate_after = directive(&prompt, "truncate").unwrap_or(usize::MAX);
     let exit_code = directive(&prompt, "exit").unwrap_or(0);
 
+    // Reported from inside the child, because that is the only vantage point
+    // that can answer what an agent actually sees. Anything asserted from the
+    // satellite's side is asserting on intent.
+    if let Some(name) = text_directive(&prompt, "report_env") {
+        let seen = std::env::var(&name).unwrap_or_else(|_unset| "(unset)".to_owned());
+        eprintln!("report_env {name}={seen}");
+    }
+
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
@@ -74,12 +85,17 @@ fn main() {
     std::process::exit(exit_code as i32);
 }
 
-/// Reads a `[[key=value]]` directive out of the prompt.
+/// Reads a numeric `[[key=value]]` directive out of the prompt.
 fn directive(prompt: &str, key: &str) -> Option<usize> {
+    text_directive(prompt, key)?.parse().ok()
+}
+
+/// Reads a `[[key=value]]` directive out of the prompt as written.
+fn text_directive(prompt: &str, key: &str) -> Option<String> {
     let opener = format!("[[{key}=");
     let start = prompt.find(&opener)? + opener.len();
     let rest = prompt.get(start..)?;
     let end = rest.find("]]")?;
 
-    rest.get(..end)?.parse().ok()
+    rest.get(..end).map(str::to_owned)
 }

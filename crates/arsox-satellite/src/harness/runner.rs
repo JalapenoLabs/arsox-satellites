@@ -18,7 +18,7 @@
 //! recognize all produce incidents. A turn that ends badly ends with a reason
 //! attached rather than a gap where its output should be.
 
-use crate::harness::spawn::{Session, command_for};
+use crate::harness::spawn::{Session, command_for, process_for};
 use crate::harness::{HarnessResult, claude};
 use crate::store::{AppendEvent, ClaimedTurn, Store};
 use arsox_sdk::proto::common::v1::Timestamp;
@@ -261,9 +261,9 @@ impl Runner {
         let harness = Harness::try_from(claimed.settings.harness).unwrap_or(Harness::Claude);
         let command = command_for(harness, &claimed.turn.prompt, &session, working_dir);
 
-        let mut child = tokio::process::Command::new(&command.program)
-            .args(&command.args)
-            .current_dir(&command.working_dir)
+        // Never `Command::new` directly. A spawned process inherits its
+        // parent's environment, and the satellite's holds `ARSOX_SECRET`.
+        let mut child = process_for(&command)
             // The CLI waits on stdin for several seconds otherwise, which looks
             // exactly like a hung process.
             .stdin(Stdio::null())

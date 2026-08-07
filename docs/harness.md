@@ -112,6 +112,27 @@ being interrupted. Checking every line would be a query per line of output.
 saying what it did, and reporting that as success is exactly the silent failure
 the incident system exists to prevent.
 
+### The agent's environment is built, not inherited
+
+**No `ARSOX_*` variable reaches an agent.** A spawned process inherits its
+parent's environment by default, and the satellite's holds `ARSOX_SECRET`. An
+agent that could read it could command its own satellite: destroy threads, read
+another thread's artifacts, rewrite its own permissions.
+
+The rule is written over the whole prefix rather than as a list of names,
+because a denylist is one forgotten entry away from leaking the next setting
+somebody adds. Everything an agent is meant to have is instead listed
+explicitly on `HarnessCommand::env`.
+
+It lives in `spawn::process_for`, which is the only way the runner builds a
+process. Putting the scrub in the runner would make it a step somebody could
+forget on the next spawn site; putting it here means a new spawn site inherits
+the guarantee by construction.
+
+The test spawns a real child and asks it what it can see, because the only
+vantage point that can answer "what does an agent actually get" is the agent's.
+Asserting on the `Command`'s own bookkeeping would be asserting on intent.
+
 ### Testing it without a model
 
 Two stand-in harnesses replay a recorded transcript in place of a real CLI:

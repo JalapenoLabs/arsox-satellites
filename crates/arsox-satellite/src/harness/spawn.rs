@@ -16,12 +16,19 @@ use std::path::PathBuf;
 /// difference, which is the point: the same code path is exercised either way.
 const CLAUDE_BINARY_ENV: &str = "ARSOX_CLAUDE_BIN";
 
-/// What to launch, and where.
+/// What to launch, where, and with what environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessCommand {
     pub program: String,
     pub args: Vec<String>,
     pub working_dir: PathBuf,
+
+    /// Variables to set on the child, on top of a scrubbed environment.
+    ///
+    /// Everything an agent is allowed to see is listed here explicitly. The
+    /// runner removes every `ARSOX_*` variable the satellite holds before
+    /// applying these, so nothing reaches an agent by inheritance.
+    pub env: Vec<(String, String)>,
 }
 
 /// How a turn attaches to the harness's own session.
@@ -84,12 +91,145 @@ fn claude_command(prompt: &str, session: &Session, working_dir: PathBuf) -> Harn
         program: std::env::var(CLAUDE_BINARY_ENV).unwrap_or_else(|_ignored| "claude".to_owned()),
         args,
         working_dir,
+        env: agent_environment(),
     }
+}
+
+/// Builds the process to spawn, with an environment an agent may safely hold.
+///
+/// **No `ARSOX_*` variable reaches an agent, ever.** Written as a rule over the
+/// whole prefix rather than a list of names, because a denylist is one
+/// forgotten entry away from leaking the next setting somebody adds.
+///
+/// `ARSOX_SECRET` is the one that matters. An agent holding it could command
+/// its own satellite: destroy threads, read another thread's artifacts, or
+/// rewrite its own permissions. Inheritance is the default for a spawned
+/// process, so withholding it has to be a deliberate act on every spawn, which
+/// is why this lives in one function that the runner cannot spawn without.
+#[must_use]
+pub fn process_for(command: &HarnessCommand) -> tokio::process::Command {
+    let mut process = tokio::process::Command::new(&command.program);
+    process
+        .args(&command.args)
+        .current_dir(&command.working_dir);
+
+    for (key, _value) in std::env::vars() {
+        if key.starts_with("ARSOX_") {
+            process.env_remove(&key);
+        }
+    }
+
+    for (key, value) in &command.env {
+        process.env(key, value);
+    }
+
+    process
+}
+
+/// What an agent is allowed to see, on top of a scrubbed environment.
+///
+/// Empty in a published image. The stand-in harness needs its transcript path,
+/// and that variable is stripped with every other `ARSOX_*` before the child
+/// starts, so it has to be handed back deliberately. Compiled out entirely
+/// without `test-util`, which is what keeps this from becoming a hole.
+fn agent_environment() -> Vec<(String, String)> {
+    #[cfg(feature = "test-util")]
+    {
+        std::env::var("ARSOX_FAKE_TRANSCRIPT")
+            .map(|path| vec![("ARSOX_FAKE_TRANSCRIPT".to_owned(), path)])
+            .unwrap_or_default()
+    }
+
+    #[cfg(not(feature = "test-util"))]
+    Vec::new()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn no_arsox_variable_survives_into_the_child() {
+        // Asserted from inside the spawned process, because that is the only
+        // vantage point that can answer what an agent actually sees. Checking
+        // the Command's own bookkeeping would assert on intent instead.
+        //
+        // SAFETY: this test owns these names and no other test reads them.
+        unsafe {
+            std::env::set_var("ARSOX_SECRET", "the-satellites-own-secret");
+            std::env::set_var("ARSOX_SOMETHING_ADDED_LATER", "also-withheld");
+        };
+
+        let command = HarnessCommand {
+            program: printenv_program(),
+            args: printenv_args(),
+            working_dir: std::env::temp_dir(),
+            env: Vec::new(),
+        };
+
+        let output = process_for(&command)
+            .output()
+            .await
+            .expect("should run the probe");
+        let seen = String::from_utf8_lossy(&output.stdout);
+
+        assert!(
+            !seen.contains("the-satellites-own-secret"),
+            "ARSOX_SECRET reached the child: an agent holding it could command its own satellite"
+        );
+        assert!(
+            !seen.contains("also-withheld"),
+            "a variable added later leaked, so the rule is a denylist rather than a prefix"
+        );
+
+        // The scrub is targeted, not a wholesale clear: a harness still needs a
+        // working environment to run in.
+        assert!(
+            !seen.trim().is_empty(),
+            "the child was left with no environment at all"
+        );
+    }
+
+    #[tokio::test]
+    async fn declared_variables_are_handed_to_the_child_deliberately() {
+        let command = HarnessCommand {
+            program: printenv_program(),
+            args: printenv_args(),
+            working_dir: std::env::temp_dir(),
+            env: vec![(
+                "ARSOX_FAKE_TRANSCRIPT".to_owned(),
+                "/fixtures/x.jsonl".to_owned(),
+            )],
+        };
+
+        let output = process_for(&command)
+            .output()
+            .await
+            .expect("should run the probe");
+        let seen = String::from_utf8_lossy(&output.stdout);
+
+        assert!(
+            seen.contains("/fixtures/x.jsonl"),
+            "an explicitly declared variable should survive the scrub"
+        );
+    }
+
+    /// A program that prints its environment, whatever platform this is.
+    fn printenv_program() -> String {
+        if cfg!(windows) {
+            "cmd".to_owned()
+        } else {
+            "env".to_owned()
+        }
+    }
+
+    fn printenv_args() -> Vec<String> {
+        if cfg!(windows) {
+            vec!["/C".to_owned(), "set".to_owned()]
+        } else {
+            Vec::new()
+        }
+    }
 
     #[test]
     fn a_first_turn_opens_a_session_under_an_id_the_satellite_chose() {
