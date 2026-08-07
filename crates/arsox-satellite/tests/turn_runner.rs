@@ -131,6 +131,9 @@ async fn start_with(prompt: &str, settings: ThreadSettings) -> (Harness, String,
         Arc::new(tokio::sync::Notify::new()),
         1,
         Arc::clone(&collector),
+        arsox_satellite::proxy::LlmProxy::start()
+            .await
+            .expect("should start the proxy"),
     );
     tokio::spawn(runner.dispatch());
 

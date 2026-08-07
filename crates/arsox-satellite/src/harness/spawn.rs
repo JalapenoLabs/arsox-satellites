@@ -55,18 +55,24 @@ pub fn command_for(
     prompt: &str,
     session: &Session,
     working_dir: PathBuf,
+    model_access: Option<ModelAccess>,
 ) -> HarnessCommand {
     match harness {
         // Claude is the default and the only harness implemented today, so
         // every arm lands in the same place. Codex gets its own the moment its
         // mapper exists, and this match is where it will appear.
         Harness::Unspecified | Harness::Claude | Harness::Codex => {
-            claude_command(prompt, session, working_dir)
+            claude_command(prompt, session, working_dir, model_access)
         }
     }
 }
 
-fn claude_command(prompt: &str, session: &Session, working_dir: PathBuf) -> HarnessCommand {
+fn claude_command(
+    prompt: &str,
+    session: &Session,
+    working_dir: PathBuf,
+    model_access: Option<ModelAccess>,
+) -> HarnessCommand {
     let mut args = vec![
         "--print".to_owned(),
         prompt.to_owned(),
@@ -87,12 +93,32 @@ fn claude_command(prompt: &str, session: &Session, working_dir: PathBuf) -> Harn
         }
     }
 
+    let mut env = agent_environment();
+
+    // Pointed at the satellite's own proxy rather than the provider. The token
+    // is worth nothing anywhere else and stops working when the turn ends,
+    // which is the whole reason the agent gets one instead of a real key.
+    if let Some(access) = model_access {
+        env.push(("ANTHROPIC_BASE_URL".to_owned(), access.base_url));
+        env.push(("ANTHROPIC_API_KEY".to_owned(), access.token));
+    }
+
     HarnessCommand {
         program: std::env::var(CLAUDE_BINARY_ENV).unwrap_or_else(|_ignored| "claude".to_owned()),
         args,
         working_dir,
-        env: agent_environment(),
+        env,
     }
+}
+
+/// One turn's admission to the model, by way of the satellite's proxy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelAccess {
+    pub base_url: String,
+
+    /// Identifies the turn. Not a credential: it authorizes nothing beyond
+    /// spending this turn's budget through this satellite.
+    pub token: String,
 }
 
 /// Builds the process to spawn, with an environment an agent may safely hold.
@@ -114,7 +140,7 @@ pub fn process_for(command: &HarnessCommand) -> tokio::process::Command {
         .current_dir(&command.working_dir);
 
     for (key, _value) in std::env::vars() {
-        if key.starts_with("ARSOX_") {
+        if key.starts_with("ARSOX_") || is_provider_credential(&key) {
             process.env_remove(&key);
         }
     }
@@ -124,6 +150,35 @@ pub fn process_for(command: &HarnessCommand) -> tokio::process::Command {
     }
 
     process
+}
+
+/// Whether a variable holds a credential the proxy should be presenting instead.
+///
+/// An agent that can read the provider key can spend it outside every ceiling
+/// the satellite enforces, print it into a log, or commit it. The proxy holds
+/// it and attaches it on the way out, so the agent has no reason to carry one.
+///
+/// Matched on shape rather than by name, so a variable the next provider
+/// introduces is withheld before anybody thinks to list it.
+fn is_provider_credential(key: &str) -> bool {
+    const VENDORS: [&str; 6] = [
+        "ANTHROPIC_",
+        "OPENAI_",
+        "AWS_",
+        "AZURE_",
+        "GOOGLE_",
+        "DEEPSEEK_",
+    ];
+    const SECRETS: [&str; 5] = [
+        "API_KEY",
+        "AUTH_TOKEN",
+        "ACCESS_KEY",
+        "SECRET",
+        "CREDENTIALS",
+    ];
+
+    VENDORS.iter().any(|vendor| key.starts_with(vendor))
+        && SECRETS.iter().any(|secret| key.contains(secret))
 }
 
 /// What an agent is allowed to see, on top of a scrubbed environment.
@@ -191,6 +246,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_provider_credential_never_reaches_the_child() {
+        // The proxy presents the key on the way out, so an agent has no reason
+        // to carry one. An agent that could read it could spend it outside
+        // every ceiling the satellite enforces.
+        //
+        // SAFETY: this test owns these names and no other test reads them.
+        unsafe {
+            std::env::set_var("ANTHROPIC_API_KEY", "sk-ant-the-real-key");
+            std::env::set_var("OPENAI_API_KEY", "sk-openai-real");
+            std::env::set_var("AWS_SECRET_ACCESS_KEY", "aws-real");
+        };
+
+        let command = HarnessCommand {
+            program: printenv_program(),
+            args: printenv_args(),
+            working_dir: std::env::temp_dir(),
+            env: Vec::new(),
+        };
+
+        let output = process_for(&command)
+            .output()
+            .await
+            .expect("should run the probe");
+        let seen = String::from_utf8_lossy(&output.stdout);
+
+        for leaked in ["sk-ant-the-real-key", "sk-openai-real", "aws-real"] {
+            assert!(
+                !seen.contains(leaked),
+                "a provider credential reached the child: {leaked}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_credential_rule_matches_shape_rather_than_a_list_of_names() {
+        assert!(is_provider_credential("ANTHROPIC_API_KEY"));
+        assert!(is_provider_credential("ANTHROPIC_AUTH_TOKEN"));
+        assert!(is_provider_credential("AWS_SECRET_ACCESS_KEY"));
+        // A vendor variable that is not a credential stays: an agent may well
+        // need to know which region or model it is pointed at.
+        assert!(!is_provider_credential("AWS_REGION"));
+        assert!(!is_provider_credential("ANTHROPIC_MODEL"));
+        // And an unrelated variable is untouched.
+        assert!(!is_provider_credential("PATH"));
+        assert!(!is_provider_credential("HOME"));
+    }
+
+    #[tokio::test]
     async fn declared_variables_are_handed_to_the_child_deliberately() {
         let command = HarnessCommand {
             program: printenv_program(),
@@ -240,6 +343,7 @@ mod tests {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
             PathBuf::from("/workspace/thread"),
+            None,
         );
 
         assert!(command.args.contains(&"--session-id".to_owned()));
@@ -261,6 +365,7 @@ mod tests {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
             PathBuf::from("/workspace/thread"),
+            None,
         );
 
         assert!(command.args.contains(&"--resume".to_owned()));
@@ -279,6 +384,7 @@ mod tests {
                 session_id: "x".to_owned(),
             },
             PathBuf::from("/workspace/thread"),
+            None,
         );
 
         assert!(command.args.contains(&"; rm -rf / #".to_owned()));

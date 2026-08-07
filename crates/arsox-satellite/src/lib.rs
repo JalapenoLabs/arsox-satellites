@@ -18,6 +18,7 @@
 mod api;
 pub mod collector;
 pub mod harness;
+pub mod proxy;
 pub mod store;
 pub mod stream;
 pub mod workspace;
@@ -469,12 +470,17 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
     ));
     tokio::spawn(Arc::clone(&collector).sweep_forever(options.collect_interval));
 
+    let proxy = proxy::LlmProxy::start()
+        .await
+        .context("failed to start the llm proxy")?;
+
     let runner = harness::runner::Runner::new(
         store.clone(),
         std::path::PathBuf::from(&options.workspace_root),
         Arc::clone(&work_queued),
         options.max_concurrent_threads,
         Arc::clone(&collector),
+        proxy,
     );
     tokio::spawn(runner.dispatch());
 

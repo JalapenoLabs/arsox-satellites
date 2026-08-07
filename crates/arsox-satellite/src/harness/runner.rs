@@ -18,7 +18,7 @@
 //! recognize all produce incidents. A turn that ends badly ends with a reason
 //! attached rather than a gap where its output should be.
 
-use crate::harness::spawn::{Session, command_for, process_for};
+use crate::harness::spawn::{ModelAccess, Session, command_for, process_for};
 use crate::harness::{HarnessResult, claude};
 use crate::store::{AppendEvent, ClaimedTurn, Store};
 use arsox_sdk::proto::common::v1::Timestamp;
@@ -48,6 +48,28 @@ const IDLE_POLL: std::time::Duration = std::time::Duration::from_secs(2);
 /// per line of output.
 const CANCEL_CHECK_EVERY: usize = 20;
 
+/// Withdraws a turn's proxy grant however the turn ends.
+///
+/// A guard rather than a call at the end of the happy path, because a turn can
+/// leave `drive` by cancellation, by a harness crash, or by any error added
+/// later. Each of those is a path somebody could forget, and a forgotten revoke
+/// is a token that keeps working after its turn stopped.
+struct RevokeOnDrop {
+    proxy: crate::proxy::LlmProxy,
+    token: String,
+}
+
+impl Drop for RevokeOnDrop {
+    fn drop(&mut self) {
+        // `Drop` cannot await, so the revoke is handed to the runtime. It runs
+        // before anything could use the token again: the harness process is
+        // already gone by the time this drops.
+        let proxy = self.proxy.clone();
+        let token = std::mem::take(&mut self.token);
+        tokio::spawn(async move { proxy.revoke(&token).await });
+    }
+}
+
 /// What reading a harness's output produced.
 #[derive(Debug, Default)]
 struct Consumed {
@@ -70,6 +92,9 @@ pub struct Runner {
 
     /// Collects threads that asked to be deleted the moment their work is done.
     collector: Arc<crate::collector::Collector>,
+
+    /// The chokepoint every model request traverses.
+    proxy: crate::proxy::LlmProxy,
 }
 
 impl Runner {
@@ -81,6 +106,7 @@ impl Runner {
         notify: Arc<Notify>,
         max_concurrent_threads: u32,
         collector: Arc<crate::collector::Collector>,
+        proxy: crate::proxy::LlmProxy,
     ) -> Self {
         Self {
             store,
@@ -88,6 +114,7 @@ impl Runner {
             notify,
             capacity: Arc::new(Semaphore::new(max_concurrent_threads as usize)),
             collector,
+            proxy,
         }
     }
 
@@ -259,7 +286,31 @@ impl Runner {
         };
 
         let harness = Harness::try_from(claimed.settings.harness).unwrap_or(Harness::Claude);
-        let command = command_for(harness, &claimed.turn.prompt, &session, working_dir);
+
+        // Minted per turn and withdrawn below, whatever the turn does. Every
+        // model request this harness makes goes through the satellite, which is
+        // what makes counting and ceilings arithmetic rather than a request.
+        let upstream = crate::proxy::upstream::Upstream::resolve(&claimed.settings.models);
+        let token = self.proxy.grant(thread_id, turn_id, upstream).await;
+
+        let command = command_for(
+            harness,
+            &claimed.turn.prompt,
+            &session,
+            working_dir,
+            Some(ModelAccess {
+                base_url: self.proxy.base_url_for(&token),
+                token: token.clone(),
+            }),
+        );
+
+        // Revoked on every path out of this function, including the early
+        // returns for cancellation and failure. A grant that outlived its turn
+        // would keep spending after the work stopped.
+        let _grant = RevokeOnDrop {
+            proxy: self.proxy.clone(),
+            token,
+        };
 
         // Never `Command::new` directly. A spawned process inherits its
         // parent's environment, and the satellite's holds `ARSOX_SECRET`.

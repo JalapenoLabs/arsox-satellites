@@ -44,6 +44,8 @@ Serve the API over TLS whenever it is reachable outside a trusted network. The s
 
 **`ARSOX_SECRET` is never placed in an agent's environment.** It is read by the satellite process at boot and withheld from every harness, member, and brokered command. An agent that could read it could command its own satellite: destroy threads, read other threads' artifacts, rewrite permissions. The secret authenticates your application to the satellite, never the satellite to itself.
 
+**Neither is your LLM provider key.** An agent's environment carries no `ARSOX_*` variable and no provider credential. Model requests go through the satellite's own [LLM proxy](#the-model-axis), which attaches the real credential on the way out, so an agent holds a token that is worth nothing anywhere else and stops working when its turn ends. A key an agent can read is a key it can print into a log, commit to a repo, or spend outside every ceiling you set.
+
 <!-- TODO: Enter code details about how to configure it -->
 <!-- TODO: Show SDK examples of how to use it -->
 
