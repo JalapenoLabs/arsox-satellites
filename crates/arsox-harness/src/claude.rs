@@ -22,7 +22,7 @@
 //! Neither shape is wrong; they are just a different model. Absorbing that
 //! difference is the entire job of this module.
 
-use crate::harness::{HarnessResult, MappedEvent, Mapping};
+use crate::{HarnessResult, MappedEvent, Mapping};
 use arsox_sdk::proto::common::v1::{Duration, Money, Timestamp};
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
@@ -500,7 +500,7 @@ mod tests {
     /// This is the conformance fixture, and its value is that nobody wrote it
     /// from imagination. Every field, and every place the native shape disagrees
     /// with the contract, is something the harness actually emitted.
-    const TOOL_CALL_TRANSCRIPT: &str = include_str!("../../fixtures/claude/tool-call.jsonl");
+    const TOOL_CALL_TRANSCRIPT: &str = include_str!("../fixtures/claude/tool-call.jsonl");
 
     fn map_all(transcript: &str) -> Vec<Mapping> {
         transcript

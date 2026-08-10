@@ -34,6 +34,7 @@ required-features = [ "test-util" ]
 [dependencies]
 # Types only. The server has no use for the client half of the SDK, and linking
 # it would drag an HTTP stack into a process that is already serving one.
+arsox-harness.workspace = true
 arsox-sdk.workspace = true
 
 anyhow.workspace = true

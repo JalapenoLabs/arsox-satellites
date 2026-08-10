@@ -29,9 +29,15 @@ static NEXT_SCRATCH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 
 const SECRET: &str = "sdk-test-secret";
 
+/// The recorded transcript the stand-in replays.
+///
+/// Lives in `arsox-harness` because it is evidence about Claude's output rather
+/// than about the satellite, and the mapper's own conformance tests assert
+/// against the same bytes. One copy, so the two can never drift into proving
+/// different things.
 const TRANSCRIPT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/fixtures/claude/tool-call.jsonl"
+    "/../arsox-harness/fixtures/claude/tool-call.jsonl"
 );
 
 /// Starts a satellite and returns the URL a client would be given.
