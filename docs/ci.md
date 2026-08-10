@@ -25,6 +25,7 @@ checksum-verified each run.
 |---|---|---|
 | Proto | `.github/workflows/proto.yml` | pushes and PRs touching `proto/` or either generated output root |
 | Rust | `.github/workflows/rust.yml` | pushes and PRs touching `crates/`, the workspace manifest, or the toolchain pin |
+| Docker | `.github/workflows/docker.yml` | pushes and PRs touching the `Dockerfile`, `crates/`, the workspace manifest, or the toolchain pin |
 
 Each workflow is path-filtered, so editing a README never queues a proto build.
 `workflow_dispatch` is enabled on all of them for manual runs, and
@@ -104,6 +105,22 @@ Three checks then cover what a plain `cargo test` misses:
   outside the package directory, missing metadata, a path dependency with no
   version. It caught a declared-but-absent README the first time it ran.
 
+## Docker
+
+The image workflow builds the Ubuntu satellite image and then boots it. The two
+steps prove different things. The build proves the builder stage: every `COPY`
+path resolves and the workspace compiles. The boot proves the runtime stage: the
+binary starts as the unprivileged user, finds every library it links against,
+and answers `/healthz`. A missing shared object or a broken entrypoint passes
+the build and fails only at boot, which is why the workflow does both.
+
+The Dockerfile names build inputs by path, and nothing else in CI compiles it,
+so this workflow is the only thing standing between a crate moving directory and
+an image that silently stops building.
+
+The image is built and thrown away. Publishing to docker.io is a release step,
+not a CI step, and lands with the release automation.
+
 ## Roadmap
 
 - **SDK builds** for TypeScript and Python, each consuming `gen/` rather than
@@ -111,8 +128,8 @@ Three checks then cover what a plain `cargo test` misses:
 - **Conformance suite** once harness mappers exist. That is the job that proves
   the normalization claim, so it belongs in CI from the day the first mapper
   lands.
-- **Image builds** for the Ubuntu, Fedora, and Rocky satellite variants, with
-  every package pinned and the manifest published alongside the image.
+- **Fedora and Rocky image variants**, and publishing every variant to docker.io
+  with each package pinned and the manifest published alongside the image.
 - **`buf breaking` against the last release tag** in addition to the base branch,
   so a sequence of individually non-breaking PRs cannot add up to a break across
   a release.

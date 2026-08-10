@@ -16,6 +16,7 @@ WORKDIR /build
 # actually changes. Source edits below this line reuse it.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/arsox-sdk/Cargo.toml crates/arsox-sdk/
+COPY crates/arsox-harness/Cargo.toml crates/arsox-harness/
 COPY crates/arsox-satellite/Cargo.toml crates/arsox-satellite/
 
 # `cargo package` reads this, and a missing file named in the manifest fails the
@@ -25,23 +26,26 @@ COPY crates/arsox-sdk/README.md crates/arsox-sdk/
 # Stub sources so the dependency graph compiles without the real code. The
 # stubs are overwritten below; only the compiled dependencies survive into the
 # next layer.
-RUN mkdir -p crates/arsox-sdk/src crates/arsox-satellite/src \
+RUN mkdir -p crates/arsox-sdk/src crates/arsox-harness/src crates/arsox-satellite/src \
     && echo "" > crates/arsox-sdk/src/lib.rs \
+    && echo "" > crates/arsox-harness/src/lib.rs \
     && echo "" > crates/arsox-satellite/src/lib.rs \
     && echo "fn main() {}" > crates/arsox-satellite/src/main.rs \
     && cargo build --release --workspace \
-    && rm -rf crates/arsox-sdk/src crates/arsox-satellite/src
+    && rm -rf crates/arsox-sdk/src crates/arsox-harness/src crates/arsox-satellite/src
 
-# Migrations are embedded by `sqlx::migrate!` at compile time, so they are build
-# input rather than runtime data and must be present before the real build.
+# Migrations are embedded by `sqlx::migrate!` and the conformance fixtures by
+# `include_str!`, so both are build input rather than runtime data and must be
+# present before the real build.
 COPY crates/arsox-satellite/migrations/ crates/arsox-satellite/migrations/
-COPY crates/arsox-satellite/fixtures/ crates/arsox-satellite/fixtures/
+COPY crates/arsox-harness/fixtures/ crates/arsox-harness/fixtures/
 COPY crates/arsox-sdk/src/ crates/arsox-sdk/src/
+COPY crates/arsox-harness/src/ crates/arsox-harness/src/
 COPY crates/arsox-satellite/src/ crates/arsox-satellite/src/
 
 # Cargo skips a rebuild when only mtimes moved, and COPY resets them in a way it
 # does not always notice. Touching the roots makes the rebuild unambiguous.
-RUN touch crates/arsox-sdk/src/lib.rs crates/arsox-satellite/src/lib.rs \
+RUN touch crates/arsox-sdk/src/lib.rs crates/arsox-harness/src/lib.rs crates/arsox-satellite/src/lib.rs \
     && cargo build --release --bin arsox-satellite
 
 

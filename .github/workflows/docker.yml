@@ -1,0 +1,78 @@
+# Copyright © 2026 Jalapeno Labs
+
+# The satellite image. Building it in CI is what keeps the Dockerfile honest:
+# it names files by path, nothing else compiles it, and a crate moving directory
+# breaks it silently until something actually runs `docker build`.
+name: Docker
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'Dockerfile'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/docker.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'Dockerfile'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/docker.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  image:
+    name: Build and boot the satellite image
+    runs-on: [ linux, fedora, flagship, earthly, docker ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Build the image
+        run: docker build --tag arsox-satellite:ci-${{ github.sha }} .
+
+      # A compile proves the builder stage. Booting proves the runtime stage:
+      # the binary starts as the unprivileged user, finds every library it
+      # links, and serves liveness. A missing shared object or a broken
+      # entrypoint passes the build and fails only here.
+      - name: Boot the image and check liveness
+        run: |
+          set -euo pipefail
+
+          container=$(docker run --detach --rm \
+            --env ARSOX_SECRET=ci-smoke-secret \
+            --publish 127.0.0.1:18080:8080 \
+            arsox-satellite:ci-${{ github.sha }})
+          trap 'docker stop "$container" > /dev/null' EXIT
+
+          for _ in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:18080/healthz > /dev/null; then
+              echo "satellite is live"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "satellite never became live" >&2
+          docker logs "$container" >&2
+          exit 1
+
+      # The image is rebuilt from scratch next run either way; leaving CI tags
+      # behind on a persistent runner just accumulates disk.
+      - name: Remove the CI tag
+        if: always()
+        run: docker rmi --force arsox-satellite:ci-${{ github.sha }} || true

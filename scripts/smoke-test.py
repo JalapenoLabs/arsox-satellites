@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import pathlib
 import sys
 import time
@@ -20,8 +21,10 @@ from arsox.turn.v1 import result_pb2, turn_pb2
 # Unique per run, so re-running against a live container exercises a fresh
 # thread rather than deduplicating onto the previous run's finished one.
 RUN = str(int(time.time()))
-BASE = "http://127.0.0.1:18080"
-SECRET = "container-secret"
+
+# Overridable so a run does not depend on one specific host port being free.
+BASE = os.environ.get("ARSOX_SMOKE_BASE", "http://127.0.0.1:18080")
+SECRET = os.environ.get("ARSOX_SMOKE_SECRET", "container-secret")
 
 passed = 0
 failed = 0
