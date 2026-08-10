@@ -15,6 +15,7 @@ authors = [ "Jalapeno Labs" ]
 
 [workspace.dependencies]
 arsox-sdk = { version = "0.1.0", path = "crates/arsox-sdk", default-features = false }
+arsox-harness = { version = "0.1.0", path = "crates/arsox-harness" }
 
 # Generated protobuf types. `prost-types` carries the well-known types, which
 # the contract uses for `google.protobuf.Struct` in error and incident details.

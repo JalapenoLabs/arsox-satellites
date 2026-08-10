@@ -1,0 +1,30 @@
+# Copyright © 2026 Jalapeno Labs
+
+[package]
+name = "arsox-harness"
+description = "Normalizes agent harness output into the Arsox contract. No I/O: feed it lines, get typed events."
+keywords = [ "arsox", "agents", "claude", "codex", "normalization" ]
+categories = [ "development-tools", "parser-implementations" ]
+publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+# Deliberately three dependencies, and no runtime among them. A consumer that
+# wants only to interpret a recorded stream should not compile an async runtime,
+# an HTTP stack, or a database driver to do it. Adding one here should require
+# an argument for why the knowledge cannot be expressed without it.
+[dependencies]
+arsox-sdk.workspace = true
+serde_json.workspace = true
+# The contract carries google.protobuf.Struct for error and incident details,
+# and mapping a native timestamp needs a calendar rather than a duration.
+prost-types.workspace = true
+chrono.workspace = true
+
+[lints]
+workspace = true
