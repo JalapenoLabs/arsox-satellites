@@ -16,6 +16,15 @@ use std::path::PathBuf;
 /// difference, which is the point: the same code path is exercised either way.
 const CLAUDE_BINARY_ENV: &str = "ARSOX_CLAUDE_BIN";
 
+/// Resolves the Claude CLI binary this satellite launches.
+///
+/// One resolution shared by the spawner and the boot-time version probe, so the
+/// binary the capabilities endpoint describes is the one a turn actually runs.
+#[must_use]
+pub fn claude_binary() -> String {
+    std::env::var(CLAUDE_BINARY_ENV).unwrap_or_else(|_ignored| "claude".to_owned())
+}
+
 /// What to launch, where, and with what environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessCommand {
@@ -104,7 +113,7 @@ fn claude_command(
     }
 
     HarnessCommand {
-        program: std::env::var(CLAUDE_BINARY_ENV).unwrap_or_else(|_ignored| "claude".to_owned()),
+        program: claude_binary(),
         args,
         working_dir,
         env,

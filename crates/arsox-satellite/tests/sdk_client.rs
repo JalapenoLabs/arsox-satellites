@@ -13,6 +13,7 @@
 use arsox_satellite::{ServeOptions, assemble};
 use arsox_sdk::client::Satellite as Client;
 use arsox_sdk::proto::common::v1::Duration as ProtoDuration;
+use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::settings::v1::{Budget, ThreadSettings};
 use arsox_sdk::proto::thread::v1::ThreadState;
 use arsox_sdk::proto::turn::v1::TurnStatus;
@@ -113,6 +114,27 @@ async fn connecting_checks_the_contract_version() {
 
     assert_eq!(version.proto_major, 1);
     assert!(!version.satellite_version.is_empty());
+}
+
+#[tokio::test]
+async fn the_harness_endpoint_reports_what_this_satellite_offers() {
+    let url = start().await;
+    let client = Client::connect(&url, SECRET).await.expect("should connect");
+
+    let harness = client.harness().await.expect("should report harnesses");
+
+    // Claude is the harness implemented today, and the endpoint says so plainly
+    // rather than implying a suite that spans several.
+    assert_eq!(harness.default_harness, i32::from(Harness::Claude));
+    assert_eq!(harness.harnesses.len(), 1);
+
+    let claude = &harness.harnesses[0];
+    assert_eq!(claude.harness, i32::from(Harness::Claude));
+    assert!(claude.supports_mcp);
+    assert!(claude.reports_cache_tokens);
+    // The stand-in harness replays a transcript when asked for its version,
+    // and that JSON must not have been mistaken for one.
+    assert!(!claude.cli_version.starts_with('{'));
 }
 
 #[tokio::test]

@@ -9,6 +9,7 @@
 //! The mapper types are re-exported so this module reads the same as before to
 //! everything above it.
 
+pub mod capabilities;
 pub mod runner;
 pub mod spawn;
 

@@ -26,6 +26,7 @@ pub mod workspace;
 use anyhow::{Context as _, Result, bail};
 use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::error::v1::{Error as ContractError, ErrorCode};
+use arsox_sdk::proto::harness::v1::GetHarnessResponse;
 use arsox_sdk::proto::satellite::v1::{GetStatusResponse, GetVersionResponse};
 use axum::Router;
 use axum::extract::{Request, State};
@@ -132,6 +133,9 @@ pub(crate) struct Satellite {
 
     /// Removes threads and the workspaces they own.
     pub(crate) collector: Arc<collector::Collector>,
+
+    /// What this satellite's harnesses support, resolved once at boot.
+    harness: GetHarnessResponse,
 }
 
 impl Satellite {
@@ -300,9 +304,19 @@ async fn status(State(satellite): State<Arc<Satellite>>) -> Response {
     })
 }
 
+/// Which harnesses this satellite offers and what each supports.
+///
+/// Authenticated like `/v1/status`: capability facts are not thread content,
+/// but which CLI a satellite runs and at what version is configuration, and the
+/// unauthenticated surface deliberately exposes none of that.
+async fn harness_capabilities(State(satellite): State<Arc<Satellite>>) -> Response {
+    protobuf(&satellite.harness)
+}
+
 fn router(satellite: Arc<Satellite>) -> Router {
     let authenticated = Router::new()
         .route("/v1/status", get(status))
+        .route("/v1/harness", get(harness_capabilities))
         .merge(api::routes())
         .merge(stream::sockets::routes())
         .route_layer(from_fn_with_state(Arc::clone(&satellite), require_auth));
@@ -491,6 +505,8 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
         "turn runner started",
     );
 
+    let harness = harness::capabilities::resolve().await;
+
     Ok(Assembled {
         router: router(Arc::new(Satellite {
             auth,
@@ -500,6 +516,7 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
             work_queued,
             bus,
             collector,
+            harness,
         })),
         store,
     })
