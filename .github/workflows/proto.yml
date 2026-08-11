@@ -39,7 +39,7 @@ env:
 jobs:
   proto:
     name: Lint, build, and verify codegen
-    runs-on: [ linux, fedora, flagship, earthly, docker ]
+    runs-on: [ linux, rocky9, flagship, earthly, docker ]
 
     steps:
       - name: Checkout

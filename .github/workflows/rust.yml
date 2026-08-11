@@ -38,7 +38,7 @@ env:
 jobs:
   rust:
     name: Format, lint, and test
-    runs-on: [ linux, fedora, flagship, earthly, docker ]
+    runs-on: [ linux, rocky9, flagship, earthly, docker ]
 
     steps:
       - name: Checkout

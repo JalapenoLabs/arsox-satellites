@@ -7,7 +7,7 @@ GitHub Actions, on self-hosted runners.
 Every job targets the org's self-hosted pool:
 
 ```yaml
-runs-on: [ linux, fedora, flagship, earthly, docker ]
+runs-on: [ linux, rocky9, flagship, earthly, docker ]
 ```
 
 Labels are matched as a set, so a runner must carry all five to pick up a job.
