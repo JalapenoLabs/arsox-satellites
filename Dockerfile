@@ -51,12 +51,74 @@ RUN touch crates/arsox-sdk/src/lib.rs crates/arsox-harness/src/lib.rs crates/ars
 
 FROM ubuntu:24.04 AS runtime
 
-# `git` and the rest of the agent toolchain land here when the workspace manager
-# does. For now the satellite needs certificates for outbound TLS and nothing
-# else: SQLite is compiled into the binary rather than linked from the system.
+# The agent's working environment, per the README's preinstalled tooling list,
+# so agents are not spending their first ten minutes installing basics. Every
+# package is pinned exactly; CI rebuilds this image on every relevant push, so
+# a version the archive has dropped surfaces as a red build rather than drift.
 RUN apt-get update \
-    && apt-get install --no-install-recommends --yes ca-certificates=20240203 \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install --no-install-recommends --yes \
+        ca-certificates=20240203 \
+        git=1:2.43.0-1ubuntu7.3 \
+        git-lfs=3.4.1-1ubuntu0.4 \
+        openssh-client=1:9.6p1-3ubuntu13.18 \
+        build-essential=12.10ubuntu1 \
+        pkg-config=1.8.1-2build1 \
+        curl=8.5.0-2ubuntu10.12 \
+        wget=1.21.4-1ubuntu4.4 \
+        jq=1.7.1-3ubuntu0.24.04.2 \
+        zip=3.0-13ubuntu0.2 \
+        unzip=6.0-28ubuntu4.1 \
+        ripgrep=14.1.0-1 \
+        fd-find=9.0.0-1 \
+        less=590-2ubuntu2.1 \
+        xz-utils=5.6.1+really5.4.5-1ubuntu0.3 \
+        python3=3.12.3-0ubuntu2.1 \
+        python3-pip=24.0+dfsg-1ubuntu1.3 \
+        python3-venv=3.12.3-0ubuntu2.1 \
+    && rm -rf /var/lib/apt/lists/* \
+    # Ubuntu ships the binary as `fdfind`; agents and docs expect `fd`.
+    && ln -s "$(command -v fdfind)" /usr/local/bin/fd
+
+# Node, from the official tarball rather than a distro or vendor repo: exact
+# version, exact checksum, no third-party archive that can rot or redirect.
+# corepack rides along, which is how yarn and pnpm are provided.
+ARG NODE_VERSION=22.23.2
+ARG NODE_SHA256=d60acfe00a2932254bb0ad20e01b0d74397a0875595de719654b214f4b03f307
+RUN curl -fsSLo /tmp/node.tar.xz "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
+    && echo "${NODE_SHA256}  /tmp/node.tar.xz" | sha256sum --check --quiet \
+    && tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 --no-same-owner \
+    && rm /tmp/node.tar.xz \
+    && corepack enable \
+    && node --version
+
+# The GitHub CLI, from its release tarball for the same reason as Node.
+ARG GH_VERSION=2.97.0
+ARG GH_SHA256=a2c9b8497e1f85b1ad0dfcb78b5a622e098801b8e461e459e88e1ee12f018112
+RUN curl -fsSLo /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+    && echo "${GH_SHA256}  /tmp/gh.tar.gz" | sha256sum --check --quiet \
+    && tar -xzf /tmp/gh.tar.gz -C /usr/local --strip-components=1 --no-same-owner \
+    && rm /tmp/gh.tar.gz \
+    && gh --version
+
+# The Jira CLI (ankitpokhrel/jira-cli), which is what the README's `jira`
+# entry names. Same release-tarball pattern as gh.
+ARG JIRA_VERSION=1.7.0
+ARG JIRA_SHA256=b5e0ba4804f3f11f92c483d9a6ea9ebccec1c735cd2e12b0440cab9d7afd626a
+RUN curl -fsSLo /tmp/jira.tar.gz "https://github.com/ankitpokhrel/jira-cli/releases/download/v${JIRA_VERSION}/jira_${JIRA_VERSION}_linux_x86_64.tar.gz" \
+    && echo "${JIRA_SHA256}  /tmp/jira.tar.gz" | sha256sum --check --quiet \
+    && tar -xzf /tmp/jira.tar.gz -C /usr/local --strip-components=1 --no-same-owner \
+    && rm /tmp/jira.tar.gz \
+    && jira version
+
+# The Claude CLI, the harness the satellite spawns. Pinned exactly, and the
+# autoupdater is disabled below because a harness that upgrades itself under a
+# running satellite is the version drift everything else here exists to prevent.
+ARG CLAUDE_VERSION=2.1.235
+RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
+    && npm cache clean --force \
+    && claude --version
+
+ENV DISABLE_AUTOUPDATER=1
 
 # Agents run unprivileged. The satellite process runs as the same user for now;
 # when the enforcement layer lands, the pieces an agent must not reach stay
