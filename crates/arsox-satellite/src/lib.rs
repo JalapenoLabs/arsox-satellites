@@ -17,6 +17,7 @@
 
 mod api;
 pub mod collector;
+pub mod disk;
 pub mod harness;
 pub mod proxy;
 pub mod store;
@@ -27,7 +28,8 @@ use anyhow::{Context as _, Result, bail};
 use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::error::v1::{Error as ContractError, ErrorCode};
 use arsox_sdk::proto::harness::v1::GetHarnessResponse;
-use arsox_sdk::proto::satellite::v1::{GetStatusResponse, GetVersionResponse};
+use arsox_sdk::proto::satellite::v1::{DiskUsage, GetStatusResponse, GetVersionResponse};
+use arsox_sdk::proto::thread::v1::ThreadState;
 use axum::Router;
 use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode, header};
@@ -87,6 +89,29 @@ const DEFAULT_COLLECT_INTERVAL_SECONDS: u32 = 60;
 /// through `Accept`, never what an SDK sends.
 const PROTOBUF_CONTENT_TYPE: HeaderValue = HeaderValue::from_static("application/protobuf");
 
+/// Threads `/v1/status` lists before it stops.
+///
+/// Status is an operational snapshot that gets polled, not a listing. A
+/// satellite holding thousands of idle threads should not answer every poll with
+/// thousands of summaries, and `GET /v1/threads` pages properly for the caller
+/// that wants all of them.
+const STATUS_THREAD_LIMIT: u32 = 500;
+
+/// Every state a thread the satellite still holds can be in.
+///
+/// Tombstones are deliberately absent. An expired or destroyed thread holds no
+/// workspace, no queue, and no events, so listing it among the threads the
+/// satellite is holding would misreport the fleet to whatever is deciding
+/// whether to start another satellite.
+const LIVE_THREAD_STATES: [ThreadState; 6] = [
+    ThreadState::Provisioning,
+    ThreadState::Idle,
+    ThreadState::Running,
+    ThreadState::AwaitingInput,
+    ThreadState::Watching,
+    ThreadState::Paused,
+];
+
 /// How the satellite authenticates callers.
 #[derive(Debug, Clone)]
 enum Auth {
@@ -136,6 +161,10 @@ pub(crate) struct Satellite {
 
     /// Fills a new thread's workspace before its first turn can claim it.
     pub(crate) provisioner: workspace::Provisioner,
+
+    /// What the satellite is holding on disk, measured on a refresh interval
+    /// rather than per request.
+    disk: disk::Meter,
 
     /// What this satellite's harnesses support, resolved once at boot.
     harness: GetHarnessResponse,
@@ -292,18 +321,54 @@ async fn version() -> Response {
 
 /// Full satellite state. Authenticated, because it names running threads.
 async fn status(State(satellite): State<Arc<Satellite>>) -> Response {
+    let filter = store::ThreadFilter {
+        states: LIVE_THREAD_STATES.iter().copied().map(i32::from).collect(),
+        limit: STATUS_THREAD_LIMIT,
+        ..store::ThreadFilter::default()
+    };
+
+    let mut threads = match satellite.store.list_threads(&filter).await {
+        Ok(listing) => listing.threads,
+        Err(error) => return api::store_failure(&error),
+    };
+
+    // Read rather than derived from the listing: a thread can be RUNNING,
+    // AWAITING_INPUT, or WATCHING with a turn in flight, and the cap counts
+    // turns rather than states.
+    let running_threads = match satellite.store.running_thread_count().await {
+        Ok(count) => count,
+        Err(error) => return api::store_failure(&error),
+    };
+
+    // Cached and measured off the runtime, so polling this endpoint against a
+    // satellite holding a large workspace does not walk the tree per request.
+    // The figures can lag by one refresh interval; see the `disk` module.
+    let usage = satellite.disk.usage().await;
+    for summary in &mut threads {
+        summary.workspace_bytes = usage.thread_bytes(&summary.thread_id);
+    }
+
     protobuf(&GetStatusResponse {
         satellite_version: env!("CARGO_PKG_VERSION").to_owned(),
         max_concurrent_threads: satellite.max_concurrent_threads,
-        running_threads: 0,
-        threads: Vec::new(),
+        running_threads,
+        threads,
         started_at: Some(satellite.started_at.clone()),
         insecure_mode: satellite.is_insecure(),
-        // Absent rather than zeroed. A zero here would claim the satellite is
-        // holding no disk and has none free, which is a different and worse
-        // statement than "not measured yet". Populated when the workspace
-        // manager lands.
-        disk: None,
+        // Absent when the volume would not say what it has left. Every other
+        // field is measured, but a `DiskUsage` reporting zero free bytes claims
+        // the satellite is out of room, which is a worse statement than "not
+        // measured". The whole message waits on the one field that cannot be
+        // faked.
+        disk: usage.available_bytes.map(|available_bytes| DiskUsage {
+            workspace_bytes: usage.workspace_bytes,
+            available_bytes,
+            // No satellite-wide ceiling exists to report. Quotas are per thread
+            // today, and absent already means the volume's own capacity is the
+            // only limit, which is exactly the truth.
+            aggregate_quota_bytes: None,
+            database_bytes: usage.database_bytes,
+        }),
     })
 }
 
@@ -532,6 +597,10 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
             bus,
             collector,
             provisioner,
+            disk: disk::Meter::new(
+                std::path::PathBuf::from(&options.workspace_root),
+                std::path::PathBuf::from(&options.database_path),
+            ),
             harness,
         })),
         store,

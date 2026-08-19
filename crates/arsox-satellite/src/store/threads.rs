@@ -324,8 +324,10 @@ impl Store {
                 created_at: Some(from_nanos(row.get("created_at"))),
                 last_activity_at: Some(from_nanos(row.get("last_activity_at"))),
                 expires_at: row.get::<Option<i64>, _>("expires_at").map(from_nanos),
-                // Not measured until the workspace manager exists. Zero here
-                // would claim the thread holds nothing.
+                // Left to the caller, which fills it from the cached disk
+                // measurement. Sizing a subtree is filesystem work, and a store
+                // that walked the volume on every listing would make one `stat`
+                // storm out of a query that touches no disk of its own.
                 workspace_bytes: 0,
                 latest_sequence: row.get::<i64, _>("latest_sequence").unsigned_abs(),
                 metadata: metadata.into_iter().collect(),
@@ -336,6 +338,28 @@ impl Store {
             next_cursor: cursors.last().cloned().unwrap_or_default(),
             threads: summaries,
         })
+    }
+
+    /// How many threads have a turn in flight.
+    ///
+    /// Counted from turns rather than from the thread state column, because a
+    /// thread blocked on a question or watching a pull request still holds a
+    /// running turn, and it is turns in flight that
+    /// `ARSOX_MAX_CONCURRENT_THREADS` caps. This is the same set the claim query
+    /// excludes when it looks for work, so the number a status response reports
+    /// is the number the runner is arbitrating against.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error if the query fails.
+    pub async fn running_thread_count(&self) -> Result<u32, StoreError> {
+        let running: i64 =
+            sqlx::query_scalar("SELECT count(DISTINCT thread_id) FROM turns WHERE status = ?")
+                .bind(i32::from(TurnStatus::Running))
+                .fetch_one(self.pool())
+                .await?;
+
+        Ok(u32::try_from(running).unwrap_or(u32::MAX))
     }
 
     /// Releases a thread from `PROVISIONING` into the state its outcome earned.

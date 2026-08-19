@@ -90,7 +90,7 @@ where
 }
 
 /// Renders a store failure as the contract error it already knows itself to be.
-fn store_failure(error: &StoreError) -> Response {
+pub(crate) fn store_failure(error: &StoreError) -> Response {
     let status = match error.code() {
         ErrorCode::ThreadNotFound | ErrorCode::TurnNotFound => StatusCode::NOT_FOUND,
         // Gone rather than not found: the thread existed, and saying so is what
@@ -157,9 +157,9 @@ async fn create_thread(
         }
     }
 
-    // Kept before the settings are handed over, because provisioning needs them
-    // and a thread that declared none must cost nothing.
-    let repos = settings.repos.clone();
+    // Kept before the settings are handed to the store, because provisioning
+    // reads them once the thread id exists.
+    let workspace_settings = settings.clone();
 
     match satellite
         .store
@@ -182,19 +182,29 @@ async fn create_thread(
                     }),
                 ));
 
-                // Behind the response rather than inside it. Cloning three repos
-                // and running their installs is minutes of work, and holding the
-                // create open for it would make the satellite's most ordinary
-                // call its slowest. The thread opens PROVISIONING and the claim
-                // query holds its queue until this finishes.
-                //
-                // A deduplicated create provisions nothing: the workspace it
-                // would build already exists, and building it twice would clone
-                // over a checkout the thread may already be working in.
-                if !repos.is_empty() {
+                // A deduplicated create fills nothing: the workspace it would
+                // build already exists, and building it twice would clone over a
+                // checkout the thread may already be working in.
+                if workspace_settings.repos.is_empty() {
+                    // Nothing to clone, so this thread is IDLE the moment it is
+                    // created and a turn may be queued against it the moment the
+                    // caller reads this response. Its instruction files are three
+                    // small writes, and deferring them would race that first turn
+                    // for no gain.
                     satellite
                         .provisioner
-                        .spawn(stored.thread.thread_id.clone(), repos);
+                        .write_instructions(&stored.thread.thread_id, &workspace_settings)
+                        .await;
+                } else {
+                    // Behind the response rather than inside it. Cloning three
+                    // repos and running their installs is minutes of work, and
+                    // holding the create open for it would make the satellite's
+                    // most ordinary call its slowest. The thread opens
+                    // PROVISIONING and the claim query holds its queue until
+                    // this finishes.
+                    satellite
+                        .provisioner
+                        .spawn(stored.thread.thread_id.clone(), workspace_settings);
                 }
             }
 

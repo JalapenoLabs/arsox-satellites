@@ -23,6 +23,16 @@
 //! A thread that declares no repos has nothing to provision and opens `IDLE`,
 //! exactly as it did before any of this existed.
 //!
+//! # Every workspace carries its instructions
+//!
+//! Repos are optional. `AGENTS.md` and its two harness pointers are not: they
+//! are how an operator's prompt reaches an agent at all, so they are written for
+//! every thread, whether it declared a repo or not. A thread with no repos never
+//! provisions, so [`Provisioner::write_instructions`] is called on its way out
+//! of the create request instead: it is IDLE the moment it is created, and
+//! anything deferred would race its first turn. The precedence order the file is
+//! assembled in lives in the `instructions` module.
+//!
 //! # Failure is loud, and it is two different things
 //!
 //! A repo that will not clone leaves a workspace the thread cannot work in, so
@@ -37,9 +47,11 @@
 //! create request has long since answered, which is precisely why incidents
 //! exist.
 
+mod instructions;
 mod repos;
 mod setup;
 
+pub use instructions::write_instructions;
 pub use repos::directory_name;
 
 use crate::store::{ProvisionOutcome, Store};
@@ -47,7 +59,7 @@ use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
 use arsox_sdk::proto::incident::v1::{Disposition, Incident};
-use arsox_sdk::proto::settings::v1::Repo;
+use arsox_sdk::proto::settings::v1::{Repo, ThreadSettings};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -127,6 +139,12 @@ pub enum WorkspaceError {
 
     #[error("could not remove {path}")]
     Remove {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
+    #[error("could not write {path}")]
+    Write {
         path: PathBuf,
         source: std::io::Error,
     },
@@ -359,11 +377,11 @@ impl Provisioner {
     /// The create request returns the moment the row is written. Everything the
     /// thread needs to work arrives behind it, and the thread's `PROVISIONING`
     /// state is what stops a turn starting in the meantime.
-    pub fn spawn(&self, thread_id: String, repos: Vec<Repo>) {
+    pub fn spawn(&self, thread_id: String, settings: ThreadSettings) {
         let provisioner = self.clone();
 
         tokio::spawn(async move {
-            provisioner.provision(&thread_id, &repos).await;
+            provisioner.provision(&thread_id, &settings).await;
         });
     }
 
@@ -401,10 +419,7 @@ impl Provisioner {
         );
 
         for thread in interrupted {
-            let repos = thread
-                .settings
-                .map(|settings| settings.repos)
-                .unwrap_or_default();
+            let settings = thread.settings.unwrap_or_default();
 
             if let Err(error) =
                 remove_thread_directory(&self.workspace_root, &thread.thread_id).await
@@ -419,22 +434,68 @@ impl Provisioner {
                 continue;
             }
 
-            self.spawn(thread.thread_id, repos);
+            self.spawn(thread.thread_id, settings);
         }
     }
 
-    /// Clones the thread's repos, records what went wrong, and releases it.
+    /// Writes the thread's instruction files, recording rather than raising a
+    /// failure.
+    ///
+    /// A workspace whose instructions could not be written is degraded rather
+    /// than unusable: the agents come up and meet the satellite's defaults
+    /// instead of the operator's prompt. That is worth an incident and is not
+    /// worth parking a thread over, and there is nowhere to return it to in
+    /// either case.
+    pub async fn write_instructions(&self, thread_id: &str, settings: &ThreadSettings) {
+        let Err(error) =
+            instructions::write_instructions(&self.workspace_root, thread_id, settings).await
+        else {
+            return;
+        };
+
+        tracing::error!(
+            event.name = "workspace.instructions.failed",
+            thread.id = thread_id,
+            "could not write the thread's instruction files: {error}",
+        );
+
+        self.report(
+            thread_id,
+            &ProvisionFailure {
+                code: ErrorCode::Internal,
+                fatal: false,
+                // The same volume will refuse the same write next time.
+                retryable: false,
+                repo: String::new(),
+                command: None,
+                exit_code: None,
+                message: format!("could not write the thread's instruction files: {error}"),
+                output: String::new(),
+            },
+        )
+        .await;
+    }
+
+    /// Fills the thread's workspace, records what went wrong, and releases it.
     ///
     /// Never returns a failure. There is nobody left to return one to: the
     /// create request answered long ago, which is why every outcome here becomes
     /// an incident instead.
-    pub async fn provision(&self, thread_id: &str, repos: &[Repo]) {
+    pub async fn provision(&self, thread_id: &str, settings: &ThreadSettings) {
+        let repos = &settings.repos;
+
         tracing::info!(
             event.name = "workspace.provision.started",
             thread.id = thread_id,
             repo.count = repos.len(),
             "provisioning a workspace with {{repo.count}} repos",
         );
+
+        // Before the clones rather than after them, because a repo that will not
+        // clone ends provisioning where it fails. The thread is parked with its
+        // workspace either way, and an operator looking at that workspace should
+        // find the instructions it was created with.
+        self.write_instructions(thread_id, settings).await;
 
         let report = match provision_repos(&self.workspace_root, thread_id, repos).await {
             Ok(report) => report,

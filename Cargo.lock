@@ -43,6 +43,7 @@ dependencies = [
  "axum",
  "chrono",
  "futures-util",
+ "libc",
  "mimalloc",
  "prost",
  "prost-types",
@@ -57,6 +58,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

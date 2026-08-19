@@ -169,6 +169,66 @@ the harness is torn down, the work it committed survives, the events it already
 produced stay in the log, and the result carries the code for the ceiling that
 stopped it. See [the proxy doc](./llm-proxy.md#counting-and-refusing).
 
+### Permissions reach the harness as flags
+
+A harness launched with `--print` cannot answer a permission prompt. Without
+permission flags every file edit and every shell command it tries is refused, so
+a non-interactive turn can talk about work but never do any. The spawn maps the
+thread's permissions onto flags to close that.
+
+**These flags are advisory.** The harness applies them to itself, exactly as
+`AGENTS.md` shapes behavior without constraining it. An agent granted a shell
+reaches everything the container reaches, whatever else the flags say.
+
+The deterministic layer the README describes is separate, unbuilt work: the exec
+broker that rejects a command by exact argv, the egress proxy the container has
+no route around, the root-owned `pre-push` hook. **Until those land the container
+is the only real boundary**, and none of them is something `--permission-mode`
+can switch off, so they will enforce underneath these flags rather than through
+them.
+
+| Setting | Flag | Note |
+|---|---|---|
+| nothing declared | `--permission-mode bypassPermissions` | the documented default is the preset, so this is where both land |
+| `exec: PRESET` | `--permission-mode bypassPermissions` | the curated list belongs to the broker, which does not exist yet |
+| `exec: NONE` | `--permission-mode acceptEdits --disallowedTools Bash` | the shell goes, edits stay |
+| `exec: CUSTOM` | `--permission-mode acceptEdits --allowedTools Bash(cmd),Bash(cmd *)` | one pair of rules per command |
+| `allowed_commands` | the same pair of rules, added to whatever `exec` set | additive, which is the contract's own rule |
+| `web`, `additional_domains` | none | the egress proxy's, not a tool rule |
+| `allow_git_push`, `protected_branches` | none | the `pre-push` hook's, not a tool rule |
+
+Three decisions in that table are worth their reasoning.
+
+**The default is `bypassPermissions` because the narrower posture protects
+nothing.** The alternative grants the shell and withholds the rest, and an agent
+holding a shell reaches every byte and socket the container does, so refusing it
+`WebFetch` is a formality it answers with `curl`. What the narrower posture does
+buy is failure: under `--print` a gate cannot be answered, so the first tool
+nobody thought to list is refused mid-turn and the agent spends the rest of the
+turn working around a restriction that was never intended. The honest default
+matches the boundary that actually exists.
+
+**An allowed command becomes two rules.** The CLI matches `Bash(yarn install)`
+exactly and `Bash(yarn install *)` only with something following it. A thread
+that allowed `yarn install` means both, and emitting one form would refuse the
+bare invocation of the command it just permitted. The CLI also accepts a `:*`
+prefix form; its own validator calls that legacy, so the wildcard spelling is
+what the satellite emits.
+
+**Egress and push policy are not rendered as tool rules.** A push can be spelled
+a dozen ways in argv and a protected ref is frequently not in the argv at all, so
+a rule that matched the obvious spelling would advertise an enforcement a rename
+defeats. Those two stay with the infrastructure that can actually hold them.
+
+`--permission-mode` never reached the contract for the same reason. It is a
+Claude spelling for an advisory gate, and `Permissions` documents itself as
+deterministic controls; putting one in the other would leak a harness into the
+wire format and promise an enforcement the satellite does not perform. The
+posture is derived from what the contract already states, and it is derived
+inside the Claude arm of the spawn, because handing `--permission-mode` to
+`codex exec` would fail the launch rather than restrict it. Writing the Codex
+spawn path means mapping the same posture onto Codex's own approval flags.
+
 ### The agent's environment is built, not inherited
 
 **No `ARSOX_*` variable reaches an agent.** A spawned process inherits its
@@ -213,6 +273,9 @@ test.
   cannot start one. That spawn path also has to take the turn summary from the
   last `agent.message`, since Codex's closing message is an item rather than
   part of `turn.completed` and a per-line mapper holds no state to fold it in.
+- **Deterministic permission enforcement.** The exec broker, the egress proxy,
+  and the root-owned `pre-push` hook. The flags above are advisory until these
+  exist, and they remain advisory afterward: these enforce underneath them.
 - **Codex over its app-server protocol.** It exposes command, patch, and network
   approvals as first-class requests, which is a better fit for the permission
   model than a one-way event stream.

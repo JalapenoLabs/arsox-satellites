@@ -45,6 +45,53 @@ writing into a directory that no longer exists.
 A thread that declares no repos has nothing to provision and opens `IDLE`,
 exactly as it did before provisioning existed.
 
+## Instruction files
+
+Repos are optional. `AGENTS.md` is not. Every thread's workspace carries it,
+alongside two pointer files:
+
+```
+/workspace/<thread-id>/
+  AGENTS.md      the real instruction file
+  CLAUDE.md      pointer at AGENTS.md
+  CODEX.md       pointer at AGENTS.md
+```
+
+The pointers hold a bare `@/workspace/<thread-id>/AGENTS.md` import, which is
+how one set of instructions reaches the runner whichever harness is underneath.
+The path is the thread's real workspace directory rather than a hardcoded
+`/workspace`, so an agent is told where it is rather than where it would have
+been.
+
+`AGENTS.md` is assembled from ordered layers, most general first:
+
+1. **The Arsox header.** Where the workspace is, which thread this is, that
+   repos live under `repos/`, and that everything below the header is the
+   operator's. Not overridable.
+2. **The agents repo.** Fleet-wide conventions. On the roadmap; the seam it
+   slots into is `workspace::instructions::layers`.
+3. **The thread's `prompt` setting.** Task-specific instruction. A thread with
+   no prompt gets the header alone.
+
+Most specific wins, so a thread can override its fleet and the fleet can
+override nothing the satellite needs to hold. Everything below the header is
+advisory: it shapes what agents do and never constrains it.
+
+The files are written before a thread is released to work, and writing them
+overwrites rather than merges, so a workspace rebuilt after a restart carries
+exactly the three files a first provisioning would have left.
+
+A thread with repos gets them at the top of provisioning, ahead of the clones,
+because a repo that will not clone ends provisioning where it fails and the
+thread is parked with its workspace either way. A thread with no repos never
+provisions, so it gets them on its way out of the create request: it is `IDLE`
+the moment it is created, and anything deferred would race its first turn.
+Three small writes cost the create request nothing.
+
+Failing to write them is `INTERNAL`, `degraded`. The agents come up and meet the
+satellite's defaults instead of the operator's prompt, which is worth an
+incident and is not worth parking a thread over.
+
 ## Where a thread lands
 
 | Outcome | Thread state | Why |
@@ -144,9 +191,8 @@ given is masked by value.
 
 ## Roadmap
 
-- The agents repo, cloned once into `.agents` and materialized into `.claude`
-  and `.codex`.
-- `AGENTS.md` assembly, and the `CLAUDE.md` and `CODEX.md` pointers.
+- The agents repo, cloned once into `.agents`, materialized into `.claude` and
+  `.codex`, and folded into `AGENTS.md` as layer 2.
 - Issue and ticket prefetch into `issues/`.
 - Per-member worktrees under `members/`, cut from the single clone in `repos/`.
 - Per-thread disk quotas, and `workspace_bytes` on a thread summary.

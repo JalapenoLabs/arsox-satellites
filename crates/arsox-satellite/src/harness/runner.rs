@@ -340,6 +340,9 @@ impl Runner {
                 base_url: self.proxy.base_url_for(&token),
                 token: token.clone(),
             }),
+            // Read per turn rather than held on the runner, so a thread's
+            // posture is whatever its settings say now.
+            claimed.settings.permissions.as_ref(),
         );
 
         // Revoked on every path out of this function, including the early

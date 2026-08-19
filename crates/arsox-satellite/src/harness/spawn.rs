@@ -5,8 +5,32 @@
 //! Kept apart from the runner so what gets spawned can be asserted in a test
 //! without spawning anything, and so pointing the satellite at a stand-in
 //! harness is a configuration change rather than a code path.
+//!
+//! # Permissions are advisory here, and only here
+//!
+//! A harness launched with `--print` cannot answer a permission prompt, so
+//! without permission flags every file edit and every shell command it tries is
+//! refused and a non-interactive turn cannot do real work. The flags this module
+//! builds are what make a turn useful.
+//!
+//! They are **advisory**, exactly as `AGENTS.md` is. The harness applies them to
+//! itself, so they shape what an agent reaches for and never constrain what it
+//! can reach: a shell it is granted can run anything the container can run.
+//! `Permissions` in the contract documents itself as deterministic controls
+//! enforced by infrastructure the agent cannot touch, and none of that
+//! infrastructure exists yet. The exec broker, the egress proxy, and the
+//! root-owned `pre-push` hook are separate future work, and until they land
+//! **the container is the only real boundary**.
+//!
+//! This is why `--permission-mode` never reached the contract. It is a Claude
+//! spelling for an advisory gate, and putting it in a message whose whole
+//! premise is determinism would leak one harness into the wire format and
+//! promise an enforcement the satellite does not perform. The flags are derived
+//! here from what the contract already states instead, and `docs/harness.md`
+//! carries the setting-to-flag table.
 
 use arsox_sdk::proto::harness::v1::Harness;
+use arsox_sdk::proto::settings::v1::{ExecAccess, Permissions};
 use std::path::PathBuf;
 
 /// Overrides the Claude CLI binary.
@@ -58,6 +82,10 @@ pub enum Session {
 }
 
 /// Builds the command that runs one turn.
+///
+/// `permissions` are the thread's, absent when it declared none, and decide the
+/// posture the harness runs under. See the module docs for what "posture" buys
+/// and what it deliberately does not.
 #[must_use]
 pub fn command_for(
     harness: Harness,
@@ -65,13 +93,20 @@ pub fn command_for(
     session: &Session,
     working_dir: PathBuf,
     model_access: Option<ModelAccess>,
+    permissions: Option<&Permissions>,
 ) -> HarnessCommand {
     match harness {
         // Claude is the default and the only harness implemented today, so
         // every arm lands in the same place. Codex gets its own the moment its
         // mapper exists, and this match is where it will appear.
+        //
+        // Permission flags are built inside the Claude arm rather than out here
+        // for that reason: `--permission-mode` is a Claude spelling, and handing
+        // it to `codex exec` would fail the launch rather than restrict it.
+        // Codex expresses approvals through its own flags, and mapping the same
+        // posture onto them is part of writing that arm.
         Harness::Unspecified | Harness::Claude | Harness::Codex => {
-            claude_command(prompt, session, working_dir, model_access)
+            claude_command(prompt, session, working_dir, model_access, permissions)
         }
     }
 }
@@ -81,6 +116,7 @@ fn claude_command(
     session: &Session,
     working_dir: PathBuf,
     model_access: Option<ModelAccess>,
+    permissions: Option<&Permissions>,
 ) -> HarnessCommand {
     let mut args = vec![
         "--print".to_owned(),
@@ -102,6 +138,8 @@ fn claude_command(
         }
     }
 
+    args.extend(claude_permission_args(&posture_for(permissions)));
+
     let mut env = agent_environment();
 
     // Pointed at the satellite's own proxy rather than the provider. The token
@@ -118,6 +156,179 @@ fn claude_command(
         working_dir,
         env,
     }
+}
+
+/// A Claude CLI permission mode, spelled the way the CLI spells it.
+///
+/// The CLI offers `acceptEdits`, `auto`, `bypassPermissions`, `manual`,
+/// `dontAsk`, and `plan`. Only the two the satellite derives are named here: a
+/// variant nothing constructs is a spelling nobody checked against the CLI, and
+/// a wrong one fails the launch rather than the permission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PermissionMode {
+    /// File edits are approved without asking. Every other tool still gates,
+    /// which under `--print` means it is refused.
+    AcceptEdits,
+
+    /// Every tool call is approved without asking.
+    BypassPermissions,
+}
+
+impl PermissionMode {
+    /// The exact value `--permission-mode` accepts.
+    const fn as_flag(self) -> &'static str {
+        match self {
+            Self::AcceptEdits => "acceptEdits",
+            Self::BypassPermissions => "bypassPermissions",
+        }
+    }
+}
+
+/// The advisory posture one turn's harness runs under.
+///
+/// Held as a value rather than assembled inline so the decision ("what did the
+/// thread ask for") is separable from the spelling ("what does this CLI call
+/// it"), which is what lets a second harness map the same posture onto its own
+/// flags without re-deriving it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Posture {
+    mode: PermissionMode,
+
+    /// Tool rules approved without asking, on top of the mode.
+    allowed: Vec<String>,
+
+    /// Tool rules refused outright.
+    disallowed: Vec<String>,
+}
+
+impl Posture {
+    /// The posture a thread that declared no exec policy runs under.
+    ///
+    /// `bypassPermissions`, and the reasoning is worth stating because the flag
+    /// reads alarming out of context.
+    ///
+    /// The alternative is a gate that grants the shell and withholds everything
+    /// else. That buys nothing: an agent holding a shell already reaches every
+    /// byte and every socket the container reaches, so refusing it `WebFetch` is
+    /// a formality it can route around with `curl`. What the narrower posture
+    /// does buy is failure. Under `--print` a gate cannot be answered, so the
+    /// first tool nobody thought to list is refused mid-turn, and the agent
+    /// spends the rest of the turn working around a restriction that was never
+    /// intended and protects nothing.
+    ///
+    /// So the honest default is the one that matches the boundary that actually
+    /// exists. Today that boundary is the container, and a satellite is a
+    /// container built to be handed to an agent. When the exec broker, the
+    /// egress proxy, and the `pre-push` hook land, they enforce underneath this
+    /// flag rather than through it: none of them is something `--permission-mode`
+    /// can switch off.
+    fn unrestricted() -> Self {
+        Self {
+            mode: PermissionMode::BypassPermissions,
+            allowed: Vec::new(),
+            disallowed: Vec::new(),
+        }
+    }
+
+    /// The posture for a thread that named which commands it wants.
+    ///
+    /// Edits stay approved, because the exec policy is about the shell and a
+    /// thread that restricted its commands did not ask to stop editing files.
+    /// With no command named, the shell is refused by name rather than left to
+    /// be refused by silence, so the harness reports a denial an operator can
+    /// read instead of an unexplained tool failure.
+    fn named(allowed: Vec<String>) -> Self {
+        let disallowed = if allowed.is_empty() {
+            vec!["Bash".to_owned()]
+        } else {
+            Vec::new()
+        };
+
+        Self {
+            mode: PermissionMode::AcceptEdits,
+            allowed,
+            disallowed,
+        }
+    }
+}
+
+/// Derives the posture from what the thread declared.
+///
+/// Only the exec policy reaches the harness. The rest of `Permissions` is
+/// deterministic by nature and has no honest advisory equivalent: a domain
+/// allowlist belongs to the egress proxy, and a push policy belongs to the
+/// `pre-push` hook, since a push can be spelled a dozen ways in argv and a
+/// protected ref is frequently not in the argv at all. Expressing either as a
+/// tool rule would advertise an enforcement that a rename defeats.
+fn posture_for(permissions: Option<&Permissions>) -> Posture {
+    let Some(permissions) = permissions else {
+        return Posture::unrestricted();
+    };
+
+    let exec = ExecAccess::try_from(permissions.exec).unwrap_or(ExecAccess::Unspecified);
+
+    // `allowed_commands` is additive on top of whatever base `exec` sets, which
+    // is the contract's own rule. Under the preset the base is already
+    // everything, so the additions are covered rather than dropped.
+    let allowed = permissions
+        .allowed_commands
+        .iter()
+        .map(|command| command.trim())
+        .filter(|command| !command.is_empty())
+        .flat_map(bash_rules)
+        .collect();
+
+    match exec {
+        // Unspecified means "the documented default", and the documented default
+        // is the preset. Both land here so leaving the field alone and naming
+        // the preset cannot behave differently.
+        //
+        // The preset is a curated command list the exec broker will hold, and no
+        // broker exists yet, so there is no list to hand the harness. Granting
+        // the shell overshoots what the preset will eventually mean, and it is
+        // the overshoot the contract already documents as pending rather than a
+        // new one invented here.
+        ExecAccess::Unspecified | ExecAccess::Preset => Posture::unrestricted(),
+        ExecAccess::None | ExecAccess::Custom => Posture::named(allowed),
+    }
+}
+
+/// The tool rules that let one command run, with or without arguments.
+///
+/// Two rules rather than one, because the CLI matches `Bash(yarn install)`
+/// exactly and `Bash(yarn install *)` only with something following it. A thread
+/// that named `yarn install` means both, and granting one form would refuse the
+/// bare invocation of the very command it allowed.
+///
+/// The wildcard spelling is the current one. The CLI also accepts a `:*` prefix
+/// form and its own validator calls that legacy, so this emits what `claude
+/// --help` documents today.
+fn bash_rules(command: &str) -> [String; 2] {
+    [format!("Bash({command})"), format!("Bash({command} *)")]
+}
+
+/// Renders a posture as Claude CLI arguments.
+///
+/// Each list is one argument rather than several. The CLI accepts a comma or
+/// space separated list and the option is variadic, so a rule per argument is a
+/// parser question nobody should have to answer while reading a bug report.
+fn claude_permission_args(posture: &Posture) -> Vec<String> {
+    let mut args = vec![
+        "--permission-mode".to_owned(),
+        posture.mode.as_flag().to_owned(),
+    ];
+
+    if !posture.allowed.is_empty() {
+        args.push("--allowedTools".to_owned());
+        args.push(posture.allowed.join(","));
+    }
+
+    if !posture.disallowed.is_empty() {
+        args.push("--disallowedTools".to_owned());
+        args.push(posture.disallowed.join(","));
+    }
+
+    args
 }
 
 /// One turn's admission to the model, by way of the satellite's proxy.
@@ -367,6 +578,7 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             None,
+            None,
         );
 
         assert!(command.args.contains(&"--session-id".to_owned()));
@@ -389,6 +601,7 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             None,
+            None,
         );
 
         assert!(command.args.contains(&"--resume".to_owned()));
@@ -408,8 +621,187 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             None,
+            None,
         );
 
         assert!(command.args.contains(&"; rm -rf / #".to_owned()));
+    }
+
+    /// The command a permission test builds, with only the posture varying.
+    fn command_with(permissions: Option<&Permissions>) -> HarnessCommand {
+        command_for(
+            Harness::Claude,
+            "do the thing",
+            &Session::Start {
+                session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            None,
+            permissions,
+        )
+    }
+
+    /// The value the CLI was given for `flag`, when it was given one.
+    fn value_of(command: &HarnessCommand, flag: &str) -> Option<String> {
+        command
+            .args
+            .iter()
+            .position(|argument| argument == flag)
+            .and_then(|index| command.args.get(index + 1))
+            .cloned()
+    }
+
+    #[test]
+    fn a_thread_that_declares_nothing_can_still_edit_files_and_run_commands() {
+        // Without this the harness is launched with `--print` and no posture, a
+        // permission prompt nothing can answer refuses every edit and every
+        // command, and the satellite cannot do the work it exists to do.
+        let command = command_with(None);
+
+        assert_eq!(
+            value_of(&command, "--permission-mode"),
+            Some("bypassPermissions".to_owned()),
+            "the default posture has to permit real work in the container"
+        );
+        assert!(
+            !command.args.contains(&"--disallowedTools".to_owned()),
+            "a thread that declared nothing had nothing refused on its behalf"
+        );
+    }
+
+    #[test]
+    fn declaring_the_preset_reads_the_same_as_declaring_nothing() {
+        // Unspecified means "the documented default" and the documented default
+        // is the preset, so the two cannot diverge without the contract's own
+        // default rule quietly breaking.
+        let preset = Permissions {
+            exec: ExecAccess::Preset.into(),
+            ..Permissions::default()
+        };
+
+        assert_eq!(command_with(Some(&preset)).args, command_with(None).args);
+    }
+
+    #[test]
+    fn an_explicit_exec_policy_overrides_the_default_posture() {
+        let custom = Permissions {
+            exec: ExecAccess::Custom.into(),
+            allowed_commands: vec!["yarn install".to_owned()],
+            ..Permissions::default()
+        };
+
+        let command = command_with(Some(&custom));
+
+        assert_eq!(
+            value_of(&command, "--permission-mode"),
+            Some("acceptEdits".to_owned()),
+            "a thread that named its commands did not ask for a blanket bypass"
+        );
+        assert!(
+            !command.args.contains(&"bypassPermissions".to_owned()),
+            "the default mode survived a thread that declared its own"
+        );
+    }
+
+    #[test]
+    fn an_allowed_command_is_granted_both_bare_and_with_arguments() {
+        let custom = Permissions {
+            exec: ExecAccess::Custom.into(),
+            // Trimmed and skipped respectively, so a list a human typed does not
+            // become `Bash()`, which the CLI rejects outright.
+            allowed_commands: vec![" yarn install ".to_owned(), String::new(), "gh".to_owned()],
+            ..Permissions::default()
+        };
+
+        let command = command_with(Some(&custom));
+
+        assert_eq!(
+            value_of(&command, "--allowedTools"),
+            Some("Bash(yarn install),Bash(yarn install *),Bash(gh),Bash(gh *)".to_owned()),
+            "granting only the wildcard form would refuse the bare command a thread allowed"
+        );
+        assert!(
+            !command.args.contains(&"--disallowedTools".to_owned()),
+            "commands outside the list are refused by absence, not by a blanket denial"
+        );
+    }
+
+    #[test]
+    fn a_thread_with_no_shell_keeps_its_ability_to_edit_files() {
+        // The exec policy is about the shell. A thread that turned commands off
+        // did not ask to stop editing files, and a posture that took both would
+        // make the setting far broader than it reads.
+        let none = Permissions {
+            exec: ExecAccess::None.into(),
+            ..Permissions::default()
+        };
+
+        let command = command_with(Some(&none));
+
+        assert_eq!(
+            value_of(&command, "--permission-mode"),
+            Some("acceptEdits".to_owned())
+        );
+        assert_eq!(
+            value_of(&command, "--disallowedTools"),
+            Some("Bash".to_owned()),
+            "the shell should be refused by name, so the denial is readable"
+        );
+        assert!(!command.args.contains(&"--allowedTools".to_owned()));
+    }
+
+    #[test]
+    fn commands_are_additive_on_top_of_whatever_the_exec_policy_set() {
+        // The contract says `allowed_commands` adds to the base `exec` chose, so
+        // naming commands beside a base of nothing is a grant rather than a
+        // contradiction to resolve.
+        let none_but_one = Permissions {
+            exec: ExecAccess::None.into(),
+            allowed_commands: vec!["git status".to_owned()],
+            ..Permissions::default()
+        };
+
+        let command = command_with(Some(&none_but_one));
+
+        assert_eq!(
+            value_of(&command, "--allowedTools"),
+            Some("Bash(git status),Bash(git status *)".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_permission_flags_are_a_claude_spelling_rather_than_a_shared_one() {
+        // `--permission-mode` is Claude's. Handing it to `codex exec` would fail
+        // the launch rather than restrict it, so the flags are appended inside
+        // the Claude arm and nowhere above the match. Codex lands in that arm
+        // today only because it has no spawn path of its own; writing one means
+        // mapping this same posture onto Codex's approval flags.
+        let command = command_with(None);
+        let flags = claude_permission_args(&posture_for(None));
+
+        assert!(
+            command.args.ends_with(&flags),
+            "the Claude command should carry exactly the Claude permission flags"
+        );
+    }
+
+    #[test]
+    fn a_deterministic_control_is_never_dressed_up_as_a_tool_rule() {
+        // Egress and push policy are enforced by the proxy and the pre-push
+        // hook. Rendering either as a tool rule would advertise an enforcement
+        // that renaming a command defeats.
+        use arsox_sdk::proto::settings::v1::WebAccess;
+
+        let deterministic = Permissions {
+            web: WebAccess::None.into(),
+            additional_domains: vec!["example.com".to_owned()],
+            allow_git_push: Some(false),
+            protected_branches: vec!["main".to_owned()],
+            ..Permissions::default()
+        };
+
+        let command = command_with(Some(&deterministic));
+
+        assert_eq!(command.args, command_with(None).args);
     }
 }

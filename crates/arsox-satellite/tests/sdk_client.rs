@@ -200,6 +200,111 @@ async fn a_thread_can_be_created_read_listed_and_destroyed() {
 }
 
 #[tokio::test]
+async fn status_reports_the_threads_it_holds_and_the_disk_they_sit_on() {
+    let url = start().await;
+    let client = Client::connect(&url, SECRET).await.expect("should connect");
+
+    let created = client
+        .threads()
+        .create(settings())
+        .await
+        .expect("should create");
+
+    let status = client.status().await.expect("should report status");
+
+    assert_eq!(status.max_concurrent_threads, 2);
+    assert_eq!(status.running_threads, 0, "nothing has been queued yet");
+    assert!(
+        status
+            .threads
+            .iter()
+            .any(|summary| summary.thread_id == created.thread.thread_id),
+        "a live thread is one the satellite is holding"
+    );
+
+    let disk = status
+        .disk
+        .expect("a real volume answers what it holds and what it has left");
+    assert!(disk.available_bytes > 0, "a writable volume has room left");
+    // The satellite's own database sits under this test's workspace root, so the
+    // walk finds bytes whether or not a thread has provisioned anything.
+    assert!(disk.workspace_bytes > 0);
+    assert!(disk.database_bytes > 0);
+    // No satellite-wide ceiling is configured, and absent says exactly that
+    // rather than claiming a ceiling of zero.
+    assert_eq!(disk.aggregate_quota_bytes, None);
+
+    created.handle.destroy().await.expect("should destroy");
+
+    let after = client.status().await.expect("should report status");
+    assert!(
+        !after
+            .threads
+            .iter()
+            .any(|summary| summary.thread_id == created.thread.thread_id),
+        "a destroyed thread is not one the satellite still holds"
+    );
+}
+
+#[tokio::test]
+async fn status_counts_a_turn_in_flight_and_stops_counting_it_afterwards() {
+    let url = start().await;
+    let client = Client::connect(&url, SECRET).await.expect("should connect");
+
+    let created = client
+        .threads()
+        .create(settings())
+        .await
+        .expect("should create");
+
+    // The stand-in harness replays its transcript and then holds the process
+    // open, so the turn is still in flight when status is polled rather than
+    // finishing before the first poll lands.
+    let turn = created
+        .handle
+        .start_turn("replay the probe [[stall=3000]]")
+        .await
+        .expect("should queue");
+
+    let running = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let status = client.status().await.expect("should report status");
+            if status.running_threads > 0 {
+                return status;
+            }
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+    })
+    .await
+    .expect("the runner should claim the turn");
+
+    assert_eq!(running.running_threads, 1);
+
+    let summary = running
+        .threads
+        .iter()
+        .find(|summary| summary.thread_id == created.thread.thread_id)
+        .expect("the running thread is listed");
+    assert_eq!(summary.state, i32::from(ThreadState::Running));
+    assert!(
+        summary.current_turn_id.is_some(),
+        "a running thread names the turn it is running"
+    );
+
+    let result = tokio::time::timeout(Duration::from_secs(30), turn.result())
+        .await
+        .expect("should not time out")
+        .expect("should report a result");
+    assert_eq!(result.status, i32::from(TurnStatus::Completed));
+
+    let settled = client.status().await.expect("should report status");
+    assert_eq!(
+        settled.running_threads, 0,
+        "a finished turn frees its slot against the cap"
+    );
+}
+
+#[tokio::test]
 async fn a_second_client_can_attach_to_a_thread_it_did_not_create() {
     // The property a horizontally scaled application depends on: a replica that
     // dies mid-turn costs nothing, because whichever replica comes up next can

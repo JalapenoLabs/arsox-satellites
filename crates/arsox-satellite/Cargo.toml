@@ -59,6 +59,17 @@ tracing-subscriber.workspace = true
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
 mimalloc = "0.1"
 
+# `std` has no free-space API, and /v1/status reports what the volume has left.
+# The platform call is reached through the established binding crate rather than
+# a hand-written `extern` block: the `statvfs` layout differs by architecture,
+# and getting that wrong is undefined behavior rather than a wrong number.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# The same measurement on the platform the satellite is developed on.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [ "Win32_Storage_FileSystem" ] }
+
 [lints]
 workspace = true
 

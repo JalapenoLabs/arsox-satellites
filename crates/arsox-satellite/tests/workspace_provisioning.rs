@@ -9,7 +9,7 @@
 //! land in the database.
 
 use arsox_satellite::store::{NewThread, NewTurn, Store};
-use arsox_satellite::workspace::{Provisioner, provision_repos};
+use arsox_satellite::workspace::{Provisioner, provision_repos, write_instructions};
 use arsox_sdk::proto::common::v1::Secret;
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
@@ -124,6 +124,20 @@ fn repo(name: &str, url: &str) -> Repo {
         url: url.to_owned(),
         ..Repo::default()
     }
+}
+
+/// The settings a thread would carry, with only what provisioning reads.
+fn settings(repos: Vec<Repo>) -> ThreadSettings {
+    ThreadSettings {
+        repos,
+        ..ThreadSettings::default()
+    }
+}
+
+/// A thread's assembled `AGENTS.md`.
+fn agents_file(workspace: &Path, thread_id: &str) -> String {
+    std::fs::read_to_string(workspace.join(thread_id).join("AGENTS.md"))
+        .expect("every thread carries an AGENTS.md")
 }
 
 /// Every file in a tree, so a secret can be hunted for rather than assumed
@@ -331,7 +345,7 @@ async fn a_clone_failure_becomes_an_incident_and_parks_the_thread_with_its_queue
     );
 
     provisioner(&store, &workspace)
-        .provision(&thread.thread_id, &[repo("api", &missing)])
+        .provision(&thread.thread_id, &settings(vec![repo("api", &missing)]))
         .await;
 
     // Paused rather than destroyed: the thread keeps its queue and its
@@ -408,7 +422,7 @@ async fn a_provisioned_thread_goes_idle_and_releases_the_turns_that_waited() {
         .expect("should queue");
 
     provisioner(&store, &workspace)
-        .provision(&thread.thread_id, &repos)
+        .provision(&thread.thread_id, &settings(repos))
         .await;
 
     let ready = store.thread(&thread.thread_id).await.expect("should read");
@@ -535,6 +549,144 @@ async fn a_workspace_left_half_built_by_a_restart_is_rebuilt_rather_than_strande
         !checkout.join("half-written").exists(),
         "the half-built subtree goes before the clone is attempted again"
     );
+}
+
+#[tokio::test]
+async fn a_provisioned_thread_carries_agents_md_and_both_harness_pointers() {
+    // The pointers are what make one set of instructions reach the runner
+    // whichever harness is underneath, so a thread missing one of them runs
+    // half the time with no instruction at all.
+    let fixtures = scratch::Dir::new("origin");
+    let workspace = scratch::Dir::new("workspace");
+    let store = Store::open_in_memory().await.expect("should open");
+    let url = origin(&fixtures.path().join("service"), "README.md");
+
+    let thread = thread_id();
+    provisioner(&store, &workspace)
+        .provision(&thread, &settings(vec![repo("api", &url)]))
+        .await;
+
+    let directory = workspace.path().join(&thread);
+    for file in ["AGENTS.md", "CLAUDE.md", "CODEX.md"] {
+        assert!(directory.join(file).is_file(), "{file} should be written");
+    }
+
+    // Written alongside the clone rather than instead of it.
+    assert!(directory.join("repos/api/README.md").is_file());
+}
+
+#[tokio::test]
+async fn a_thread_that_declares_no_repos_still_gets_its_instruction_files() {
+    // Repos are not required to perform any work. Instructions are how the
+    // operator's prompt reaches an agent at all, so they are not optional.
+    let workspace = scratch::Dir::new("workspace");
+    let thread = thread_id();
+
+    write_instructions(workspace.path(), &thread, &settings(Vec::new()))
+        .await
+        .expect("should write");
+
+    let directory = workspace.path().join(&thread);
+    for file in ["AGENTS.md", "CLAUDE.md", "CODEX.md"] {
+        assert!(directory.join(file).is_file(), "{file} should be written");
+    }
+    assert!(!directory.join("repos").exists(), "nothing was declared");
+}
+
+#[tokio::test]
+async fn the_arsox_header_precedes_the_operator_prompt() {
+    // Precedence, on disk. The satellite's facts are not overridable, and a
+    // prompt that landed above them would read as overriding them.
+    let workspace = scratch::Dir::new("workspace");
+    let thread = thread_id();
+
+    write_instructions(
+        workspace.path(),
+        &thread,
+        &ThreadSettings {
+            prompt: "Ship the parser and nothing else.".to_owned(),
+            ..settings(Vec::new())
+        },
+    )
+    .await
+    .expect("should write");
+
+    let assembled = agents_file(workspace.path(), &thread);
+    let header = assembled.find("# Arsox").expect("the header is present");
+    let prompt = assembled
+        .find("Ship the parser")
+        .expect("the prompt is present");
+
+    assert!(header < prompt, "{assembled}");
+    assert!(
+        assembled.contains(&thread),
+        "the header states the thread id"
+    );
+}
+
+#[tokio::test]
+async fn a_thread_with_no_prompt_gets_the_header_alone() {
+    let workspace = scratch::Dir::new("workspace");
+    let thread = thread_id();
+
+    write_instructions(workspace.path(), &thread, &settings(Vec::new()))
+        .await
+        .expect("should write");
+
+    let assembled = agents_file(workspace.path(), &thread);
+    assert!(assembled.starts_with("# Arsox"));
+    assert!(
+        assembled.trim_end().ends_with("this thread."),
+        "{assembled}"
+    );
+}
+
+#[tokio::test]
+async fn the_harness_pointers_reference_the_workspace_the_thread_actually_owns() {
+    // The path is computed from the real workspace rather than the container's
+    // `/workspace`, so an agent reading it is told where it is rather than where
+    // it would have been.
+    let workspace = scratch::Dir::new("workspace");
+    let thread = thread_id();
+
+    write_instructions(workspace.path(), &thread, &settings(Vec::new()))
+        .await
+        .expect("should write");
+
+    let directory = workspace.path().join(&thread);
+    let reference = format!("@{}/AGENTS.md", directory.display());
+
+    for file in ["CLAUDE.md", "CODEX.md"] {
+        let pointer = std::fs::read_to_string(directory.join(file)).expect("should read");
+        assert!(pointer.contains(&reference), "{file} says: {pointer}");
+    }
+}
+
+#[tokio::test]
+async fn provisioning_the_same_workspace_again_rewrites_the_instructions_in_place() {
+    // A restart rebuilds a half-built workspace, so these files are written more
+    // than once over a thread's life. Appending instead of overwriting would
+    // stack a second header on top of the first.
+    let workspace = scratch::Dir::new("workspace");
+    let thread = thread_id();
+    let declared = ThreadSettings {
+        prompt: "Ship the parser.".to_owned(),
+        ..settings(Vec::new())
+    };
+
+    write_instructions(workspace.path(), &thread, &declared)
+        .await
+        .expect("should write");
+    let first = agents_file(workspace.path(), &thread);
+
+    write_instructions(workspace.path(), &thread, &declared)
+        .await
+        .expect("should write again");
+
+    let second = agents_file(workspace.path(), &thread);
+    assert_eq!(first, second);
+    assert_eq!(second.matches("# Arsox").count(), 1, "{second}");
+    assert_eq!(second.matches("Ship the parser.").count(), 1, "{second}");
 }
 
 /// Waits for a thread to reach a state, or gives up.
