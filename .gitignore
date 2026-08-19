@@ -13,3 +13,4 @@ node_modules/
 
 # Local artifact downloads from the SDK examples
 /out/
+.mcp.json
