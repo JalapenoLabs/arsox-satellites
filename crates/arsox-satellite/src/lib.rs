@@ -17,12 +17,13 @@
 
 mod api;
 pub mod collector;
-mod commands;
+pub mod commands;
 pub mod disk;
 pub mod harness;
 pub mod proxy;
 pub mod store;
 pub mod stream;
+pub mod timeouts;
 pub mod workspace;
 
 use anyhow::{Context as _, Result, bail};

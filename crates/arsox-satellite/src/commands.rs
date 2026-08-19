@@ -33,9 +33,29 @@
 //! skipped rather than omitted. "Not run" and "found nothing" are different
 //! facts, and a report that cannot tell them apart is the silent failure the
 //! incident system exists to prevent.
+//!
+//! # Every command is bounded
+//!
+//! A command has no natural end. A test suite waiting on a prompt, an install
+//! against a remote that stopped answering, a build that deadlocked: each one
+//! holds its thread for the life of the process while looking exactly like work
+//! in progress. So every command runs under [`Execution::bound`], and one past
+//! it is killed and reported as a failure that says it timed out.
+//!
+//! **Killing the command kills the shell, and only the shell.** These run
+//! through `sh -c`, so `yarn install` is a grandchild of the satellite, and
+//! without a process group on Unix or a job object on Windows a grandchild
+//! outlives the parent that is killed above it. An orphan keeps running until
+//! the container stops. That is a real limit of what is built here rather than
+//! something to imply away: the bound reliably ends the satellite's *wait*, and
+//! reliably ends the shell, and process-group teardown is the separate piece of
+//! work that would end everything below it.
 
 use crate::harness::spawn::AgentVar;
 use std::path::Path;
+use std::process::Stdio;
+use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncReadExt as _};
 
 /// Output kept per command.
 ///
@@ -50,6 +70,50 @@ const MAX_CAPTURED_OUTPUT: usize = 16 * 1024;
 /// Distinct from any code a shell reports so "the shell is missing" never reads
 /// as "the command failed".
 pub(crate) const NOT_LAUNCHED: i32 = -1;
+
+/// Exit code recorded when a command was killed for exceeding its bound.
+///
+/// Its own code for the same reason [`NOT_LAUNCHED`] has one: "it never
+/// finished" and "it finished badly" lead a reader to look in different places,
+/// and a shared code would hide the first behind the second.
+pub(crate) const TIMED_OUT: i32 = -2;
+
+/// How a thread's declared commands run.
+///
+/// The environment and the bound travel together because every call site needs
+/// both, and a signature that took them separately is a signature that can be
+/// called with one. Setup commands and checkers are the same commands at two
+/// ends of a turn, so they run under the same pair.
+#[derive(Debug, Clone)]
+pub struct Execution {
+    /// The thread's declared variables, applied on top of the scrubbed
+    /// environment exactly as they are for the agent that works in the same
+    /// checkout afterwards.
+    pub env: Vec<AgentVar>,
+
+    /// How long any one command may run before it is killed.
+    pub bound: Duration,
+}
+
+impl Default for Execution {
+    fn default() -> Self {
+        Self {
+            env: Vec::new(),
+            bound: crate::timeouts::DEFAULT_EXEC_COMMAND,
+        }
+    }
+}
+
+impl Execution {
+    /// Resolves how one thread's commands run, from its settings.
+    #[must_use]
+    pub fn for_thread(settings: &arsox_sdk::proto::settings::v1::ThreadSettings) -> Self {
+        Self {
+            env: crate::harness::spawn::declared_environment(&settings.env),
+            bound: crate::timeouts::Bounds::for_thread(settings).exec_command,
+        }
+    }
+}
 
 /// What one command did.
 #[derive(Debug, Clone)]
@@ -106,23 +170,25 @@ fn plan(commands: &str) -> Vec<Vec<String>> {
 
 /// Runs a command string with the working directory at `working_dir`.
 ///
-/// `env` is the thread's declared environment, which reaches these commands
-/// exactly as it reaches the agent working in the same checkout: an install that
-/// needs a registry token needs it here too, and so does the lint that runs
-/// afterwards.
+/// `execution` carries the thread's declared environment, which reaches these
+/// commands exactly as it reaches the agent working in the same checkout, and
+/// the bound each of them runs under.
 ///
 /// Stops at the first barrier whose group did not fully succeed, and reports
 /// everything below it as skipped.
-pub(crate) async fn run(commands: &str, working_dir: &Path, env: &[AgentVar]) -> CommandRun {
+pub(crate) async fn run(commands: &str, working_dir: &Path, execution: &Execution) -> CommandRun {
     let mut run = CommandRun::default();
     let mut groups = plan(commands).into_iter();
 
     for group in groups.by_ref() {
         // Concurrently rather than one after another: within a group nothing
         // depends on anything else, which is the entire meaning of a newline.
+        //
+        // The bound is per command rather than per group, so one command that
+        // hangs is killed on its own schedule while its siblings finish.
         let finished = futures_util::future::join_all(group.into_iter().map(|command| {
             let working_dir = working_dir.to_path_buf();
-            async move { execute(command, &working_dir, env).await }
+            async move { execute(command, &working_dir, execution).await }
         }))
         .await;
 
@@ -146,7 +212,12 @@ pub(crate) async fn run(commands: &str, working_dir: &Path, env: &[AgentVar]) ->
 /// what a shell says it means. The commands come from the host application
 /// rather than from an agent, so this is configuration being executed as
 /// configured, not an injection surface.
-async fn execute(command: String, working_dir: &Path, env: &[AgentVar]) -> CommandOutcome {
+///
+/// A command that outlives `execution.bound` is killed and reported as a failure
+/// that says so, carrying whatever it had printed by then. The tail of a hung
+/// build is the only evidence of what it was doing when it stopped, so it is
+/// kept rather than discarded along with the process.
+async fn execute(command: String, working_dir: &Path, execution: &Execution) -> CommandOutcome {
     let (program, flag) = shell();
 
     let mut process = crate::harness::spawn::scrubbed_command(program);
@@ -156,35 +227,106 @@ async fn execute(command: String, working_dir: &Path, env: &[AgentVar]) -> Comma
         .current_dir(working_dir)
         // A command that reads stdin would block forever on a terminal that is
         // not there.
-        .stdin(std::process::Stdio::null());
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        // The backstop for every path that drops the child without killing it
+        // first, including a caller cancelled out from under this future.
+        .kill_on_drop(true);
 
     // Applied on top of the scrub, exactly as they are for a harness. The
     // refusal rule already ran when the list was built, so nothing here can put
     // back what the scrub removed.
-    for variable in env {
+    for variable in &execution.env {
         process.env(&variable.key, &variable.value);
     }
 
-    let output = process.output().await;
+    let mut child = match process.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            return CommandOutcome {
+                command,
+                exit_code: NOT_LAUNCHED,
+                output: format!("could not run the command: {error}"),
+            };
+        }
+    };
 
-    match output {
-        Ok(finished) => {
-            let mut said = String::from_utf8_lossy(&finished.stdout).into_owned();
-            said.push_str(&String::from_utf8_lossy(&finished.stderr));
+    // Both pipes are drained while the command runs rather than after it exits.
+    // A pipe nobody reads fills its buffer and blocks the writer, which would
+    // turn a chatty command into a hang the bound below then blames on the
+    // command.
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let mut said = Vec::new();
+    let mut complained = Vec::new();
+
+    let finished = {
+        let running = async {
+            let ((), ()) = tokio::join!(
+                drain(&mut stdout, &mut said),
+                drain(&mut stderr, &mut complained),
+            );
+            child.wait().await
+        };
+
+        tokio::time::timeout(execution.bound, running).await
+    };
+
+    let mut output = String::from_utf8_lossy(&said).into_owned();
+    output.push_str(&String::from_utf8_lossy(&complained));
+
+    match finished {
+        Ok(Ok(status)) => CommandOutcome {
+            command,
+            // `None` means a signal killed it, which is a failure with no
+            // number of its own.
+            exit_code: status.code().unwrap_or(NOT_LAUNCHED),
+            output: tail(&output, MAX_CAPTURED_OUTPUT),
+        },
+
+        Ok(Err(error)) => CommandOutcome {
+            command,
+            exit_code: NOT_LAUNCHED,
+            output: format!("could not wait on the command: {error}"),
+        },
+
+        Err(_elapsed) => {
+            tracing::warn!(
+                event.name = "command.timed_out",
+                command.text = command,
+                command.bound_seconds = execution.bound.as_secs(),
+                "killing a command that ran past its {{command.bound_seconds}} second bound: \
+                 {{command.text}}",
+            );
+
+            // Reaped here rather than left to `kill_on_drop`, so the process is
+            // gone by the time the outcome is reported instead of shortly
+            // afterwards. `wait` cannot hang: a kill is not something a process
+            // can decline.
+            drop(child.start_kill());
+            drop(child.wait().await);
 
             CommandOutcome {
                 command,
-                // `None` means a signal killed it, which is a failure with no
-                // number of its own.
-                exit_code: finished.status.code().unwrap_or(NOT_LAUNCHED),
-                output: tail(&said, MAX_CAPTURED_OUTPUT),
+                exit_code: TIMED_OUT,
+                output: format!(
+                    "the command was killed after {:?} without finishing\n{}",
+                    execution.bound,
+                    tail(&output, MAX_CAPTURED_OUTPUT),
+                ),
             }
         }
-        Err(error) => CommandOutcome {
-            command,
-            exit_code: NOT_LAUNCHED,
-            output: format!("could not run the command: {error}"),
-        },
+    }
+}
+
+/// Reads one of a child's pipes to the end, into `into`.
+///
+/// A pipe that errors mid-read is a child that went away, which the exit status
+/// already describes. Whatever arrived before it is kept.
+async fn drain<R: AsyncRead + Unpin>(pipe: &mut Option<R>, into: &mut Vec<u8>) {
+    if let Some(pipe) = pipe.as_mut() {
+        drop(pipe.read_to_end(into).await);
     }
 }
 
@@ -267,7 +409,7 @@ mod tests {
         // result. Both are reported, and the report is what the agents get.
         let directory = scratch();
 
-        let run = run("exit 3\nexit 0", &directory, &[]).await;
+        let run = run("exit 3\nexit 0", &directory, &Execution::default()).await;
 
         assert_eq!(run.outcomes.len(), 2, "both commands in a group run");
         assert!(run.failures().count() == 1);
@@ -281,7 +423,7 @@ mod tests {
         // And says so. A command that never ran is skipped, not missing.
         let directory = scratch();
 
-        let run = run("exit 1; exit 0\nexit 0", &directory, &[]).await;
+        let run = run("exit 1; exit 0\nexit 0", &directory, &Execution::default()).await;
 
         assert_eq!(
             run.outcomes.len(),
@@ -298,7 +440,7 @@ mod tests {
     async fn a_held_barrier_releases_the_group_below_it() {
         let directory = scratch();
 
-        let run = run("exit 0; exit 0\nexit 0", &directory, &[]).await;
+        let run = run("exit 0; exit 0\nexit 0", &directory, &Execution::default()).await;
 
         assert_eq!(run.outcomes.len(), 3);
         assert_eq!(run.failures().count(), 0);
@@ -314,7 +456,7 @@ mod tests {
         // `yarn lint` means anything.
         let directory = scratch();
 
-        let run = run("echo hello > proof.txt", &directory, &[]).await;
+        let run = run("echo hello > proof.txt", &directory, &Execution::default()).await;
 
         assert_eq!(run.outcomes[0].exit_code, 0, "{:?}", run.outcomes[0].output);
         assert!(
@@ -329,7 +471,12 @@ mod tests {
     async fn output_is_captured_so_a_failure_says_why() {
         let directory = scratch();
 
-        let run = run("echo something-went-wrong", &directory, &[]).await;
+        let run = run(
+            "echo something-went-wrong",
+            &directory,
+            &Execution::default(),
+        )
+        .await;
 
         assert!(run.outcomes[0].output.contains("something-went-wrong"));
 
@@ -341,11 +488,14 @@ mod tests {
         // A repo's install reaches its registry token this way, and so does the
         // lint that runs against the same checkout at the other end of the turn.
         let directory = scratch();
-        let declared = [AgentVar {
-            key: "ARSOX_TEST_DECLARED".to_owned(),
-            value: "the-declared-value".to_owned(),
-            secret: false,
-        }];
+        let declared = Execution {
+            env: vec![AgentVar {
+                key: "ARSOX_TEST_DECLARED".to_owned(),
+                value: "the-declared-value".to_owned(),
+                secret: false,
+            }],
+            ..Execution::default()
+        };
 
         let run = run(ECHO_DECLARED, &directory, &declared).await;
 
@@ -367,6 +517,115 @@ mod tests {
     } else {
         "echo $ARSOX_TEST_DECLARED"
     };
+
+    /// A command that does nothing for far longer than any bound a test sets.
+    ///
+    /// `cmd` has no `sleep`, and its `timeout` builtin refuses to run without a
+    /// console, so a ping to loopback is the portable way to spend time.
+    const HANGS: &str = if cfg!(windows) {
+        "ping -n 10 127.0.0.1 > nul"
+    } else {
+        "sleep 10"
+    };
+
+    /// The same, after printing one line. `&&` chains in both shells, and a
+    /// semicolon would be read by this module's own parser as a barrier.
+    const PRINTS_THEN_HANGS: &str = if cfg!(windows) {
+        "echo before-the-hang && ping -n 10 127.0.0.1 > nul"
+    } else {
+        "echo before-the-hang && sleep 10"
+    };
+
+    /// Runs with a bound short enough that a test does not wait out a hang.
+    fn bounded(millis: u64) -> Execution {
+        Execution {
+            bound: Duration::from_millis(millis),
+            ..Execution::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_command_past_its_bound_is_killed_and_says_it_timed_out() {
+        // The whole point of the bound: an unbounded command holds its thread
+        // for the life of the process while looking exactly like work.
+        let directory = scratch();
+        let started = std::time::Instant::now();
+
+        let run = run(HANGS, &directory, &bounded(200)).await;
+
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "the bound should have ended the wait, not the command finishing"
+        );
+        assert_eq!(
+            run.outcomes[0].exit_code, TIMED_OUT,
+            "a timed out command needs its own code: \"it never finished\" and \
+             \"it finished badly\" send a reader to different places"
+        );
+        assert!(
+            run.outcomes[0].output.contains("killed"),
+            "the outcome should say what happened, got {:?}",
+            run.outcomes[0].output
+        );
+        assert!(!run.outcomes[0].succeeded());
+
+        drop(std::fs::remove_dir_all(&directory));
+    }
+
+    #[tokio::test]
+    async fn a_timed_out_command_holds_the_barrier_below_it() {
+        // A bound that reported a failure nothing acted on would let a hung
+        // install be followed by the build that needed it.
+        let directory = scratch();
+
+        let run = run(&format!("{HANGS}; exit 0"), &directory, &bounded(200)).await;
+
+        assert_eq!(run.outcomes.len(), 1);
+        assert_eq!(run.outcomes[0].exit_code, TIMED_OUT);
+        assert_eq!(run.skipped, vec!["exit 0"]);
+
+        drop(std::fs::remove_dir_all(&directory));
+    }
+
+    #[tokio::test]
+    async fn a_command_killed_at_its_bound_keeps_what_it_printed_first() {
+        // The tail of a hung build is the only evidence of what it was doing
+        // when it stopped. Discarding it along with the process would leave the
+        // agent a timeout and nothing to act on.
+        let directory = scratch();
+
+        let run = run(PRINTS_THEN_HANGS, &directory, &bounded(500)).await;
+
+        assert_eq!(run.outcomes[0].exit_code, TIMED_OUT);
+        assert!(
+            run.outcomes[0].output.contains("before-the-hang"),
+            "got {:?}",
+            run.outcomes[0].output
+        );
+
+        drop(std::fs::remove_dir_all(&directory));
+    }
+
+    #[tokio::test]
+    async fn a_command_that_finishes_inside_its_bound_is_untouched() {
+        let directory = scratch();
+
+        let run = run("exit 0", &directory, &bounded(30_000)).await;
+
+        assert_eq!(run.outcomes[0].exit_code, 0);
+
+        drop(std::fs::remove_dir_all(&directory));
+    }
+
+    #[test]
+    fn the_default_bound_is_the_documented_one() {
+        // The README publishes thirty minutes, so a thread that declares
+        // nothing has to get thirty minutes.
+        assert_eq!(
+            Execution::default().bound,
+            crate::timeouts::DEFAULT_EXEC_COMMAND
+        );
+    }
 
     #[test]
     fn a_runaway_log_is_truncated_from_the_front() {

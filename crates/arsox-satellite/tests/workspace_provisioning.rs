@@ -8,6 +8,7 @@
 //! clones, setup commands really run in the checkout, and the incidents really
 //! land in the database.
 
+use arsox_satellite::commands::Execution;
 use arsox_satellite::harness::spawn::declared_environment;
 use arsox_satellite::store::{NewThread, NewTurn, Store};
 use arsox_satellite::workspace::{Provisioner, provision_repos, write_instructions};
@@ -172,9 +173,14 @@ async fn a_declared_repo_is_cloned_into_the_thread_workspace() {
     let url = origin(&fixtures.path().join("service"), "README.md");
     let thread = thread_id();
 
-    let report = provision_repos(workspace.path(), &thread, &[repo("api", &url)], &[])
-        .await
-        .expect("provisioning should not fail on the satellite's side");
+    let report = provision_repos(
+        workspace.path(),
+        &thread,
+        &[repo("api", &url)],
+        &Execution::default(),
+    )
+    .await
+    .expect("provisioning should not fail on the satellite's side");
 
     assert!(report.failures.is_empty(), "{:?}", report.failures);
     assert_eq!(report.cloned, vec!["api"]);
@@ -195,9 +201,14 @@ async fn a_repo_with_no_submodules_clones_cleanly_under_recursion() {
     let url = origin(&fixtures.path().join("plain"), "main.rs");
     let thread = thread_id();
 
-    let report = provision_repos(workspace.path(), &thread, &[repo("plain", &url)], &[])
-        .await
-        .expect("should provision");
+    let report = provision_repos(
+        workspace.path(),
+        &thread,
+        &[repo("plain", &url)],
+        &Execution::default(),
+    )
+    .await
+    .expect("should provision");
 
     assert!(report.failures.is_empty(), "{:?}", report.failures);
 
@@ -218,7 +229,7 @@ async fn several_repos_each_get_their_own_checkout() {
         workspace.path(),
         &thread,
         &[repo("api", &api), repo("web", &web)],
-        &[],
+        &Execution::default(),
     )
     .await
     .expect("should provision");
@@ -248,9 +259,14 @@ async fn setup_commands_run_in_the_checkout_with_barrier_semantics() {
         ..repo("api", &url)
     };
 
-    let report = provision_repos(workspace.path(), &thread, &[with_setup], &[])
-        .await
-        .expect("should provision");
+    let report = provision_repos(
+        workspace.path(),
+        &thread,
+        &[with_setup],
+        &Execution::default(),
+    )
+    .await
+    .expect("should provision");
 
     let checkout = workspace.path().join(&thread).join("repos").join("api");
     assert!(checkout.join("one.txt").is_file(), "the first barrier ran");
@@ -300,16 +316,19 @@ async fn a_setup_command_sees_the_variables_the_thread_declared() {
         ..repo("api", &url)
     };
 
-    let declared = declared_environment(&[EnvVar {
-        key: "REGISTRY_TOKEN".to_owned(),
-        value: Some(Secret {
-            value: Some("npm-declared-token".to_owned()),
-            display: None,
-        }),
-        // Absent, which means secret. It still reaches the command: secrecy
-        // decides what may be rendered, never what an agent is given.
-        is_secret: None,
-    }]);
+    let declared = Execution {
+        env: declared_environment(&[EnvVar {
+            key: "REGISTRY_TOKEN".to_owned(),
+            value: Some(Secret {
+                value: Some("npm-declared-token".to_owned()),
+                display: None,
+            }),
+            // Absent, which means secret. It still reaches the command: secrecy
+            // decides what may be rendered, never what an agent is given.
+            is_secret: None,
+        }]),
+        ..Execution::default()
+    };
 
     let report = provision_repos(workspace.path(), &thread, &[echoing], &declared)
         .await
@@ -341,7 +360,7 @@ async fn a_repo_that_will_not_clone_ends_provisioning_and_says_it_may_be_retried
         workspace.path(),
         &thread,
         &[repo("api", &missing), repo("web", &missing)],
-        &[],
+        &Execution::default(),
     )
     .await
     .expect("a refused clone is a reported failure, not a satellite error");
@@ -538,9 +557,14 @@ async fn a_personal_access_token_never_reaches_the_cloned_repository() {
         ..repo("api", &url)
     };
 
-    let report = provision_repos(workspace.path(), &thread, &[authenticated], &[])
-        .await
-        .expect("should provision");
+    let report = provision_repos(
+        workspace.path(),
+        &thread,
+        &[authenticated],
+        &Execution::default(),
+    )
+    .await
+    .expect("should provision");
     assert!(report.failures.is_empty(), "{:?}", report.failures);
 
     let checkout = workspace.path().join(&thread).join("repos").join("api");

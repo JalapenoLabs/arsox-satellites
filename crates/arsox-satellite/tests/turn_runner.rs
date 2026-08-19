@@ -14,6 +14,7 @@ use arsox_satellite::store::{NewThread, NewTurn, ProvisionOutcome, Store};
 use arsox_satellite::stream::EventBus;
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
+use arsox_sdk::proto::incident::v1::Incident;
 use arsox_sdk::proto::settings::v1::ThreadSettings;
 use arsox_sdk::proto::turn::v1::TurnStatus;
 use std::collections::BTreeMap;
@@ -750,6 +751,154 @@ async fn a_thread_with_no_cost_ceiling_is_never_refused_for_cost() {
     assert_eq!(
         settle(&harness.store, &thread_id, &second).await,
         TurnStatus::Completed
+    );
+}
+
+/// Settings whose harness idle bound is `millis`, so a test does not wait out
+/// the documented fifteen minutes.
+///
+/// The bound is a per-thread setting in the contract rather than a satellite
+/// constant, which is what makes it injectable at all: the test declares it
+/// exactly as a host application would.
+fn idle_bound_of(millis: i32) -> ThreadSettings {
+    ThreadSettings {
+        timeouts: Some(arsox_sdk::proto::settings::v1::Timeouts {
+            harness_idle: Some(arsox_sdk::proto::common::v1::Duration {
+                seconds: 0,
+                nanos: millis.saturating_mul(1_000_000),
+            }),
+            ..Default::default()
+        }),
+        ..Default::default()
+    }
+}
+
+/// Every incident recorded against a thread, with the code a test names.
+async fn incidents_coded(store: &Store, thread_id: &str, code: ErrorCode) -> Vec<Incident> {
+    store
+        .incidents_for_thread(thread_id)
+        .await
+        .expect("should read incidents")
+        .into_iter()
+        .filter(|incident| incident.code == i32::from(code))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_harness_that_hangs_once_is_restarted_and_the_turn_completes() {
+    // A harness that says nothing at all is stopped rather than slow, and a
+    // stopped process is exactly what a restart recovers. `hang_once` wedges the
+    // first process and lets the second through, which is what a real harness
+    // that wedged on startup looks like from here.
+    let (harness, thread_id, turn_id) =
+        start_with("run the probe [[hang_once=5000]]", idle_bound_of(300)).await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Completed,
+        "the restarted session finished the work"
+    );
+
+    // The events the second session produced are in the log, so the restart
+    // replaced the harness rather than the turn.
+    let names: Vec<String> = harness
+        .store
+        .events_after(&thread_id, 0, 100)
+        .await
+        .expect("should replay")
+        .into_iter()
+        .map(|event| event.r#type)
+        .collect();
+    assert!(
+        names.iter().any(|name| name == "agent.message"),
+        "{names:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_restarted_harness_records_the_recovery_rather_than_hiding_it() {
+    // A restart that worked looks exactly like a turn that never stalled. That
+    // is the whole reason `recovered` exists: a harness wedging on every turn is
+    // a pattern nobody sees unless the recovery is written down.
+    let (harness, thread_id, turn_id) =
+        start_with("run the probe [[hang_once=5000]]", idle_bound_of(300)).await;
+
+    settle(&harness.store, &thread_id, &turn_id).await;
+
+    let recorded = incidents_coded(&harness.store, &thread_id, ErrorCode::HarnessIdleTimeout).await;
+
+    assert_eq!(recorded.len(), 1, "one restart, so one incident");
+    assert_eq!(
+        recorded[0].disposition,
+        i32::from(arsox_sdk::proto::incident::v1::Disposition::Recovered),
+        "the turn went on, so this is not fatal"
+    );
+    assert!(
+        recorded[0].retryable,
+        "a wedged process is worth another attempt"
+    );
+    assert_eq!(recorded[0].turn_id.as_deref(), Some(turn_id.as_str()));
+}
+
+#[tokio::test]
+async fn a_harness_that_hangs_every_time_fails_the_turn_with_the_idle_code() {
+    // One restart, never two. A harness that wedges again after a clean restart
+    // is wedging for a reason a restart does not fix, and a third attempt would
+    // spend another session reaching the same place.
+    let (harness, thread_id, turn_id) =
+        start_with("run the probe [[hang=10000]]", idle_bound_of(300)).await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Failed
+    );
+
+    let error = result_of(&harness.store, &thread_id, &turn_id)
+        .await
+        .error
+        .expect("a turn that gave up says why");
+
+    assert_eq!(error.code, i32::from(ErrorCode::HarnessIdleTimeout));
+    assert!(
+        error.retryable,
+        "the turn is worth running again, just not inside this one"
+    );
+
+    // Two incidents under one code, and they say different things: the restart
+    // that was attempted, and the turn that ended anyway. Recording only the
+    // second would lose the fact that a recovery was tried at all.
+    let dispositions: Vec<i32> =
+        incidents_coded(&harness.store, &thread_id, ErrorCode::HarnessIdleTimeout)
+            .await
+            .iter()
+            .map(|incident| incident.disposition)
+            .collect();
+
+    assert_eq!(
+        dispositions,
+        vec![
+            i32::from(arsox_sdk::proto::incident::v1::Disposition::Recovered),
+            i32::from(arsox_sdk::proto::incident::v1::Disposition::Fatal),
+        ],
+        "one restart attempted, then the turn gave up"
+    );
+}
+
+#[tokio::test]
+async fn a_harness_that_keeps_talking_is_never_called_idle() {
+    // The bound is measured against silence, not against elapsed time. A turn
+    // whose transcript takes longer than the bound to replay must not be torn
+    // down for doing its work.
+    let (harness, thread_id, turn_id) = start_with("run the probe", idle_bound_of(30_000)).await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Completed
+    );
+    assert!(
+        incidents_coded(&harness.store, &thread_id, ErrorCode::HarnessIdleTimeout)
+            .await
+            .is_empty()
     );
 }
 

@@ -28,8 +28,25 @@
 //!   transcript, producing nothing. A real harness stuck in a long shell command
 //!   looks exactly like this from the satellite's side, which is what the wall
 //!   clock ceiling exists to end.
+//! - `[[hang=MS]]` produces nothing for MS milliseconds **before** the
+//!   transcript, on every run. A harness that wedged before it said anything at
+//!   all is what the idle bound exists to end, and it is a different shape from
+//!   `stall`: nothing has been reported yet, so there is nothing to preserve.
+//! - `[[hang_once=MS]]` is the same, on the first run in this working directory
+//!   only. A restart therefore gets past it and finishes the transcript, which
+//!   is what makes "restarted once, and then the turn completed" testable.
+//!
+//! "First run" is a marker file in the working directory rather than a counter
+//! in this process, because a restart is a **new** process. The same trick a
+//! checker test uses with `mkdir`, for the same reason.
 
 use std::io::Write as _;
+
+/// Names the run that already hung, so the next one does not.
+///
+/// In the working directory, which the satellite gives one per thread, so two
+/// threads hanging at once cannot see each other's marker.
+const HUNG_ALREADY: &str = "arsox-fake-harness-hung";
 
 fn main() {
     let Ok(path) = std::env::var("ARSOX_FAKE_TRANSCRIPT") else {
@@ -66,6 +83,27 @@ fn main() {
         eprintln!("report_env {name}={seen}");
     }
 
+    // Before the replay rather than after it. A harness that hung before it said
+    // anything is the case the idle bound is written for, and it is the case a
+    // restart can actually recover.
+    if let Some(millis) = directive(&prompt, "hang") {
+        hang(millis);
+    }
+
+    // `create_new` is the whole test: it succeeds exactly once per working
+    // directory, so the first process hangs and every restart after it does not.
+    // Asking and then creating would be two steps a second process could run
+    // between.
+    if let Some(millis) = directive(&prompt, "hang_once")
+        && std::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(HUNG_ALREADY)
+            .is_ok()
+    {
+        hang(millis);
+    }
+
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
 
@@ -84,9 +122,7 @@ fn main() {
     // After the replay rather than before it, so a stalled run still proves that
     // the work a turn already did survives the ceiling that stops it.
     if let Some(millis) = directive(&prompt, "stall") {
-        std::thread::sleep(std::time::Duration::from_millis(
-            u64::try_from(millis).unwrap_or(u64::MAX),
-        ));
+        hang(millis);
     }
 
     #[expect(
@@ -95,6 +131,13 @@ fn main() {
         reason = "a test directive is small by construction"
     )]
     std::process::exit(exit_code as i32);
+}
+
+/// Produces nothing at all for `millis`, which is what a wedged harness does.
+fn hang(millis: usize) {
+    std::thread::sleep(std::time::Duration::from_millis(
+        u64::try_from(millis).unwrap_or(u64::MAX),
+    ));
 }
 
 /// Reads a numeric `[[key=value]]` directive out of the prompt.

@@ -85,6 +85,24 @@ server-sent events, and collecting one before returning it would turn a
 streaming API into a blocking one and defeat every event the harness emits as it
 goes.
 
+## Every request is bounded
+
+An endpoint that accepted a request and then stopped answering leaves the harness
+blocked on a socket, which from the satellite's side is indistinguishable from a
+model thinking hard. So a request past the thread's `llm_request` bound, ten
+minutes by default, is abandoned and answered with a 504 shaped like the
+provider's own, which is what the harness's retry policy is written against.
+
+The bound covers the whole relay rather than the wait for headers, so a response
+still streaming past it is cut off mid-body, as a stream error rather than a tidy
+end. Every request that ends this way records a `degraded` `LLM_ENDPOINT_TIMEOUT`
+incident, which is what makes a failover tax visible instead of invisible.
+
+The bound rides on the grant rather than on the shared HTTP client, so one turn's
+setting cannot decide the limit for every other turn on the satellite. The
+reasoning behind each of those choices is in
+[the timeouts doc](./timeouts.md#the-request-bound-covers-the-whole-relay).
+
 ## Errors are shaped like the provider's
 
 The harness on the other side of this speaks one provider's error format and
@@ -195,6 +213,12 @@ replaced rather than forwarded alongside ours, usage is counted from both a
 streamed and a non-streamed response, the warning arrives at 80%, and a turn past
 its ceiling is refused **without the request reaching the provider**, which is
 the assertion the whole feature rests on.
+
+The request bound is driven against two stub upstreams that fail in the two ways
+that matter: one that accepts a request and never answers, and one that starts
+streaming and then stops without ending. A third asserts that healthy traffic
+inside its bound reports nothing, because a bound that fired on a good request
+would fill the incident log with the one thing an operator most needs to trust.
 
 ## Roadmap
 

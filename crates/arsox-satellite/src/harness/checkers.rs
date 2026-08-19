@@ -18,8 +18,7 @@
 //! what the turn's result says about it are the runner's, because those are
 //! decisions about a turn rather than facts about a checker.
 
-use crate::commands::{self, NOT_LAUNCHED};
-use crate::harness::spawn::AgentVar;
+use crate::commands::{self, Execution, NOT_LAUNCHED};
 use arsox_sdk::proto::settings::v1::Repo;
 use arsox_sdk::proto::turn::v1::CheckerResult;
 use std::fmt::Write as _;
@@ -106,11 +105,11 @@ pub(super) fn declared(repos: &[Repo], repos_root: &Path) -> Vec<Declared> {
 /// parks its thread before any turn runs, so the case is unreachable, and if it
 /// ever happens the command runner reports it as a command that could not start
 /// rather than as silence.
-pub(super) async fn run_all(declared: &[Declared], env: &[AgentVar]) -> Vec<Outcome> {
+pub(super) async fn run_all(declared: &[Declared], execution: &Execution) -> Vec<Outcome> {
     let mut outcomes = Vec::new();
 
     for checker in declared {
-        let run = commands::run(&checker.commands, &checker.checkout, env).await;
+        let run = commands::run(&checker.commands, &checker.checkout, execution).await;
 
         outcomes.extend(run.outcomes.iter().map(|outcome| Outcome {
             repo: checker.repo.clone(),

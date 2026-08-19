@@ -159,15 +159,24 @@ saying what it did, and reporting that as success is exactly the silent failure
 the incident system exists to prevent.
 
 **A ceiling ends a turn gracefully.** Reading harness output is a `select!` over
-the three things that can end it: the harness finishing, a cancellation, and a
-budget crossing. Wall clock is a deadline in that loop rather than a check in the
-proxy, because the proxy sees requests and not the gaps between them, and a
-harness stuck in a shell command would outlive a ceiling counted per request.
-Token exhaustion arrives from the proxy on a channel, so it is acted on the
-moment it happens rather than whenever the next line of output does. Either way
-the harness is torn down, the work it committed survives, the events it already
-produced stay in the log, and the result carries the code for the ceiling that
-stopped it. See [the proxy doc](./llm-proxy.md#counting-and-refusing).
+everything that can end it: the harness finishing, a cancellation, a budget
+crossing, and the idle bound below. Wall clock is a deadline in that loop rather
+than a check in the proxy, because the proxy sees requests and not the gaps
+between them, and a harness stuck in a shell command would outlive a ceiling
+counted per request. Token exhaustion arrives from the proxy on a channel, so it
+is acted on the moment it happens rather than whenever the next line of output
+does. Either way the harness is torn down, the work it committed survives, the
+events it already produced stay in the log, and the result carries the code for
+the ceiling that stopped it. See
+[the proxy doc](./llm-proxy.md#counting-and-refusing).
+
+**A harness that says nothing is stopped, not slow.** The same loop carries an
+idle bound that any output on either pipe resets, and a harness that outlives it
+is torn down and started once more on the same session with the same grant. A
+second expiry fails the turn with `HARNESS_IDLE_TIMEOUT`. Stderr is read for the
+same reason it counts as output: an unread pipe fills and blocks the process the
+loop is waiting on, which would be the satellite manufacturing the hang it then
+reported. See [the timeouts doc](./timeouts.md#the-idle-bound-is-measured-against-silence).
 
 ### Checkers run after the harness, and can wake it back up
 
@@ -181,6 +190,12 @@ This is the verification that turns "the agent said it was done" into something
 checked. Repos are walked one at a time, since a checker is frequently a build
 and running four at once on a satellite already bounded to four threads trades a
 little wall clock for a lot of contention.
+
+**Every command is bounded**, setup and checker alike, and one past its bound is
+killed and reported as a failure that says it timed out. The failure reaches the
+agent the same way any other red checker does. See
+[the timeouts doc](./timeouts.md#the-exec-bound-kills-the-shell-and-only-the-shell)
+for what the kill does and does not reach.
 
 **A nonzero exit is a normal outcome, not a crash.** The agent's own session is
 resumed with the failing commands, their exit codes, and the tail of their
@@ -365,6 +380,9 @@ test.
 
 ## Roadmap
 
+- **Crash restart-once.** A harness that died is recovered the same way a hung
+  one already is, through the restart helper the idle bound uses. Today a
+  nonzero exit fails the turn.
 - **Bidirectional mode.** Both CLIs accept streaming input as well as emitting
   streaming output, which suits a long-lived process per thread better than a
   spawn per turn. It is also what makes cancellation and mid-turn input possible.

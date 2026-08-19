@@ -17,11 +17,24 @@
 //! A harness that fails to launch, crashes, or emits a line the mapper does not
 //! recognize all produce incidents. A turn that ends badly ends with a reason
 //! attached rather than a gap where its output should be.
+//!
+//! # A hung harness is ended, and given one chance to recover
+//!
+//! A harness that produces no output at all is not slow, it is stopped, and
+//! nothing else in the loop can tell. So the reading loop carries an idle bound
+//! that every line of output resets, and a harness that outlives it is killed
+//! and started again on the same session with the same grant.
+//!
+//! **Once, never twice.** A restart recovers a process that wedged; it does not
+//! recover a prompt that wedges every process that reads it. A second restart
+//! would spend another session reaching the same place, so the second expiry
+//! ends the turn with `HARNESS_IDLE_TIMEOUT` instead.
 
 use crate::harness::spawn::{HarnessCommand, ModelAccess, Session, command_for, process_for};
 use crate::harness::{HarnessResult, accounting, checkers, claude};
 use crate::proxy::budget::{Ceilings, Crossing, Meter};
 use crate::store::{AppendEvent, ClaimedTurn, Store};
+use crate::timeouts::Bounds;
 use arsox_sdk::proto::common::v1::{Duration, Timestamp};
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
@@ -70,6 +83,14 @@ const SECONDS_IN_A_YEAR: u64 = 365 * 24 * 60 * 60;
 /// because a duration is scaled rather than divided into percent.
 const WARN_AT_FRACTION: f64 = 0.8;
 
+/// How many times a hung harness is started again before the turn gives up.
+///
+/// One. A restart recovers a process that wedged, which is a real and common
+/// thing; it does not recover a prompt, a repo, or a model that wedges every
+/// process reading it, which is what a second hang after a clean restart says is
+/// happening. A third attempt spends another session proving the second one.
+const RESTARTS_ALLOWED: u32 = 1;
+
 /// Withdraws a turn's proxy grant however the turn ends.
 ///
 /// A guard rather than a call at the end of the happy path, because a turn can
@@ -100,6 +121,13 @@ struct Consumed {
 
     /// The ceiling that stopped the turn, when one did.
     exhausted: Option<Ceiling>,
+
+    /// Whether the harness went silent past its idle bound.
+    ///
+    /// Not an error by itself, because one restart is allowed to recover it.
+    /// [`Runner::session_with_restart`] is what turns a second one into a failed
+    /// turn.
+    idle: bool,
 }
 
 /// The turn's wall clock ceiling, shared by every harness session in it.
@@ -149,8 +177,17 @@ struct TurnContext {
 
     clock: WallClock,
 
+    /// The bounds this thread declared, or the documented defaults.
+    bounds: Bounds,
+
     /// Budget crossings the proxy found while counting this turn's requests.
     crossings: mpsc::UnboundedReceiver<Crossing>,
+
+    /// Incidents the proxy found while relaying this turn's requests.
+    ///
+    /// The proxy holds no database on purpose, so what it sees arrives here, at
+    /// the one thing that owns the turn and can record against it.
+    incidents: mpsc::UnboundedReceiver<Incident>,
 }
 
 /// What the checker stage amounted to.
@@ -321,6 +358,7 @@ impl Runner {
                     &turn_id,
                     failure.code,
                     Disposition::Fatal,
+                    retryable(failure.code),
                     &failure.message,
                 )
                 .await;
@@ -397,7 +435,8 @@ impl Runner {
     /// Runs the turn's harness sessions and decides what they amounted to.
     ///
     /// Usually one session, and sometimes more: a failing checker resumes the
-    /// agent to fix it. Every one of those runs inside this function on purpose,
+    /// agent to fix it, and a harness that hung is started again. Every one of
+    /// those runs inside this function on purpose,
     /// because the proxy grant, the meter, and the wall clock are all withdrawn
     /// or restarted at its edges. A fix cycle outside it would be a second turn
     /// wearing the first one's name, spending past the ceiling the first one set.
@@ -413,21 +452,8 @@ impl Runner {
         // included, and be withdrawn however the turn ends.
         let (mut context, _grant) = self.open(claimed, &ceilings, working_dir).await;
 
-        let session = self.session_for(thread_id).await;
-        let command = command_for(
-            context.harness,
-            &claimed.turn.prompt,
-            &session,
-            context.working_dir.clone(),
-            Some(context.access.clone()),
-            &claimed.settings.env,
-            // Read per turn rather than held on the runner, so a thread's
-            // posture is whatever its settings say now.
-            claimed.settings.permissions.as_ref(),
-        );
-
         let consumed = self
-            .run_session(&command, thread_id, turn_id, &mut context)
+            .session_with_restart(claimed, &mut context, &claimed.turn.prompt)
             .await?;
 
         if consumed.cancelled {
@@ -472,6 +498,7 @@ impl Runner {
                 turn_id,
                 ErrorCode::HarnessCrashed,
                 Disposition::Fatal,
+                retryable(ErrorCode::HarnessCrashed),
                 "the harness exited cleanly without reporting a result",
             )
             .await;
@@ -568,16 +595,22 @@ impl Runner {
         working_dir: PathBuf,
     ) -> (TurnContext, RevokeOnDrop) {
         let (crossings, reported) = mpsc::unbounded_channel();
+        let (incidents, reported_incidents) = mpsc::unbounded_channel();
         let meter = Arc::new(Meter::new(ceilings, crossings));
+        let bounds = Bounds::for_thread(&claimed.settings);
 
         let upstream = crate::proxy::upstream::Upstream::resolve(&claimed.settings.models);
         let token = self
             .proxy
             .grant(
-                &claimed.turn.thread_id,
-                &claimed.turn.turn_id,
-                upstream,
-                Arc::clone(&meter),
+                crate::proxy::Grant::new(
+                    &claimed.turn.thread_id,
+                    &claimed.turn.turn_id,
+                    upstream,
+                    Arc::clone(&meter),
+                )
+                .bounded(bounds.llm_request)
+                .reporting_to(incidents),
             )
             .await;
 
@@ -589,7 +622,9 @@ impl Runner {
                 token: token.clone(),
             },
             clock: WallClock::starting_now(ceilings),
+            bounds,
             crossings: reported,
+            incidents: reported_incidents,
         };
 
         let grant = RevokeOnDrop {
@@ -600,11 +635,118 @@ impl Runner {
         (context, grant)
     }
 
+    /// Runs a harness session, restarting it once if it hung.
+    ///
+    /// A harness that produced no output at all inside its idle bound is not
+    /// slow, it is stopped, and a stopped process is exactly what a restart
+    /// recovers. It resumes the same session under the same grant, so the second
+    /// attempt continues the conversation rather than starting one, and spends
+    /// against the ceilings the turn already set.
+    ///
+    /// **Once, never twice.** See [`RESTARTS_ALLOWED`]. A second hang ends the
+    /// turn with `HARNESS_IDLE_TIMEOUT`, which is retryable: the turn is worth
+    /// running again, just not inside this one.
+    ///
+    /// A harness that **crashed** is the other ending a restart recovers, and it
+    /// belongs in this function rather than in a second restart loop beside it.
+    /// That is separate work and is deliberately not done here: today a nonzero
+    /// exit fails the turn exactly as it did before.
+    async fn session_with_restart(
+        &self,
+        claimed: &ClaimedTurn,
+        context: &mut TurnContext,
+        prompt: &str,
+    ) -> Result<Consumed, Failure> {
+        let thread_id = &claimed.turn.thread_id;
+        let turn_id = &claimed.turn.turn_id;
+
+        for attempt in 0..=RESTARTS_ALLOWED {
+            // Rebuilt per attempt rather than reused, because `session_for` is
+            // what decides between opening a session and resuming one. A harness
+            // that got far enough to report its session id is resumed into it,
+            // which is the "same context" a restart is supposed to preserve.
+            let command = self.command_for_turn(claimed, context, prompt).await;
+            let consumed = self
+                .run_session(&command, thread_id, turn_id, context)
+                .await?;
+
+            if !consumed.idle {
+                return Ok(consumed);
+            }
+
+            if attempt < RESTARTS_ALLOWED {
+                let message = format!(
+                    "the harness produced no output for {:?} and was restarted",
+                    context.bounds.harness_idle
+                );
+
+                tracing::warn!(
+                    event.name = "turn.harness.restarted",
+                    thread.id = thread_id,
+                    turn.id = turn_id,
+                    harness.idle_seconds = context.bounds.harness_idle.as_secs(),
+                    "restarting a harness that said nothing for \
+                     {{harness.idle_seconds}} seconds",
+                );
+
+                // Recovered, and recorded because it recovered. A restart that
+                // worked looks exactly like a turn that never stalled, and a
+                // harness that hangs on every turn is a pattern nobody sees
+                // unless the recovery is written down.
+                self.record_incident(
+                    thread_id,
+                    turn_id,
+                    ErrorCode::HarnessIdleTimeout,
+                    Disposition::Recovered,
+                    retryable(ErrorCode::HarnessIdleTimeout),
+                    &message,
+                )
+                .await;
+            }
+        }
+
+        Err(Failure {
+            code: ErrorCode::HarnessIdleTimeout,
+            message: format!(
+                "the harness produced no output for {:?}, twice, and did not recover \
+                 when it was restarted",
+                context.bounds.harness_idle
+            ),
+        })
+    }
+
+    /// Builds the command one session of this turn runs.
+    ///
+    /// One builder for the work, for a checker fix cycle, and for a restart, so
+    /// the three cannot drift into launching the harness three slightly
+    /// different ways.
+    async fn command_for_turn(
+        &self,
+        claimed: &ClaimedTurn,
+        context: &TurnContext,
+        prompt: &str,
+    ) -> HarnessCommand {
+        let session = self.session_for(&claimed.turn.thread_id).await;
+
+        command_for(
+            context.harness,
+            prompt,
+            &session,
+            context.working_dir.clone(),
+            Some(context.access.clone()),
+            &claimed.settings.env,
+            // Read per turn rather than held on the runner, so a thread's
+            // posture is whatever its settings say now.
+            claimed.settings.permissions.as_ref(),
+        )
+    }
+
     /// Runs one harness process to whatever end, and tears it down.
     ///
     /// A turn is one of these, or several: the first runs the work and any that
-    /// follow answer a failing checker. Each is driven identically, through the
-    /// grant, meter, and wall clock the turn already holds.
+    /// follow answer a failing checker or replace one that hung. Each is driven
+    /// identically, through the grant, meter, and wall clock the turn already
+    /// holds.
     async fn run_session(
         &self,
         command: &HarnessCommand,
@@ -612,11 +754,13 @@ impl Runner {
         turn_id: &str,
         context: &mut TurnContext,
     ) -> Result<Consumed, Failure> {
-        let (mut child, stdout) = spawn_harness(command)?;
+        let (mut child, stdout, stderr) = spawn_harness(command)?;
 
-        let consumed = self.consume(stdout, thread_id, turn_id, context).await;
+        let consumed = self
+            .consume(stdout, stderr, thread_id, turn_id, context)
+            .await;
 
-        if consumed.cancelled || consumed.exhausted.is_some() {
+        if consumed.cancelled || consumed.exhausted.is_some() || consumed.idle {
             // Asked to stop cooperatively first. `kill_on_drop` is the backstop
             // for the case where it does not.
             drop(child.start_kill());
@@ -678,12 +822,12 @@ impl Runner {
 
         // The same variables the agent works under, because a lint that needs a
         // registry token needs it whoever is running it.
-        let env = crate::harness::spawn::declared_environment(&claimed.settings.env);
+        let execution = crate::commands::Execution::for_thread(&claimed.settings);
         let started = tokio::time::Instant::now();
         let mut checked = Checked::default();
 
         for attempt in 0..=checkers::MAX_FIX_ATTEMPTS {
-            let outcomes = checkers::run_all(&declared, &env).await;
+            let outcomes = checkers::run_all(&declared, &execution).await;
             self.publish_checkers(thread_id, turn_id, &outcomes).await;
 
             checked.results = outcomes
@@ -734,6 +878,8 @@ impl Runner {
             turn_id,
             ErrorCode::CheckerFailed,
             Disposition::Degraded,
+            // The same commands will exit the same way against the same code.
+            false,
             &reason,
         )
         .await;
@@ -776,19 +922,8 @@ impl Runner {
             "resuming the agent to answer {{checker.failures}} failing checker commands",
         );
 
-        let session = self.session_for(thread_id).await;
-        let command = command_for(
-            context.harness,
-            &checkers::fix_prompt(failures),
-            &session,
-            context.working_dir.clone(),
-            Some(context.access.clone()),
-            &claimed.settings.env,
-            claimed.settings.permissions.as_ref(),
-        );
-
         match self
-            .run_session(&command, thread_id, turn_id, context)
+            .session_with_restart(claimed, context, &checkers::fix_prompt(failures))
             .await
         {
             Ok(consumed) => {
@@ -824,6 +959,7 @@ impl Runner {
                     turn_id,
                     failure.code,
                     Disposition::Degraded,
+                    retryable(failure.code),
                     &failure.message,
                 )
                 .await;
@@ -875,37 +1011,60 @@ impl Runner {
         }
     }
 
-    /// Reads the harness's output until it ends, is cancelled, or runs out of
-    /// budget.
+    /// Reads the harness's output until it ends, is cancelled, runs out of
+    /// budget, or goes silent.
     ///
-    /// Three things can end the loop and only one of them is the harness
-    /// finishing, which is why this is a `select!` rather than a read loop with
+    /// Several things can end this loop and only one of them is the harness
+    /// finishing, which is why it is a `select!` rather than a read loop with
     /// checks bolted on. A ceiling reached ten seconds into a thirty minute
     /// completion has to be acted on then, not when the next line happens to
-    /// arrive.
+    /// arrive, and a harness that will never produce another line has to be
+    /// noticed by something other than the read that is waiting on it.
+    ///
+    /// **Both pipes count as output.** The idle bound is the README's "no output
+    /// at all", and a harness writing progress to stderr while stdout stays
+    /// quiet is working. Reading stderr is also what keeps its pipe from filling
+    /// and blocking the process the loop is waiting on.
     async fn consume(
         &self,
         stdout: tokio::process::ChildStdout,
+        stderr: tokio::process::ChildStderr,
         thread_id: &str,
         turn_id: &str,
         context: &mut TurnContext,
     ) -> Consumed {
         let mut lines = BufReader::new(stdout).lines();
+        let mut complaints = BufReader::new(stderr).lines();
         let mut consumed = Consumed::default();
         let mut seen = 0_usize;
 
-        // Destructured so the two fields this loop touches are borrowed
-        // separately. `select!` holds a future over the crossings receiver while
-        // another branch writes the clock, and one borrow of the whole context
-        // could not span both.
+        // Destructured so the fields this loop touches are borrowed separately.
+        // `select!` holds a future over the receivers while another branch
+        // writes the clock, and one borrow of the whole context could not span
+        // both.
         //
         // Wall clock is the runner's to enforce, and it belongs to the turn
         // rather than to this session. The proxy sees requests, not the gaps
         // between them, so a harness stuck in a shell command would never reach
         // it and would outlive any ceiling it counted.
         let TurnContext {
-            clock, crossings, ..
+            clock,
+            bounds,
+            crossings,
+            incidents,
+            ..
         } = context;
+
+        // Reset by output on either pipe. Unlike the wall clock this belongs to
+        // the session rather than to the turn: a fresh process that has said
+        // nothing yet has not been idle for however long its predecessor was.
+        let idle_bound = bounds.harness_idle;
+        let mut silent_since = tokio::time::Instant::now();
+
+        // Stderr can close before stdout, and a closed pipe answers `next_line`
+        // with `None` the instant it is asked. Without this guard the branch
+        // below would win every race forever and spin the loop at full speed.
+        let mut complaining = true;
 
         loop {
             tokio::select! {
@@ -917,6 +1076,8 @@ impl Runner {
                     let Ok(Some(line)) = line else {
                         break;
                     };
+
+                    silent_since = tokio::time::Instant::now();
 
                     if line.trim().is_empty() {
                         continue;
@@ -933,6 +1094,30 @@ impl Runner {
                     }
                 }
 
+                // Stderr never reaches the event log: it is a CLI's diagnostics
+                // rather than anything the contract has a shape for. It is read
+                // so that it counts as life, and so the pipe cannot fill.
+                complaint = complaints.next_line(), if complaining => {
+                    let Ok(Some(complaint)) = complaint else {
+                        // Closed, or unreadable. Either way there is nothing
+                        // further to hear from this pipe, and stdout decides
+                        // when the session is over.
+                        complaining = false;
+                        continue;
+                    };
+
+                    silent_since = tokio::time::Instant::now();
+
+                    if !complaint.trim().is_empty() {
+                        tracing::debug!(
+                            event.name = "turn.harness.stderr",
+                            thread.id = thread_id,
+                            turn.id = turn_id,
+                            "{complaint}",
+                        );
+                    }
+                }
+
                 Some(crossing) = crossings.recv() => {
                     self.publish_crossing(thread_id, turn_id, crossing).await;
 
@@ -940,6 +1125,10 @@ impl Runner {
                         consumed.exhausted = Some(ceiling);
                         break;
                     }
+                }
+
+                Some(incident) = incidents.recv() => {
+                    self.store_incident(&incident).await;
                 }
 
                 () = tokio::time::sleep_until(clock.warn_at), if !clock.warned => {
@@ -955,7 +1144,29 @@ impl Runner {
                     consumed.exhausted = Some(Ceiling::WallClockPerTurn);
                     break;
                 }
+
+                () = tokio::time::sleep_until(silent_since + idle_bound) => {
+                    tracing::warn!(
+                        event.name = "turn.harness.idle",
+                        thread.id = thread_id,
+                        turn.id = turn_id,
+                        harness.idle_seconds = idle_bound.as_secs(),
+                        "the harness produced no output for {{harness.idle_seconds}} \
+                         seconds and is being torn down",
+                    );
+
+                    consumed.idle = true;
+                    break;
+                }
             }
+        }
+
+        // Drained after the loop as well as inside it. A timeout the proxy found
+        // on the request that ended this session arrives while nothing is left
+        // to select on, and an incident recorded nowhere is the silent failure
+        // the whole incident system exists to prevent.
+        while let Ok(incident) = incidents.try_recv() {
+            self.store_incident(&incident).await;
         }
 
         consumed
@@ -984,6 +1195,9 @@ impl Runner {
                     turn_id,
                     ErrorCode::try_from(incident.code).unwrap_or(ErrorCode::Internal),
                     Disposition::try_from(incident.disposition).unwrap_or(Disposition::Degraded),
+                    // The mapper's own judgement, carried through rather than
+                    // re-derived from a code it already decided about.
+                    incident.retryable,
                     &incident.message,
                 )
                 .await;
@@ -1052,6 +1266,8 @@ impl Runner {
             &claimed.turn.turn_id,
             code,
             Disposition::Fatal,
+            // A ceiling does not move by being asked again.
+            false,
             &message,
         )
         .await;
@@ -1206,16 +1422,20 @@ impl Runner {
     /// The disposition is the caller's to state rather than assumed. A ceiling
     /// that ended a turn is `fatal` and a ticket that failed to prefetch is
     /// `degraded`, and collapsing the two would make the one query an operator
-    /// runs after a bad night useless.
+    /// runs after a bad night useless. `retryable` is the caller's for the same
+    /// reason: it is the field an older SDK falls back to when it meets a code
+    /// it has never heard of, so guessing it would mislead exactly the client
+    /// that has nothing else to go on.
     async fn record_incident(
         &self,
         thread_id: &str,
         turn_id: &str,
         code: ErrorCode,
         disposition: Disposition,
+        retryable: bool,
         message: &str,
     ) {
-        let incident = Incident {
+        self.store_incident(&Incident {
             incident_id: uuid::Uuid::now_v7().to_string(),
             sequence: None,
             thread_id: Some(thread_id.to_owned()),
@@ -1223,13 +1443,21 @@ impl Runner {
             member_id: None,
             code: code.into(),
             disposition: disposition.into(),
-            retryable: false,
+            retryable,
             message: message.to_owned(),
             details: None,
             occurred_at: Some(Timestamp::now()),
-        };
+        })
+        .await;
+    }
 
-        if let Err(error) = self.store.record_incident(&incident).await {
+    /// Writes an already assembled incident to the database.
+    ///
+    /// Separate from [`Self::record_incident`] because an incident the proxy
+    /// built arrives whole: it knows its own code, disposition, and message, and
+    /// re-deriving any of those here would let the two disagree.
+    async fn store_incident(&self, incident: &Incident) {
+        if let Err(error) = self.store.record_incident(incident).await {
             tracing::error!(
                 event.name = "incident.record.failed",
                 "could not record an incident: {error}",
@@ -1246,7 +1474,14 @@ impl Runner {
 /// finish short enough to read.
 fn spawn_harness(
     command: &crate::harness::spawn::HarnessCommand,
-) -> Result<(tokio::process::Child, tokio::process::ChildStdout), Failure> {
+) -> Result<
+    (
+        tokio::process::Child,
+        tokio::process::ChildStdout,
+        tokio::process::ChildStderr,
+    ),
+    Failure,
+> {
     // Never `Command::new` directly. A spawned process inherits its parent's
     // environment, and the satellite's holds `ARSOX_SECRET`.
     let mut child = process_for(command)
@@ -1267,7 +1502,15 @@ fn spawn_harness(
         message: "the harness produced no stdout to read".to_owned(),
     })?;
 
-    Ok((child, stdout))
+    // Taken as well as piped. An unread pipe fills its buffer and blocks the
+    // process writing to it, which would look exactly like the hang the idle
+    // bound is there to catch and would be caused by the satellite.
+    let stderr = child.stderr.take().ok_or_else(|| Failure {
+        code: ErrorCode::HarnessLaunchFailed,
+        message: "the harness produced no stderr to read".to_owned(),
+    })?;
+
+    Ok((child, stdout, stderr))
 }
 
 /// The outcome for the checker stage, whatever it did.
@@ -1359,6 +1602,23 @@ fn assemble(
     }
 }
 
+/// Whether a turn that ended with `code` is worth submitting again.
+///
+/// A launch that failed, a harness that died, and a harness that hung are facts
+/// about a process rather than about the work, so the same turn submitted again
+/// may well succeed. Everything else this runner ends a turn with is a fact
+/// about the request or the ceilings, and asking twice reaches the same answer.
+///
+/// Read by the turn's error and by the incident beside it, so a client that
+/// matches on one and a client that falls back to the other are told the same
+/// thing.
+const fn retryable(code: ErrorCode) -> bool {
+    matches!(
+        code,
+        ErrorCode::HarnessLaunchFailed | ErrorCode::HarnessCrashed | ErrorCode::HarnessIdleTimeout
+    )
+}
+
 /// A reason a turn could not run.
 struct Failure {
     code: ErrorCode,
@@ -1375,10 +1635,7 @@ impl Failure {
             error: Some(arsox_sdk::proto::error::v1::Error {
                 code: self.code.into(),
                 message: self.message,
-                retryable: matches!(
-                    self.code,
-                    ErrorCode::HarnessLaunchFailed | ErrorCode::HarnessCrashed
-                ),
+                retryable: retryable(self.code),
                 details: None,
                 trace_id: None,
             }),

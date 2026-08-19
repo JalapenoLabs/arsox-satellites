@@ -53,7 +53,7 @@ mod repos;
 pub use instructions::write_instructions;
 pub use repos::directory_name;
 
-use crate::harness::spawn::{AgentVar, declared_environment};
+use crate::commands::Execution;
 use crate::store::{ProvisionOutcome, Store};
 use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::error::v1::ErrorCode;
@@ -212,9 +212,10 @@ impl ProvisionReport {
 
 /// Clones every repo into a thread's workspace and runs their setup commands.
 ///
-/// `env` is the thread's declared environment, which reaches every setup command
-/// exactly as it reaches the agent that works in the checkout afterwards: an
-/// install that needs a registry token needs it here first.
+/// `execution` carries the thread's declared environment, which reaches every
+/// setup command exactly as it reaches the agent that works in the checkout
+/// afterwards, and the bound each command runs under. An install that needs a
+/// registry token needs it here first, and one that hangs has to end here too.
 ///
 /// Repos are provisioned one at a time. A failed clone ends provisioning, so
 /// racing the rest only to throw the results away buys nothing, and a serial
@@ -235,7 +236,7 @@ pub async fn provision_repos(
     root: &Path,
     thread_id: &str,
     declared: &[Repo],
-    env: &[AgentVar],
+    execution: &Execution,
 ) -> Result<ProvisionReport, WorkspaceError> {
     let mut report = ProvisionReport::default();
 
@@ -287,7 +288,7 @@ pub async fn provision_repos(
             "cloned {{repo.name}} into the thread's workspace",
         );
 
-        collect_setup_failures(repo, &name, &checkout, env, &mut report).await;
+        collect_setup_failures(repo, &name, &checkout, execution, &mut report).await;
         report.cloned.push(name);
     }
 
@@ -299,14 +300,14 @@ async fn collect_setup_failures(
     repo: &Repo,
     name: &str,
     checkout: &Path,
-    env: &[AgentVar],
+    execution: &Execution,
     report: &mut ProvisionReport,
 ) {
     if repo.setup_commands.trim().is_empty() {
         return;
     }
 
-    let run = crate::commands::run(&repo.setup_commands, checkout, env).await;
+    let run = crate::commands::run(&repo.setup_commands, checkout, execution).await;
 
     for failed in run.failures() {
         report.failures.push(ProvisionFailure {
@@ -503,12 +504,14 @@ impl Provisioner {
         // find the instructions it was created with.
         self.write_instructions(thread_id, settings).await;
 
-        // Converted once per provisioning rather than per command. The refusal
+        // Resolved once per provisioning rather than per command. The refusal
         // rule is applied inside, so a variable that would put back what the
-        // scrub removed never reaches a setup command either.
-        let env = declared_environment(&settings.env);
+        // scrub removed never reaches a setup command either, and the thread's
+        // exec bound comes along with it.
+        let execution = Execution::for_thread(settings);
 
-        let report = match provision_repos(&self.workspace_root, thread_id, repos, &env).await {
+        let report = match provision_repos(&self.workspace_root, thread_id, repos, &execution).await
+        {
             Ok(report) => report,
             Err(error) => {
                 // A path the satellite cannot use is a satellite problem rather
@@ -735,7 +738,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("arsox-empty-{}", uuid::Uuid::now_v7()));
         let thread_id = "019fd32f-2222-7222-8222-222222222222";
 
-        let report = provision_repos(&root, thread_id, &[], &[])
+        let report = provision_repos(&root, thread_id, &[], &Execution::default())
             .await
             .expect("nothing to do is not a failure");
 
@@ -757,7 +760,7 @@ mod tests {
                 url: "https://example.com/x.git".to_owned(),
                 ..Repo::default()
             }],
-            &[],
+            &Execution::default(),
         )
         .await
         .expect_err("a traversal must not reach git");

@@ -31,22 +31,44 @@
 //! One carrier would do for routing; requiring both means a process that
 //! guessed the URL still needs the token, and the CLI has a credential-shaped
 //! thing to send so it does not refuse to start.
+//!
+//! # Every request is bounded
+//!
+//! A completion has no natural end either. An endpoint that accepted a request
+//! and then stopped answering leaves the harness blocked on a socket, which from
+//! the satellite's side is indistinguishable from a model thinking hard. So a
+//! request past [`Grant::request_timeout`] is abandoned and the harness is
+//! answered with an error shaped like the provider's own, which is what its
+//! retry and failover policy is written against.
+//!
+//! **The bound covers the whole relay, not just the wait for headers.** A
+//! response still streaming past it is cut off mid-body. That is the honest
+//! reading of "one LLM request": a provider that sends a token a minute for an
+//! hour has failed in a way that a bound on the handshake alone would never
+//! catch. The alternative, an idle bound between chunks, would let a slow drip
+//! run forever while never technically being idle.
 
 use crate::proxy::budget::{Meter, UsageReader};
 use crate::proxy::upstream::Upstream;
+use arsox_sdk::proto::common::v1::Timestamp;
+use arsox_sdk::proto::error::v1::ErrorCode;
+use arsox_sdk::proto::incident::v1::{Disposition, Incident};
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
 use axum::http::{HeaderMap, HeaderName, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
-use futures_util::{Stream, StreamExt as _};
+use futures_util::{Stream, StreamExt as _, TryStreamExt as _};
 use std::collections::HashMap;
+use std::future::Future as _;
 use std::net::SocketAddr;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
+use std::time::Duration;
 use tokio::sync::RwLock;
+use tokio::sync::mpsc::UnboundedSender;
 
 pub mod budget;
 pub mod upstream;
@@ -83,7 +105,7 @@ const MAX_REQUEST_BODY: usize = 128 * 1024 * 1024;
 
 /// What one turn is allowed to do with the proxy.
 #[derive(Debug, Clone)]
-struct Grant {
+pub struct Grant {
     thread_id: String,
     turn_id: String,
     upstream: Upstream,
@@ -93,6 +115,94 @@ struct Grant {
     /// Shared with the runner rather than owned here: the proxy counts, and the
     /// runner is the only thing that knows how to end a turn.
     meter: Arc<Meter>,
+
+    /// How long one of this turn's requests may take before it is abandoned.
+    request_timeout: Duration,
+
+    /// Where an incident this turn produced is sent to be recorded.
+    ///
+    /// The proxy holds no database, deliberately. It sees requests and not the
+    /// turn they belong to the end of, so what it finds travels to the runner,
+    /// which owns the turn's lifetime and is the one thing that records against
+    /// it. A sender whose receiver has been dropped is the "nobody is running a
+    /// turn behind this" case, and dropping the report is the right answer to
+    /// it.
+    incidents: UnboundedSender<Incident>,
+}
+
+impl Grant {
+    /// Admits one turn to the proxy, with the documented request bound and no
+    /// incident reporting.
+    #[must_use]
+    pub fn new(thread_id: &str, turn_id: &str, upstream: Upstream, meter: Arc<Meter>) -> Self {
+        let (nowhere, _nobody_listening) = tokio::sync::mpsc::unbounded_channel();
+
+        Self {
+            thread_id: thread_id.to_owned(),
+            turn_id: turn_id.to_owned(),
+            upstream,
+            meter,
+            request_timeout: crate::timeouts::DEFAULT_LLM_REQUEST,
+            incidents: nowhere,
+        }
+    }
+
+    /// Bounds each of this turn's requests by `request_timeout`.
+    #[must_use]
+    pub fn bounded(mut self, request_timeout: Duration) -> Self {
+        self.request_timeout = request_timeout;
+        self
+    }
+
+    /// Sends what the proxy finds to `incidents`, which the runner records.
+    #[must_use]
+    pub fn reporting_to(mut self, incidents: UnboundedSender<Incident>) -> Self {
+        self.incidents = incidents;
+        self
+    }
+
+    /// Reports a request that ran past this turn's bound.
+    ///
+    /// **Degraded rather than fatal.** The harness is answered with an error it
+    /// can read, so it may retry the request or fail over to the next endpoint
+    /// and the turn goes on. That is exactly why the incident matters: a timeout
+    /// that was quietly retried and then succeeded looks identical to success,
+    /// and a tax paid on every turn forever is invisible until somebody
+    /// reconciles a bill against it.
+    fn report_timeout(&self, during: &'static str) {
+        tracing::warn!(
+            event.name = "proxy.request.timed_out",
+            thread.id = self.thread_id,
+            turn.id = self.turn_id,
+            llm.bound_seconds = self.request_timeout.as_secs(),
+            llm.phase = during,
+            "abandoning a model request that ran past its {{llm.bound_seconds}} second \
+             bound {{llm.phase}}",
+        );
+
+        let incident = Incident {
+            incident_id: uuid::Uuid::now_v7().to_string(),
+            // Assigned by the log if this incident reaches the stream. The proxy
+            // does not append events, so it cannot know one.
+            sequence: None,
+            thread_id: Some(self.thread_id.clone()),
+            turn_id: Some(self.turn_id.clone()),
+            member_id: None,
+            code: ErrorCode::LlmEndpointTimeout.into(),
+            disposition: Disposition::Degraded.into(),
+            // The next attempt meets a different socket, and an endpoint that
+            // stopped answering frequently starts again.
+            retryable: true,
+            message: format!(
+                "a model request exceeded the thread's {:?} bound {during} and was abandoned",
+                self.request_timeout
+            ),
+            details: None,
+            occurred_at: Some(Timestamp::now()),
+        };
+
+        let _unheard = self.incidents.send(incident);
+    }
 }
 
 /// Routes an agent's model requests, holding the credential it must not.
@@ -123,10 +233,11 @@ impl LlmProxy {
         let proxy = Self {
             grants: Arc::new(RwLock::new(HashMap::new())),
             client: reqwest::Client::builder()
-                // The satellite applies its own per-request timeout around a
-                // turn. A second one here would cut a long completion off
-                // mid-stream for no reason.
-                .timeout(std::time::Duration::from_hours(1))
+                // A backstop far outside any bound a thread would set. The real
+                // per-request bound is the thread's and is applied per grant,
+                // because this client is shared by every turn on the satellite
+                // and one of them must not decide the limit for the rest.
+                .timeout(Duration::from_hours(1))
                 .build()?,
             address,
         };
@@ -159,29 +270,15 @@ impl LlmProxy {
         format!("http://{}/t/{token}", self.address)
     }
 
-    /// Issues a turn its token, metered by `meter`.
+    /// Issues a turn its token.
     ///
     /// The token is a UUID rather than anything derived from the turn, because
     /// a token an agent can predict is a token it can mint for a turn that is
     /// not its own.
-    pub async fn grant(
-        &self,
-        thread_id: &str,
-        turn_id: &str,
-        upstream: Upstream,
-        meter: Arc<Meter>,
-    ) -> String {
+    pub async fn grant(&self, grant: Grant) -> String {
         let token = uuid::Uuid::now_v7().to_string();
 
-        self.grants.write().await.insert(
-            token.clone(),
-            Grant {
-                thread_id: thread_id.to_owned(),
-                turn_id: turn_id.to_owned(),
-                upstream,
-                meter,
-            },
-        );
+        self.grants.write().await.insert(token.clone(), grant);
 
         token
     }
@@ -277,9 +374,16 @@ async fn forward(
         outbound = outbound.header(name, value);
     }
 
-    match outbound.send().await {
-        Ok(response) => relay(response, grant.meter),
-        Err(error) => {
+    // One deadline for the whole relay, taken before the request goes out. The
+    // streaming half inherits it rather than starting a second clock, so a
+    // response that arrives at the last moment and then dribbles cannot spend
+    // the bound twice.
+    let deadline = tokio::time::Instant::now() + grant.request_timeout;
+
+    match tokio::time::timeout_at(deadline, outbound.send()).await {
+        Ok(Ok(response)) => relay(response, grant, deadline),
+
+        Ok(Err(error)) => {
             tracing::warn!(
                 event.name = "proxy.upstream.failed",
                 thread.id = grant.thread_id,
@@ -293,6 +397,21 @@ async fn forward(
                 "the upstream model endpoint could not be reached",
             )
         }
+
+        Err(_elapsed) => {
+            grant.report_timeout("while waiting for a response");
+
+            // A gateway timeout rather than the satellite's own contract error,
+            // for the same reason every other refusal here wears the provider's
+            // shape: the harness speaks one provider's error format and nothing
+            // else. A 5xx is also what its retry and failover policy is written
+            // against, which is what the contract says a timeout should trigger.
+            provider_error(
+                StatusCode::GATEWAY_TIMEOUT,
+                "api_error",
+                "the upstream model endpoint did not answer inside this thread's request timeout",
+            )
+        }
     }
 }
 
@@ -303,7 +422,7 @@ async fn forward(
 /// would turn a streaming API into a blocking one and defeat every event the
 /// harness emits as it goes, so the usage the provider reports is read out of
 /// the bytes on their way past instead.
-fn relay(response: reqwest::Response, meter: Arc<Meter>) -> Response {
+fn relay(response: reqwest::Response, grant: Grant, deadline: tokio::time::Instant) -> Response {
     let mut builder = Response::builder().status(response.status());
 
     for (name, value) in response.headers() {
@@ -321,9 +440,13 @@ fn relay(response: reqwest::Response, meter: Arc<Meter>) -> Response {
     );
 
     let counted = Metered {
-        inner: Box::pin(response.bytes_stream()),
+        // The error type crosses to `io::Error` here rather than staying
+        // `reqwest`'s, because the body has a second way to fail that reqwest
+        // has no word for: the bound below expiring mid-stream.
+        inner: Box::pin(response.bytes_stream().map_err(std::io::Error::other)),
         reader,
-        meter,
+        grant,
+        deadline: Box::pin(tokio::time::sleep_until(deadline)),
     };
 
     builder
@@ -337,25 +460,50 @@ fn relay(response: reqwest::Response, meter: Arc<Meter>) -> Response {
         })
 }
 
-/// A response body that counts the usage it carries on its way past.
+/// A response body that counts the usage it carries on its way past, and ends
+/// once the request's bound elapses.
 ///
 /// The total is committed on drop rather than when the stream ends. A harness
 /// that hangs up mid-response still spent the tokens the provider generated, and
 /// a turn whose accounting is discarded because its last request was abandoned
-/// is a ceiling with a hole in it.
+/// is a ceiling with a hole in it. A response cut off at the bound is charged
+/// for the same reason: the provider generated those tokens whether or not they
+/// arrived.
 struct Metered {
-    inner: Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>,
+    inner: Pin<Box<dyn Stream<Item = Result<Bytes, std::io::Error>> + Send>>,
     reader: UsageReader,
-    meter: Arc<Meter>,
+    grant: Grant,
+
+    /// Fires when the request's bound elapses.
+    ///
+    /// A timer rather than a comparison against the clock on each chunk: an
+    /// upstream that stops sending stops waking this stream too, so a check that
+    /// only ran when a chunk arrived would never run at all for exactly the
+    /// failure it exists to catch.
+    deadline: Pin<Box<tokio::time::Sleep>>,
 }
 
 impl Stream for Metered {
-    type Item = reqwest::Result<Bytes>;
+    type Item = Result<Bytes, std::io::Error>;
 
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // Every field is `Unpin`, so the pin places no restriction on taking a
         // mutable reference and no projection machinery is needed.
         let this = self.get_mut();
+
+        if this.deadline.as_mut().poll(cx).is_ready() {
+            this.grant
+                .report_timeout("while the response was streaming");
+
+            // An error rather than a clean end. A truncated server-sent event
+            // stream that ended tidily would reach the harness as a completion
+            // that simply stopped, which is the silent failure this whole
+            // system exists to prevent.
+            return Poll::Ready(Some(Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "the model response exceeded this thread's request timeout",
+            ))));
+        }
 
         let polled = this.inner.poll_next_unpin(cx);
 
@@ -369,7 +517,7 @@ impl Stream for Metered {
 
 impl Drop for Metered {
     fn drop(&mut self) {
-        self.meter.record_tokens(self.reader.take_total());
+        self.grant.meter.record_tokens(self.reader.take_total());
     }
 }
 
