@@ -487,19 +487,38 @@ mod tests {
     fn a_token_reaches_git_through_the_environment_rather_than_argv_or_config() {
         // argv is readable by every process on the box, and config written by
         // `git clone -c` persists into the clone. Neither may ever hold this.
+        //
+        // Inspected as argv rather than through the Command's Debug rendering,
+        // because Debug includes environment assignments on Linux, and the
+        // environment is exactly where the token is supposed to be.
         let staged = Credentials::Token("ghp_the_real_token".to_owned());
         let mut process = tokio::process::Command::new("git");
         staged.apply(&mut process);
 
-        let rendered = format!("{process:?}");
+        let std_command = process.as_std();
+        let argv: Vec<String> = std::iter::once(std_command.get_program())
+            .chain(std_command.get_args())
+            .map(|argument| argument.to_string_lossy().into_owned())
+            .collect();
 
         assert!(
-            !rendered.contains("ghp_the_real_token"),
-            "the token appeared in the command line: {rendered}"
+            argv.iter()
+                .all(|argument| !argument.contains("ghp_the_real_token")),
+            "the token appeared in argv: {argv:?}"
         );
         assert!(
-            rendered.contains("credential.helper") || rendered.contains("!f()"),
-            "the helper that reads it should be on the command line"
+            argv.iter()
+                .any(|argument| argument.contains("credential.helper")),
+            "the helper that reads it should be on the command line: {argv:?}"
+        );
+
+        let token_in_environment = std_command.get_envs().any(|(key, value)| {
+            key.to_string_lossy() == "ARSOX_GIT_TOKEN"
+                && value.is_some_and(|held| held.to_string_lossy().contains("ghp_the_real_token"))
+        });
+        assert!(
+            token_in_environment,
+            "the token should travel in the process environment"
         );
     }
 
