@@ -18,19 +18,21 @@
 //! recognize all produce incidents. A turn that ends badly ends with a reason
 //! attached rather than a gap where its output should be.
 
-use crate::harness::spawn::{ModelAccess, Session, command_for, process_for};
-use crate::harness::{HarnessResult, claude};
+use crate::harness::spawn::{HarnessCommand, ModelAccess, Session, command_for, process_for};
+use crate::harness::{HarnessResult, accounting, checkers, claude};
 use crate::proxy::budget::{Ceilings, Crossing, Meter};
 use crate::store::{AppendEvent, ClaimedTurn, Store};
-use arsox_sdk::proto::common::v1::Timestamp;
+use arsox_sdk::proto::common::v1::{Duration, Timestamp};
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
 use arsox_sdk::proto::event::v1::{
-    BudgetWarning, Ceiling, ThreadEndReason, TurnCompleted, TurnStarted,
+    BudgetWarning, Ceiling, CheckerResultEvent, ThreadEndReason, TurnCompleted, TurnStarted,
 };
 use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::incident::v1::{Disposition, Incident, IncidentCounts};
-use arsox_sdk::proto::turn::v1::{Stage, StageDisposition, StageOutcome, TurnResult, TurnStatus};
+use arsox_sdk::proto::turn::v1::{
+    CheckerResult, Stage, StageDisposition, StageOutcome, TurnResult, TurnStatus,
+};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -98,6 +100,115 @@ struct Consumed {
 
     /// The ceiling that stopped the turn, when one did.
     exhausted: Option<Ceiling>,
+}
+
+/// The turn's wall clock ceiling, shared by every harness session in it.
+///
+/// Held on the turn rather than restarted per session, because
+/// `maxWallClockPerTurn` bounds a turn. A checker fix cycle that started the
+/// clock again would let a turn with a five minute ceiling run for fifteen, and
+/// the ceiling would still report itself as held.
+#[derive(Debug)]
+struct WallClock {
+    warn_at: tokio::time::Instant,
+    deadline: tokio::time::Instant,
+
+    /// Whether the eighty percent warning has already gone out. One warning per
+    /// turn, not one per session.
+    warned: bool,
+}
+
+impl WallClock {
+    /// Starts the turn's clock now.
+    fn starting_now(ceilings: &Ceilings) -> Self {
+        let limit = ceilings.wall_clock_per_turn;
+        let started = tokio::time::Instant::now();
+
+        Self {
+            warn_at: started + limit.map_or(NEVER, |limit| limit.mul_f64(WARN_AT_FRACTION)),
+            deadline: started + limit.unwrap_or(NEVER),
+            warned: false,
+        }
+    }
+}
+
+/// Everything every harness session in one turn has to share.
+///
+/// Grouped rather than threaded through as six parameters, because a checker fix
+/// cycle is another session in the same turn and each of these has to be the
+/// same object it already was. A second grant would spend outside the ceiling, a
+/// second meter would restart the count, and a second wall clock would extend
+/// the deadline. Passing one value makes that structural instead of remembered.
+#[derive(Debug)]
+struct TurnContext {
+    harness: Harness,
+    working_dir: PathBuf,
+
+    /// The turn's admission to the model, minted once and revoked once.
+    access: ModelAccess,
+
+    clock: WallClock,
+
+    /// Budget crossings the proxy found while counting this turn's requests.
+    crossings: mpsc::UnboundedReceiver<Crossing>,
+}
+
+/// What the checker stage amounted to.
+#[derive(Debug)]
+struct Checked {
+    /// The last attempt's results, which is the state the turn ended in.
+    ///
+    /// Earlier attempts are not accumulated here. Each one reached the stream as
+    /// it happened, and a result list holding three rounds of the same command
+    /// would answer "did the checkers pass" with a history instead of a state.
+    results: Vec<CheckerResult>,
+
+    outcome: StageOutcome,
+
+    /// A ceiling a fix cycle crossed, which ends the turn rather than the stage.
+    exhausted: Option<Ceiling>,
+
+    /// Whether a fix cycle was cancelled out from under the turn.
+    cancelled: bool,
+}
+
+impl Default for Checked {
+    fn default() -> Self {
+        Self {
+            results: Vec::new(),
+            outcome: checker_stage(StageDisposition::Skipped, None, None),
+            exhausted: None,
+            cancelled: false,
+        }
+    }
+}
+
+impl Checked {
+    /// The stage did not run, and says why.
+    fn skipped(reason: &str) -> Self {
+        Self {
+            outcome: checker_stage(StageDisposition::Skipped, Some(reason.to_owned()), None),
+            ..Self::default()
+        }
+    }
+
+    /// Every checker passed.
+    fn ran(&mut self, elapsed: std::time::Duration) {
+        self.outcome = checker_stage(StageDisposition::Ran, None, Some(elapsed));
+    }
+
+    /// The stage ended with something still red, and says what.
+    fn failed(&mut self, elapsed: std::time::Duration, reason: String) {
+        self.outcome = checker_stage(StageDisposition::Failed, Some(reason), Some(elapsed));
+    }
+}
+
+/// Why a fix cycle ended the stage rather than producing another attempt.
+#[derive(Debug)]
+struct StoppedEarly {
+    reason: String,
+    exhausted: Option<Ceiling>,
+    cancelled: bool,
 }
 
 /// Claims queued turns and runs them.
@@ -283,18 +394,142 @@ impl Runner {
         }
     }
 
-    /// Spawns the harness and decides what its run amounted to.
+    /// Runs the turn's harness sessions and decides what they amounted to.
+    ///
+    /// Usually one session, and sometimes more: a failing checker resumes the
+    /// agent to fix it. Every one of those runs inside this function on purpose,
+    /// because the proxy grant, the meter, and the wall clock are all withdrawn
+    /// or restarted at its edges. A fix cycle outside it would be a second turn
+    /// wearing the first one's name, spending past the ceiling the first one set.
     async fn drive(&self, claimed: &ClaimedTurn) -> Result<(TurnStatus, TurnResult), Failure> {
         let thread_id = &claimed.turn.thread_id;
         let turn_id = &claimed.turn.turn_id;
 
         let ceilings = Ceilings::from_budget(claimed.settings.budget.as_ref());
+        let working_dir = self.prepare(claimed, &ceilings).await?;
+
+        // The guard is held here rather than inside `open`, because the grant
+        // has to outlive every session in the turn, the checker fix cycle
+        // included, and be withdrawn however the turn ends.
+        let (mut context, _grant) = self.open(claimed, &ceilings, working_dir).await;
+
+        let session = self.session_for(thread_id).await;
+        let command = command_for(
+            context.harness,
+            &claimed.turn.prompt,
+            &session,
+            context.working_dir.clone(),
+            Some(context.access.clone()),
+            &claimed.settings.env,
+            // Read per turn rather than held on the runner, so a thread's
+            // posture is whatever its settings say now.
+            claimed.settings.permissions.as_ref(),
+        );
+
+        let consumed = self
+            .run_session(&command, thread_id, turn_id, &mut context)
+            .await?;
+
+        if consumed.cancelled {
+            return Ok((
+                TurnStatus::Cancelled,
+                assemble(
+                    claimed,
+                    None,
+                    TurnStatus::Cancelled,
+                    &Checked::skipped("the turn was cancelled before the checkers ran"),
+                ),
+            ));
+        }
+
+        if let Some(ceiling) = consumed.exhausted {
+            return Ok((
+                TurnStatus::Failed,
+                self.stopped_by(
+                    claimed,
+                    consumed.result,
+                    ceiling,
+                    &Checked::skipped("the budget was spent before the checkers ran"),
+                )
+                .await,
+            ));
+        }
+
+        let mut reported_result = consumed.result;
+
+        let turn_status = match reported_result.as_ref() {
+            Some(result) if result.is_error => TurnStatus::Failed,
+            Some(_reported) => TurnStatus::Completed,
+            // A clean exit with no result line means the harness ended without
+            // saying what it did, which is a defect worth naming rather than
+            // reporting as success.
+            None => TurnStatus::Failed,
+        };
+
+        if reported_result.is_none() {
+            self.record_incident(
+                thread_id,
+                turn_id,
+                ErrorCode::HarnessCrashed,
+                Disposition::Fatal,
+                "the harness exited cleanly without reporting a result",
+            )
+            .await;
+        }
+
+        // Checkers verify work an agent claimed to have finished. A turn whose
+        // harness crashed or reported an error made no such claim, and resuming
+        // the session that just failed would spend two more of them proving it.
+        let checked = if turn_status == TurnStatus::Completed {
+            self.check(claimed, &mut context, &mut reported_result)
+                .await
+        } else {
+            Checked::skipped("the harness did not finish, so there was nothing to verify")
+        };
+
+        // A ceiling crossed while fixing a checker ends the turn the same way it
+        // would have during the work itself, with the code for the ceiling that
+        // did it. The checker results already collected go with it.
+        if let Some(ceiling) = checked.exhausted {
+            return Ok((
+                TurnStatus::Failed,
+                self.stopped_by(claimed, reported_result, ceiling, &checked)
+                    .await,
+            ));
+        }
+
+        // A checker that is still red does not fail the turn: the turn reached
+        // the end of the stack, which is what COMPLETED means, and `stages` plus
+        // the incident say what the checkers did. A cancellation during a fix
+        // cycle does, because nothing after it ran.
+        let turn_status = if checked.cancelled {
+            TurnStatus::Cancelled
+        } else {
+            turn_status
+        };
+
+        Ok((
+            turn_status,
+            assemble(claimed, reported_result, turn_status, &checked),
+        ))
+    }
+
+    /// Everything that has to hold before a harness is spawned.
+    ///
+    /// Returns the thread's working directory, which is where every session in
+    /// the turn runs.
+    async fn prepare(
+        &self,
+        claimed: &ClaimedTurn,
+        ceilings: &Ceilings,
+    ) -> Result<PathBuf, Failure> {
+        let thread_id = &claimed.turn.thread_id;
 
         // Checked before anything is spawned. A thread that has already spent
         // its lifetime cost has nothing left to run a turn with, and launching
         // a harness to discover that would spend more of it.
         if self
-            .cost_ceiling_reached(thread_id, turn_id, &ceilings)
+            .cost_ceiling_reached(thread_id, &claimed.turn.turn_id, ceilings)
             .await
         {
             return Err(Failure {
@@ -312,69 +547,80 @@ impl Runner {
                 message: format!("could not create the thread workspace: {error}"),
             })?;
 
-        let session = self.session_for(thread_id).await;
-        let harness = Harness::try_from(claimed.settings.harness).unwrap_or(Harness::Claude);
+        Ok(working_dir)
+    }
 
-        // Minted per turn and withdrawn below, whatever the turn does. Every
-        // model request this harness makes goes through the satellite, which is
-        // what makes counting and ceilings arithmetic rather than a request.
-        //
-        // The meter is shared with the proxy: the proxy adds up what each
-        // response reported, and the crossings it finds arrive here, on the one
-        // thing that knows how to end a turn.
-        let (crossings, mut reported) = mpsc::unbounded_channel();
-        let meter = Arc::new(Meter::new(&ceilings, crossings));
+    /// Mints the turn's admission to the model, and the context its sessions
+    /// share.
+    ///
+    /// Minted per turn and withdrawn when the returned guard drops, whatever the
+    /// turn does. Every model request a session makes goes through the
+    /// satellite, which is what makes counting and ceilings arithmetic rather
+    /// than a request.
+    ///
+    /// The meter is shared with the proxy: the proxy adds up what each response
+    /// reported, and the crossings it finds arrive on the channel here, at the
+    /// one thing that knows how to end a turn.
+    async fn open(
+        &self,
+        claimed: &ClaimedTurn,
+        ceilings: &Ceilings,
+        working_dir: PathBuf,
+    ) -> (TurnContext, RevokeOnDrop) {
+        let (crossings, reported) = mpsc::unbounded_channel();
+        let meter = Arc::new(Meter::new(ceilings, crossings));
 
         let upstream = crate::proxy::upstream::Upstream::resolve(&claimed.settings.models);
         let token = self
             .proxy
-            .grant(thread_id, turn_id, upstream, Arc::clone(&meter))
+            .grant(
+                &claimed.turn.thread_id,
+                &claimed.turn.turn_id,
+                upstream,
+                Arc::clone(&meter),
+            )
             .await;
 
-        let command = command_for(
-            harness,
-            &claimed.turn.prompt,
-            &session,
+        let context = TurnContext {
+            harness: Harness::try_from(claimed.settings.harness).unwrap_or(Harness::Claude),
             working_dir,
-            Some(ModelAccess {
+            access: ModelAccess {
                 base_url: self.proxy.base_url_for(&token),
                 token: token.clone(),
-            }),
-            // Read per turn rather than held on the runner, so a thread's
-            // posture is whatever its settings say now.
-            claimed.settings.permissions.as_ref(),
-        );
+            },
+            clock: WallClock::starting_now(ceilings),
+            crossings: reported,
+        };
 
-        // Revoked on every path out of this function, including the early
-        // returns for cancellation and failure. A grant that outlived its turn
-        // would keep spending after the work stopped.
-        let _grant = RevokeOnDrop {
+        let grant = RevokeOnDrop {
             proxy: self.proxy.clone(),
             token,
         };
 
-        let (mut child, stdout) = spawn_harness(&command)?;
+        (context, grant)
+    }
 
-        let consumed = self
-            .consume(stdout, thread_id, turn_id, &ceilings, &mut reported)
-            .await;
+    /// Runs one harness process to whatever end, and tears it down.
+    ///
+    /// A turn is one of these, or several: the first runs the work and any that
+    /// follow answer a failing checker. Each is driven identically, through the
+    /// grant, meter, and wall clock the turn already holds.
+    async fn run_session(
+        &self,
+        command: &HarnessCommand,
+        thread_id: &str,
+        turn_id: &str,
+        context: &mut TurnContext,
+    ) -> Result<Consumed, Failure> {
+        let (mut child, stdout) = spawn_harness(command)?;
 
-        if consumed.cancelled {
+        let consumed = self.consume(stdout, thread_id, turn_id, context).await;
+
+        if consumed.cancelled || consumed.exhausted.is_some() {
             // Asked to stop cooperatively first. `kill_on_drop` is the backstop
             // for the case where it does not.
             drop(child.start_kill());
-            return Ok((
-                TurnStatus::Cancelled,
-                assemble(claimed, None, TurnStatus::Cancelled),
-            ));
-        }
-
-        if let Some(ceiling) = consumed.exhausted {
-            drop(child.start_kill());
-            return Ok((
-                TurnStatus::Failed,
-                self.stopped_by(claimed, consumed.result, ceiling).await,
-            ));
+            return Ok(consumed);
         }
 
         let status = child.wait().await.map_err(|error| Failure {
@@ -389,27 +635,244 @@ impl Runner {
             });
         }
 
-        let turn_status = match consumed.result.as_ref() {
-            Some(result) if result.is_error => TurnStatus::Failed,
-            Some(_reported) => TurnStatus::Completed,
-            // A clean exit with no result line means the harness ended without
-            // saying what it did, which is a defect worth naming rather than
-            // reporting as success.
-            None => TurnStatus::Failed,
+        Ok(consumed)
+    }
+
+    /// Runs the thread's checkers, waking the agent back up while any fail.
+    ///
+    /// This is the verification that turns "the agent said it was done" into
+    /// something checked. A nonzero exit is a normal outcome routed back to the
+    /// agent, not a crash: it resumes the same session with the failing commands
+    /// and their output, and is asked either to fix them or to say why the
+    /// failure should stand.
+    ///
+    /// The loop is capped by [`checkers::MAX_FIX_ATTEMPTS`]. Past the cap the
+    /// turn completes with the failures recorded and a `CHECKER_FAILED`
+    /// incident, because a check that will not go green is a fact about the work
+    /// rather than a reason to throw the work away.
+    ///
+    /// `result` is the turn's running harness accounting, which every fix
+    /// session is folded into. See [`accounting`] for why that matters.
+    async fn check(
+        &self,
+        claimed: &ClaimedTurn,
+        context: &mut TurnContext,
+        result: &mut Option<HarnessResult>,
+    ) -> Checked {
+        let thread_id = &claimed.turn.thread_id;
+        let turn_id = &claimed.turn.turn_id;
+
+        let Ok(repos_root) = crate::workspace::repos_directory(&self.workspace_root, thread_id)
+        else {
+            return Checked::skipped("the thread's workspace path is not usable");
         };
 
-        if consumed.result.is_none() {
-            self.record_incident(
+        let declared = checkers::declared(&claimed.settings.repos, &repos_root);
+
+        // The whole cost of this stage for a thread that declared no checker:
+        // one filter over its repos, and a stage reported as skipped rather than
+        // omitted so "not run" never reads as "found nothing".
+        if declared.is_empty() {
+            return Checked::skipped("no repo declares a checker");
+        }
+
+        // The same variables the agent works under, because a lint that needs a
+        // registry token needs it whoever is running it.
+        let env = crate::harness::spawn::declared_environment(&claimed.settings.env);
+        let started = tokio::time::Instant::now();
+        let mut checked = Checked::default();
+
+        for attempt in 0..=checkers::MAX_FIX_ATTEMPTS {
+            let outcomes = checkers::run_all(&declared, &env).await;
+            self.publish_checkers(thread_id, turn_id, &outcomes).await;
+
+            checked.results = outcomes
+                .iter()
+                .map(|outcome| outcome.result.clone())
+                .collect();
+
+            let failures: Vec<&checkers::Outcome> = outcomes
+                .iter()
+                .filter(|outcome| !outcome.passed())
+                .collect();
+
+            if failures.is_empty() {
+                checked.ran(started.elapsed());
+                return checked;
+            }
+
+            if attempt == checkers::MAX_FIX_ATTEMPTS {
+                break;
+            }
+
+            if let Some(stopped) = self.fix(claimed, context, result, &failures).await {
+                checked.exhausted = stopped.exhausted;
+                checked.cancelled = stopped.cancelled;
+                checked.failed(started.elapsed(), stopped.reason);
+                return checked;
+            }
+        }
+
+        let still_failing = checked
+            .results
+            .iter()
+            .filter(|result| result.exit_code != 0)
+            .count();
+        let reason = format!(
+            "{still_failing} checker commands were still failing after \
+             {} fix attempts",
+            checkers::MAX_FIX_ATTEMPTS
+        );
+
+        // Degraded rather than blocked. `blocked` is for a permission gate that
+        // closed as designed, and no gate closed here: the work happened and
+        // finished with its verification missing, which is what `degraded`
+        // names. Recording it as blocked would put a red build in the same query
+        // an operator runs to find an allowlist that needs widening.
+        self.record_incident(
+            thread_id,
+            turn_id,
+            ErrorCode::CheckerFailed,
+            Disposition::Degraded,
+            &reason,
+        )
+        .await;
+
+        tracing::warn!(
+            event.name = "turn.checkers.failed",
+            thread.id = thread_id,
+            turn.id = turn_id,
+            checker.failures = still_failing,
+            "{{checker.failures}} checker commands are still failing, the turn is ending with them recorded",
+        );
+
+        checked.failed(started.elapsed(), reason);
+        checked
+    }
+
+    /// Resumes the agent to answer a failing checker, once.
+    ///
+    /// Returns `None` when the session ran and the checkers are worth trying
+    /// again, and [`StoppedEarly`] when something ended the stage instead.
+    ///
+    /// Resumed rather than started fresh. The agent that wrote the code is the
+    /// one that can fix it, and a clean context would meet a failing lint with
+    /// no idea what the work was for.
+    async fn fix(
+        &self,
+        claimed: &ClaimedTurn,
+        context: &mut TurnContext,
+        result: &mut Option<HarnessResult>,
+        failures: &[&checkers::Outcome],
+    ) -> Option<StoppedEarly> {
+        let thread_id = &claimed.turn.thread_id;
+        let turn_id = &claimed.turn.turn_id;
+
+        tracing::info!(
+            event.name = "turn.checkers.fixing",
+            thread.id = thread_id,
+            turn.id = turn_id,
+            checker.failures = failures.len(),
+            "resuming the agent to answer {{checker.failures}} failing checker commands",
+        );
+
+        let session = self.session_for(thread_id).await;
+        let command = command_for(
+            context.harness,
+            &checkers::fix_prompt(failures),
+            &session,
+            context.working_dir.clone(),
+            Some(context.access.clone()),
+            &claimed.settings.env,
+            claimed.settings.permissions.as_ref(),
+        );
+
+        match self
+            .run_session(&command, thread_id, turn_id, context)
+            .await
+        {
+            Ok(consumed) => {
+                // Folded before anything else is decided: what a fix session
+                // spent is spent whether or not it fixed anything.
+                if let Some(later) = consumed.result {
+                    accounting::fold(result, later);
+                }
+
+                if consumed.cancelled {
+                    return Some(StoppedEarly {
+                        reason: "the turn was cancelled while the checkers were being fixed"
+                            .to_owned(),
+                        exhausted: None,
+                        cancelled: true,
+                    });
+                }
+
+                consumed.exhausted.map(|ceiling| StoppedEarly {
+                    reason: format!(
+                        "the turn reached {} while the checkers were being fixed",
+                        ceiling.as_str_name()
+                    ),
+                    exhausted: Some(ceiling),
+                    cancelled: false,
+                })
+            }
+            Err(failure) => {
+                // Degraded rather than fatal: the work the turn already did
+                // survives on disk, and what is missing is its verification.
+                self.record_incident(
+                    thread_id,
+                    turn_id,
+                    failure.code,
+                    Disposition::Degraded,
+                    &failure.message,
+                )
+                .await;
+
+                Some(StoppedEarly {
+                    reason: format!(
+                        "the agent could not be resumed to fix the checkers: {}",
+                        failure.message
+                    ),
+                    exhausted: None,
+                    cancelled: false,
+                })
+            }
+        }
+    }
+
+    /// Puts every checker command's outcome on the thread's stream.
+    ///
+    /// Per command rather than per attempt, so a consumer watching a long build
+    /// sees it finish rather than learning about the whole stage at the end.
+    async fn publish_checkers(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+        outcomes: &[checkers::Outcome],
+    ) {
+        for outcome in outcomes {
+            tracing::info!(
+                event.name = "turn.checker.finished",
+                thread.id = thread_id,
+                turn.id = turn_id,
+                checker.repo = outcome.repo,
+                checker.command = outcome.result.command,
+                checker.exit_code = outcome.result.exit_code,
+                "{{checker.command}} in {{checker.repo}} exited with {{checker.exit_code}}",
+            );
+
+            self.append(
                 thread_id,
                 turn_id,
-                ErrorCode::HarnessCrashed,
-                Disposition::Fatal,
-                "the harness exited cleanly without reporting a result",
+                "checker.result",
+                None,
+                Payload::CheckerResult(CheckerResultEvent {
+                    repo: outcome.repo.clone(),
+                    result: Some(outcome.result.clone()),
+                }),
             )
             .await;
         }
-
-        Ok((turn_status, assemble(claimed, consumed.result, turn_status)))
     }
 
     /// Reads the harness's output until it ends, is cancelled, or runs out of
@@ -425,21 +888,24 @@ impl Runner {
         stdout: tokio::process::ChildStdout,
         thread_id: &str,
         turn_id: &str,
-        ceilings: &Ceilings,
-        reported: &mut mpsc::UnboundedReceiver<Crossing>,
+        context: &mut TurnContext,
     ) -> Consumed {
         let mut lines = BufReader::new(stdout).lines();
         let mut consumed = Consumed::default();
         let mut seen = 0_usize;
 
-        // Wall clock is the runner's to enforce. The proxy sees requests, not
-        // the gaps between them, so a harness stuck in a shell command would
-        // never reach it and would outlive any ceiling it counted.
-        let limit = ceilings.wall_clock_per_turn;
-        let started = tokio::time::Instant::now();
-        let warn_at = started + limit.map_or(NEVER, |limit| limit.mul_f64(WARN_AT_FRACTION));
-        let deadline = started + limit.unwrap_or(NEVER);
-        let mut warned_on_clock = false;
+        // Destructured so the two fields this loop touches are borrowed
+        // separately. `select!` holds a future over the crossings receiver while
+        // another branch writes the clock, and one borrow of the whole context
+        // could not span both.
+        //
+        // Wall clock is the runner's to enforce, and it belongs to the turn
+        // rather than to this session. The proxy sees requests, not the gaps
+        // between them, so a harness stuck in a shell command would never reach
+        // it and would outlive any ceiling it counted.
+        let TurnContext {
+            clock, crossings, ..
+        } = context;
 
         loop {
             tokio::select! {
@@ -467,7 +933,7 @@ impl Runner {
                     }
                 }
 
-                Some(crossing) = reported.recv() => {
+                Some(crossing) = crossings.recv() => {
                     self.publish_crossing(thread_id, turn_id, crossing).await;
 
                     if let Crossing::Reached { ceiling } = crossing {
@@ -476,8 +942,8 @@ impl Runner {
                     }
                 }
 
-                () = tokio::time::sleep_until(warn_at), if !warned_on_clock => {
-                    warned_on_clock = true;
+                () = tokio::time::sleep_until(clock.warn_at), if !clock.warned => {
+                    clock.warned = true;
                     self.publish_crossing(thread_id, turn_id, Crossing::Approaching {
                         ceiling: Ceiling::WallClockPerTurn,
                         percent_used: crate::proxy::budget::WARN_AT_PERCENT,
@@ -485,7 +951,7 @@ impl Runner {
                     .await;
                 }
 
-                () = tokio::time::sleep_until(deadline) => {
+                () = tokio::time::sleep_until(clock.deadline) => {
                     consumed.exhausted = Some(Ceiling::WallClockPerTurn);
                     break;
                 }
@@ -573,6 +1039,7 @@ impl Runner {
         claimed: &ClaimedTurn,
         harness: Option<HarnessResult>,
         ceiling: Ceiling,
+        checked: &Checked,
     ) -> TurnResult {
         let code = crate::proxy::budget::code_for(ceiling);
         let message = format!(
@@ -589,7 +1056,7 @@ impl Runner {
         )
         .await;
 
-        let mut result = assemble(claimed, harness, TurnStatus::Failed);
+        let mut result = assemble(claimed, harness, TurnStatus::Failed, checked);
         result.error = Some(arsox_sdk::proto::error::v1::Error {
             code: code.into(),
             message,
@@ -803,22 +1270,47 @@ fn spawn_harness(
     Ok((child, stdout))
 }
 
-/// Folds what the harness reported into the full turn result.
+/// The outcome for the checker stage, whatever it did.
 ///
-/// A turn is bigger than a harness run: checkers, self-review, artifact
-/// scanning, and suggestions are all stages the harness knows nothing about.
-/// They are reported as skipped rather than omitted, so "not run" never reads as
-/// "found nothing".
+/// A free function so [`Checked`] can name it before a `Runner` exists, and so
+/// the one place the stage's identity is spelled is the one place it is built.
+fn checker_stage(
+    disposition: StageDisposition,
+    reason: Option<String>,
+    elapsed: Option<std::time::Duration>,
+) -> StageOutcome {
+    StageOutcome {
+        stage: Stage::Checkers.into(),
+        disposition: disposition.into(),
+        reason,
+        elapsed: elapsed.map(|elapsed| Duration {
+            // Saturating rather than wrapping: a stage that ran for longer than
+            // an `i64` of seconds has a problem this number would not describe.
+            seconds: i64::try_from(elapsed.as_secs()).unwrap_or(i64::MAX),
+            // Sub-second nanoseconds always fit.
+            nanos: i32::try_from(elapsed.subsec_nanos()).unwrap_or_default(),
+        }),
+    }
+}
+
+/// Folds what the harness and the checkers reported into the full turn result.
+///
+/// A turn is bigger than a harness run: self-review, artifact scanning, and
+/// suggestions are all stages the harness knows nothing about. They are reported
+/// as skipped rather than omitted, so "not run" never reads as "found nothing".
+///
+/// Checkers are the one of those stages that exists, so its outcome comes from
+/// `checked` rather than from the unimplemented list.
 fn assemble(
     claimed: &ClaimedTurn,
     harness: Option<HarnessResult>,
     status: TurnStatus,
+    checked: &Checked,
 ) -> TurnResult {
     let harness = harness.unwrap_or_default();
 
     let stages = [
         Stage::Plan,
-        Stage::Checkers,
         Stage::SelfReview,
         Stage::Merge,
         Stage::Artifacts,
@@ -837,6 +1329,7 @@ fn assemble(
         reason: None,
         elapsed: harness.timing.total,
     }))
+    .chain(std::iter::once(checked.outcome.clone()))
     .collect();
 
     TurnResult {
@@ -852,7 +1345,7 @@ fn assemble(
         members: Vec::new(),
         changed_files: Vec::new(),
         integrations: Vec::new(),
-        checker_results: Vec::new(),
+        checker_results: checked.results.clone(),
         artifacts: Vec::new(),
         suggestions: None,
         stages,

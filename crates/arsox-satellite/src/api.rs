@@ -157,6 +157,24 @@ async fn create_thread(
         }
     }
 
+    // A declared variable is set on top of the scrubbed environment, so one
+    // named like a satellite setting or a provider credential would hand an
+    // agent back exactly what the scrub exists to withhold. Refused here rather
+    // than dropped mid-turn, so the caller learns which key was wrong while it
+    // is still listening.
+    //
+    // The key is named and the value never is: half of these are credentials by
+    // definition, and an error body is a log line somewhere.
+    for declared in &settings.env {
+        if let Some(refusal) = crate::harness::spawn::declared_key_refusal(&declared.key) {
+            return contract_error(
+                StatusCode::BAD_REQUEST,
+                ErrorCode::RequestFieldInvalid,
+                &format!("settings.env: {} {refusal}", declared.key),
+            );
+        }
+    }
+
     // Kept before the settings are handed to the store, because provisioning
     // reads them once the thread id exists.
     let workspace_settings = settings.clone();

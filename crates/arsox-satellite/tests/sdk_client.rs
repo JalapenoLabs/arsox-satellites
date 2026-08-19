@@ -12,9 +12,9 @@
 
 use arsox_satellite::{ServeOptions, assemble};
 use arsox_sdk::client::Satellite as Client;
-use arsox_sdk::proto::common::v1::Duration as ProtoDuration;
+use arsox_sdk::proto::common::v1::{Duration as ProtoDuration, Secret};
 use arsox_sdk::proto::harness::v1::Harness;
-use arsox_sdk::proto::settings::v1::{Budget, ThreadSettings};
+use arsox_sdk::proto::settings::v1::{Budget, EnvVar, ThreadSettings};
 use arsox_sdk::proto::thread::v1::ThreadState;
 use arsox_sdk::proto::turn::v1::TurnStatus;
 use futures_util::StreamExt as _;
@@ -197,6 +197,57 @@ async fn a_thread_can_be_created_read_listed_and_destroyed() {
         gone.code(),
         Some(arsox_sdk::proto::error::v1::ErrorCode::ThreadDestroyed)
     );
+}
+
+#[tokio::test]
+async fn a_declared_variable_that_would_undo_the_scrub_is_refused_at_creation() {
+    // Declared variables are set on top of a scrubbed environment, so a key
+    // named like a satellite setting or a provider credential would hand an
+    // agent back exactly what the scrub exists to withhold. The caller learns
+    // that here, while it is still listening, rather than mid-turn.
+    let url = start().await;
+    let client = Client::connect(&url, SECRET).await.expect("should connect");
+
+    let declared = |key: &str| ThreadSettings {
+        env: vec![EnvVar {
+            key: key.to_owned(),
+            value: Some(Secret {
+                value: Some("a-value-no-error-should-carry".to_owned()),
+                display: None,
+            }),
+            is_secret: None,
+        }],
+        ..settings()
+    };
+
+    for reintroduced in ["ARSOX_SECRET", "ANTHROPIC_API_KEY"] {
+        let error = client
+            .threads()
+            .create(declared(reintroduced))
+            .await
+            .expect_err("should be refused");
+
+        assert_eq!(
+            error.code(),
+            Some(arsox_sdk::proto::error::v1::ErrorCode::RequestFieldInvalid),
+            "{reintroduced}"
+        );
+
+        // The key is named, so the caller can fix it without guessing which of
+        // its variables was the problem.
+        let said = error.to_string();
+        assert!(said.contains(reintroduced), "{said}");
+        // And the value never is. Half of these are credentials by definition,
+        // and an error body is a log line somewhere.
+        assert!(!said.contains("a-value-no-error-should-carry"), "{said}");
+    }
+
+    // An ordinary variable is untouched by the rule.
+    client
+        .threads()
+        .create(declared("NPM_TOKEN"))
+        .await
+        .expect("an ordinary declared variable is fine");
 }
 
 #[tokio::test]

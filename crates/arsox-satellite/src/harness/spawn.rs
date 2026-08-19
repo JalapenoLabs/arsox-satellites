@@ -28,9 +28,21 @@
 //! promise an enforcement the satellite does not perform. The flags are derived
 //! here from what the contract already states instead, and `docs/harness.md`
 //! carries the setting-to-flag table.
+//!
+//! # The environment is built, and only ever added to
+//!
+//! Every spawn starts from [`scrubbed_command`], which takes away every
+//! `ARSOX_*` variable and every provider credential the satellite holds.
+//! Everything an agent is meant to have is then listed back explicitly, so a
+//! variable reaches an agent because somebody said so and never by inheritance.
+//!
+//! A thread's declared variables join that list, and they may only add to it:
+//! [`declared_key_refusal`] refuses any key that would put back what the scrub
+//! removed, and the proxy's own variables are applied last so a declared key
+//! cannot repoint an agent away from the satellite's LLM proxy.
 
 use arsox_sdk::proto::harness::v1::Harness;
-use arsox_sdk::proto::settings::v1::{ExecAccess, Permissions};
+use arsox_sdk::proto::settings::v1::{EnvVar, ExecAccess, Permissions};
 use std::path::PathBuf;
 
 /// Overrides the Claude CLI binary.
@@ -49,6 +61,49 @@ pub fn claude_binary() -> String {
     std::env::var(CLAUDE_BINARY_ENV).unwrap_or_else(|_ignored| "claude".to_owned())
 }
 
+/// The mask a credential renders as, six stars as the contract's own default.
+const REDACTED: &str = "******";
+
+/// One variable set on a child, and whether its value is a credential.
+///
+/// The pair carries its secrecy rather than being a bare `(String, String)` so
+/// that nothing downstream has to remember which of these it is holding. A
+/// credential that reaches a log is a credential, whether it came from the
+/// caller's [`EnvVar`] list or was minted by the satellite a line earlier.
+#[derive(Clone, PartialEq, Eq)]
+pub struct AgentVar {
+    pub key: String,
+
+    pub value: String,
+
+    /// Whether the value must never be rendered.
+    ///
+    /// True for everything the satellite mints, and for a declared variable
+    /// that did not say otherwise: `EnvVar.is_secret` is absent by default and
+    /// absent means secret.
+    pub secret: bool,
+}
+
+/// Renders a variable without its value when the value is a credential.
+///
+/// Manual rather than derived, because [`HarnessCommand`] derives `Debug` and a
+/// derived one here would put the turn's proxy token and every declared
+/// credential into any log line that ever formats a command. Per M-PUBLIC-DEBUG.
+impl std::fmt::Debug for AgentVar {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value = if self.secret {
+            REDACTED
+        } else {
+            self.value.as_str()
+        };
+
+        f.debug_struct("AgentVar")
+            .field("key", &self.key)
+            .field("value", &value)
+            .finish()
+    }
+}
+
 /// What to launch, where, and with what environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessCommand {
@@ -61,7 +116,7 @@ pub struct HarnessCommand {
     /// Everything an agent is allowed to see is listed here explicitly. The
     /// runner removes every `ARSOX_*` variable the satellite holds before
     /// applying these, so nothing reaches an agent by inheritance.
-    pub env: Vec<(String, String)>,
+    pub env: Vec<AgentVar>,
 }
 
 /// How a turn attaches to the harness's own session.
@@ -83,9 +138,10 @@ pub enum Session {
 
 /// Builds the command that runs one turn.
 ///
-/// `permissions` are the thread's, absent when it declared none, and decide the
-/// posture the harness runs under. See the module docs for what "posture" buys
-/// and what it deliberately does not.
+/// `declared` is the thread's [`EnvVar`] list, which reaches the agent on top of
+/// the scrub. `permissions` are the thread's, absent when it declared none, and
+/// decide the posture the harness runs under. See the module docs for what
+/// "posture" buys and what it deliberately does not.
 #[must_use]
 pub fn command_for(
     harness: Harness,
@@ -93,6 +149,7 @@ pub fn command_for(
     session: &Session,
     working_dir: PathBuf,
     model_access: Option<ModelAccess>,
+    declared: &[EnvVar],
     permissions: Option<&Permissions>,
 ) -> HarnessCommand {
     match harness {
@@ -105,9 +162,14 @@ pub fn command_for(
         // it to `codex exec` would fail the launch rather than restrict it.
         // Codex expresses approvals through its own flags, and mapping the same
         // posture onto them is part of writing that arm.
-        Harness::Unspecified | Harness::Claude | Harness::Codex => {
-            claude_command(prompt, session, working_dir, model_access, permissions)
-        }
+        Harness::Unspecified | Harness::Claude | Harness::Codex => claude_command(
+            prompt,
+            session,
+            working_dir,
+            model_access,
+            declared,
+            permissions,
+        ),
     }
 }
 
@@ -116,6 +178,7 @@ fn claude_command(
     session: &Session,
     working_dir: PathBuf,
     model_access: Option<ModelAccess>,
+    declared: &[EnvVar],
     permissions: Option<&Permissions>,
 ) -> HarnessCommand {
     let mut args = vec![
@@ -141,13 +204,29 @@ fn claude_command(
     args.extend(claude_permission_args(&posture_for(permissions)));
 
     let mut env = agent_environment();
+    env.extend(declared_environment(declared));
 
     // Pointed at the satellite's own proxy rather than the provider. The token
     // is worth nothing anywhere else and stops working when the turn ends,
     // which is the whole reason the agent gets one instead of a real key.
+    //
+    // Applied after the declared variables rather than before them, because the
+    // last value set for a key is the one the child sees. A thread cannot
+    // repoint its agent away from the proxy by declaring `ANTHROPIC_BASE_URL`,
+    // and the budget ceilings stay on the only route to a model.
     if let Some(access) = model_access {
-        env.push(("ANTHROPIC_BASE_URL".to_owned(), access.base_url));
-        env.push(("ANTHROPIC_API_KEY".to_owned(), access.token));
+        env.push(AgentVar {
+            key: "ANTHROPIC_BASE_URL".to_owned(),
+            value: access.base_url,
+            // An address, not a credential, and worth reading in a log when a
+            // turn cannot reach its proxy.
+            secret: false,
+        });
+        env.push(AgentVar {
+            key: "ANTHROPIC_API_KEY".to_owned(),
+            value: access.token,
+            secret: true,
+        });
     }
 
     HarnessCommand {
@@ -359,8 +438,8 @@ pub fn process_for(command: &HarnessCommand) -> tokio::process::Command {
         .args(&command.args)
         .current_dir(&command.working_dir);
 
-    for (key, value) in &command.env {
-        process.env(key, value);
+    for variable in &command.env {
+        process.env(&variable.key, &variable.value);
     }
 
     process
@@ -415,17 +494,119 @@ fn is_provider_credential(key: &str) -> bool {
         && SECRETS.iter().any(|secret| key.contains(secret))
 }
 
+/// The variables a thread declared, ready to be set on a child.
+///
+/// Declared variables are how a repo's `yarn install` reaches its registry token
+/// and how an agent reaches whatever else the operator runs, so the same list
+/// goes to the harness and to setup commands: both run in the thread's workspace
+/// against the same scrubbed base environment.
+///
+/// A value the caller left absent becomes the empty string. The caller named the
+/// key deliberately, and "set it to nothing" is a far more likely reading than
+/// "do not set it", which is spelled by omitting the entry.
+///
+/// # Refused keys
+///
+/// A key that would reintroduce what [`scrubbed_command`] removes is dropped
+/// rather than applied. The API refuses these at thread creation, where the
+/// caller is still listening and can be told which key was wrong, so this is the
+/// second gate rather than the first: it can only fire for a thread whose
+/// settings predate that check. It warns with the key and never the value.
+#[must_use]
+pub fn declared_environment(declared: &[EnvVar]) -> Vec<AgentVar> {
+    declared
+        .iter()
+        .filter_map(|variable| {
+            if let Some(refusal) = declared_key_refusal(&variable.key) {
+                tracing::warn!(
+                    event.name = "harness.env.refused",
+                    env.key = variable.key,
+                    env.refusal = refusal,
+                    "{{env.key}} was withheld from the agent: it {{env.refusal}}",
+                );
+                return None;
+            }
+
+            Some(AgentVar {
+                key: variable.key.clone(),
+                value: variable
+                    .value
+                    .as_ref()
+                    .and_then(|secret| secret.value.clone())
+                    .unwrap_or_default(),
+                secret: is_secret(variable),
+            })
+        })
+        .collect()
+}
+
+/// Whether a declared variable's value is a credential.
+///
+/// `is_secret` is `optional bool` on the wire precisely so that absent and
+/// `false` stay distinguishable, and **absent means secret**. Defaulting to
+/// secret fails safe: the cost of needlessly redacting a public value is a
+/// confusing log line, and the cost of the reverse is a leaked credential.
+#[must_use]
+pub fn is_secret(declared: &EnvVar) -> bool {
+    declared.is_secret.unwrap_or(true)
+}
+
+/// Why a declared variable may not be set on an agent, when it may not.
+///
+/// The reason completes the sentence "`KEY` ...", so a caller can name the key
+/// alongside it without restating the rule. `None` means the key is fine.
+///
+/// **A declared variable must never reintroduce what the scrub removes.** It is
+/// applied on top of the scrubbed environment, so a thread declaring
+/// `ANTHROPIC_API_KEY` would hand an agent the very credential the proxy exists
+/// to keep from it, and a thread declaring `ARSOX_SECRET` would hand it command
+/// of its own satellite. The declared list is a way to give an agent things, not
+/// a way around a boundary.
+#[must_use]
+pub fn declared_key_refusal(key: &str) -> Option<&'static str> {
+    // A name a process cannot carry. The child would refuse the whole
+    // environment rather than the one entry, so a turn would fail to launch for
+    // a reason nothing in the failure would explain.
+    if key.is_empty() || key.contains('=') || key.contains('\0') {
+        return Some("is not a usable environment variable name");
+    }
+
+    if key.starts_with("ARSOX_") {
+        return Some(
+            "is reserved for the satellite: no ARSOX_ variable is ever placed in an agent's \
+             environment",
+        );
+    }
+
+    if is_provider_credential(key) {
+        return Some(
+            "is shaped like a provider credential, which the satellite's LLM proxy presents on \
+             the agent's behalf",
+        );
+    }
+
+    None
+}
+
 /// What an agent is allowed to see, on top of a scrubbed environment.
 ///
 /// Empty in a published image. The stand-in harness needs its transcript path,
 /// and that variable is stripped with every other `ARSOX_*` before the child
 /// starts, so it has to be handed back deliberately. Compiled out entirely
 /// without `test-util`, which is what keeps this from becoming a hole.
-fn agent_environment() -> Vec<(String, String)> {
+fn agent_environment() -> Vec<AgentVar> {
     #[cfg(feature = "test-util")]
     {
         std::env::var("ARSOX_FAKE_TRANSCRIPT")
-            .map(|path| vec![("ARSOX_FAKE_TRANSCRIPT".to_owned(), path)])
+            .map(|path| {
+                vec![AgentVar {
+                    key: "ARSOX_FAKE_TRANSCRIPT".to_owned(),
+                    value: path,
+                    // A fixture path. Masking it would hide the one fact worth
+                    // reading when a stand-in harness replays the wrong file.
+                    secret: false,
+                }]
+            })
             .unwrap_or_default()
     }
 
@@ -533,10 +714,11 @@ mod tests {
             program: printenv_program(),
             args: printenv_args(),
             working_dir: std::env::temp_dir(),
-            env: vec![(
-                "ARSOX_FAKE_TRANSCRIPT".to_owned(),
-                "/fixtures/x.jsonl".to_owned(),
-            )],
+            env: vec![AgentVar {
+                key: "ARSOX_FAKE_TRANSCRIPT".to_owned(),
+                value: "/fixtures/x.jsonl".to_owned(),
+                secret: false,
+            }],
         };
 
         let output = process_for(&command)
@@ -549,6 +731,202 @@ mod tests {
             seen.contains("/fixtures/x.jsonl"),
             "an explicitly declared variable should survive the scrub"
         );
+    }
+
+    /// A variable a thread declared, as the SDK would send one.
+    fn declared(key: &str, value: &str, is_secret: Option<bool>) -> EnvVar {
+        EnvVar {
+            key: key.to_owned(),
+            value: Some(arsox_sdk::proto::common::v1::Secret {
+                value: Some(value.to_owned()),
+                display: None,
+            }),
+            is_secret,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_declared_variable_reaches_the_child() {
+        // The whole point of the setting: an agent's `yarn install` needs the
+        // registry token the operator declared, and nothing else will give it
+        // one.
+        let command = HarnessCommand {
+            program: printenv_program(),
+            args: printenv_args(),
+            working_dir: std::env::temp_dir(),
+            env: declared_environment(&[declared("NPM_TOKEN", "npm-declared-value", None)]),
+        };
+
+        let output = process_for(&command)
+            .output()
+            .await
+            .expect("should run the probe");
+        let seen = String::from_utf8_lossy(&output.stdout);
+
+        assert!(
+            seen.contains("npm-declared-value"),
+            "a declared variable should survive the scrub"
+        );
+    }
+
+    #[test]
+    fn a_variable_that_did_not_say_is_secret() {
+        // `is_secret` is `optional bool` on the wire so that absent and `false`
+        // stay distinguishable, and absent means secret. Reading absence as
+        // `false` would turn "the caller said nothing" into "the caller said
+        // this is public", which is a leaked credential rather than a wrong
+        // default.
+        let applied = declared_environment(&[
+            declared("SAID_NOTHING", "a", None),
+            declared("SAID_PUBLIC", "b", Some(false)),
+            declared("SAID_SECRET", "c", Some(true)),
+        ]);
+
+        assert!(applied[0].secret, "absent means secret");
+        assert!(!applied[1].secret);
+        assert!(applied[2].secret);
+    }
+
+    #[test]
+    fn a_variable_declared_without_a_value_is_set_to_an_empty_one() {
+        // The caller named the key deliberately. "Do not set it" is spelled by
+        // leaving the entry out.
+        let applied = declared_environment(&[EnvVar {
+            key: "EMPTY".to_owned(),
+            value: None,
+            is_secret: None,
+        }]);
+
+        assert_eq!(applied.len(), 1);
+        assert!(applied[0].value.is_empty());
+    }
+
+    #[test]
+    fn a_secret_value_is_never_rendered_where_a_command_is() {
+        // A derived `Debug` would put the turn's proxy token and every declared
+        // credential into any log line that ever formats a command.
+        let command = command_for(
+            Harness::Claude,
+            "do the thing",
+            &Session::Start {
+                session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            Some(ModelAccess {
+                base_url: "http://127.0.0.1:9/v1".to_owned(),
+                token: "the-turns-proxy-token".to_owned(),
+            }),
+            &[
+                declared("NPM_TOKEN", "npm-the-real-token", None),
+                declared("DEPLOY_ENV", "staging", Some(false)),
+            ],
+            None,
+        );
+
+        let rendered = format!("{command:?}");
+
+        assert!(!rendered.contains("npm-the-real-token"), "{rendered}");
+        assert!(!rendered.contains("the-turns-proxy-token"), "{rendered}");
+        // The key survives, because a masked value with no name is unreadable
+        // and telling two credentials apart is what a log is for.
+        assert!(rendered.contains("NPM_TOKEN"));
+        // And a value the caller marked public reads plainly, which is the
+        // whole difference the flag buys.
+        assert!(rendered.contains("staging"));
+    }
+
+    #[test]
+    fn a_key_that_would_undo_the_scrub_is_refused() {
+        // A declared variable is applied on top of the scrub, so these would
+        // hand back exactly what the scrub exists to withhold.
+        for reintroduced in [
+            "ARSOX_SECRET",
+            "ARSOX_SOMETHING_ADDED_LATER",
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "AWS_SECRET_ACCESS_KEY",
+        ] {
+            assert!(
+                declared_key_refusal(reintroduced).is_some(),
+                "{reintroduced} should be refused"
+            );
+        }
+
+        // A name a process cannot carry, which would fail the launch rather
+        // than the entry.
+        assert!(declared_key_refusal("").is_some());
+        assert!(declared_key_refusal("HAS=EQUALS").is_some());
+
+        // And the ordinary case is untouched, including a vendor variable that
+        // is not a credential.
+        for allowed in ["NPM_TOKEN", "AWS_REGION", "DATABASE_URL", "CI"] {
+            assert_eq!(declared_key_refusal(allowed), None, "{allowed}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_key_never_reaches_the_child_even_if_it_was_stored() {
+        // The API refuses these at thread creation. This is the second gate,
+        // for settings written before that check existed: a thread carrying one
+        // must not quietly start handing it to agents.
+        let command = HarnessCommand {
+            program: printenv_program(),
+            args: printenv_args(),
+            working_dir: std::env::temp_dir(),
+            // Values nothing else in this process sets, since a sibling test
+            // putting the same string in the real environment would prove
+            // nothing about this one.
+            env: declared_environment(&[
+                declared("ARSOX_SECRET", "a-declared-arsox-value", None),
+                declared("ANTHROPIC_API_KEY", "a-declared-provider-value", None),
+            ]),
+        };
+
+        assert!(command.env.is_empty(), "{:?}", command.env);
+
+        let output = process_for(&command)
+            .output()
+            .await
+            .expect("should run the probe");
+        let seen = String::from_utf8_lossy(&output.stdout);
+
+        assert!(!seen.contains("a-declared-arsox-value"));
+        assert!(!seen.contains("a-declared-provider-value"));
+    }
+
+    #[test]
+    fn the_proxy_keeps_the_last_word_on_where_a_model_request_goes() {
+        // Every model request traverses the satellite's proxy, which is what
+        // makes the budget ceilings arithmetic rather than a request. A thread
+        // that could repoint its agent elsewhere would spend past every one of
+        // them.
+        let command = command_for(
+            Harness::Claude,
+            "do the thing",
+            &Session::Start {
+                session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            Some(ModelAccess {
+                base_url: "http://127.0.0.1:9/v1".to_owned(),
+                token: "the-turns-proxy-token".to_owned(),
+            }),
+            &[declared(
+                "ANTHROPIC_BASE_URL",
+                "https://elsewhere.invalid",
+                None,
+            )],
+            None,
+        );
+
+        // The last value set for a key is the one the child sees.
+        let applied = command
+            .env
+            .iter()
+            .rfind(|variable| variable.key == "ANTHROPIC_BASE_URL")
+            .expect("the proxy address should be set");
+
+        assert_eq!(applied.value, "http://127.0.0.1:9/v1");
     }
 
     /// A program that prints its environment, whatever platform this is.
@@ -578,6 +956,7 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             None,
+            &[],
             None,
         );
 
@@ -601,6 +980,7 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             None,
+            &[],
             None,
         );
 
@@ -621,6 +1001,7 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             None,
+            &[],
             None,
         );
 
@@ -637,6 +1018,7 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             None,
+            &[],
             permissions,
         )
     }

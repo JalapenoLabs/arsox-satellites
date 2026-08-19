@@ -8,13 +8,14 @@
 //! clones, setup commands really run in the checkout, and the incidents really
 //! land in the database.
 
+use arsox_satellite::harness::spawn::declared_environment;
 use arsox_satellite::store::{NewThread, NewTurn, Store};
 use arsox_satellite::workspace::{Provisioner, provision_repos, write_instructions};
 use arsox_sdk::proto::common::v1::Secret;
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
 use arsox_sdk::proto::incident::v1::Disposition;
-use arsox_sdk::proto::settings::v1::{GitAuth, Repo, ThreadSettings, git_auth::Credential};
+use arsox_sdk::proto::settings::v1::{EnvVar, GitAuth, Repo, ThreadSettings, git_auth::Credential};
 use arsox_sdk::proto::thread::v1::ThreadState;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -171,7 +172,7 @@ async fn a_declared_repo_is_cloned_into_the_thread_workspace() {
     let url = origin(&fixtures.path().join("service"), "README.md");
     let thread = thread_id();
 
-    let report = provision_repos(workspace.path(), &thread, &[repo("api", &url)])
+    let report = provision_repos(workspace.path(), &thread, &[repo("api", &url)], &[])
         .await
         .expect("provisioning should not fail on the satellite's side");
 
@@ -194,7 +195,7 @@ async fn a_repo_with_no_submodules_clones_cleanly_under_recursion() {
     let url = origin(&fixtures.path().join("plain"), "main.rs");
     let thread = thread_id();
 
-    let report = provision_repos(workspace.path(), &thread, &[repo("plain", &url)])
+    let report = provision_repos(workspace.path(), &thread, &[repo("plain", &url)], &[])
         .await
         .expect("should provision");
 
@@ -217,6 +218,7 @@ async fn several_repos_each_get_their_own_checkout() {
         workspace.path(),
         &thread,
         &[repo("api", &api), repo("web", &web)],
+        &[],
     )
     .await
     .expect("should provision");
@@ -246,7 +248,7 @@ async fn setup_commands_run_in_the_checkout_with_barrier_semantics() {
         ..repo("api", &url)
     };
 
-    let report = provision_repos(workspace.path(), &thread, &[with_setup])
+    let report = provision_repos(workspace.path(), &thread, &[with_setup], &[])
         .await
         .expect("should provision");
 
@@ -279,6 +281,57 @@ async fn setup_commands_run_in_the_checkout_with_barrier_semantics() {
 }
 
 #[tokio::test]
+async fn a_setup_command_sees_the_variables_the_thread_declared() {
+    // The reason this setting exists at all: `yarn install` needs the registry
+    // token, and it runs long before the agent that would otherwise be handed
+    // one. A workspace whose install failed for a credential the agent then has
+    // is a confusing way to lose a turn.
+    let fixtures = scratch::Dir::new("origin");
+    let workspace = scratch::Dir::new("workspace");
+    let url = origin(&fixtures.path().join("service"), "README.md");
+    let thread = thread_id();
+
+    let echoing = Repo {
+        setup_commands: if cfg!(windows) {
+            "echo %REGISTRY_TOKEN%> seen.txt".to_owned()
+        } else {
+            "echo \"$REGISTRY_TOKEN\" > seen.txt".to_owned()
+        },
+        ..repo("api", &url)
+    };
+
+    let declared = declared_environment(&[EnvVar {
+        key: "REGISTRY_TOKEN".to_owned(),
+        value: Some(Secret {
+            value: Some("npm-declared-token".to_owned()),
+            display: None,
+        }),
+        // Absent, which means secret. It still reaches the command: secrecy
+        // decides what may be rendered, never what an agent is given.
+        is_secret: None,
+    }]);
+
+    let report = provision_repos(workspace.path(), &thread, &[echoing], &declared)
+        .await
+        .expect("should provision");
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+
+    let seen = std::fs::read_to_string(
+        workspace
+            .path()
+            .join(&thread)
+            .join("repos/api")
+            .join("seen.txt"),
+    )
+    .expect("the command should have run");
+
+    assert!(
+        seen.contains("npm-declared-token"),
+        "the setup command did not see the declared variable: {seen}"
+    );
+}
+
+#[tokio::test]
 async fn a_repo_that_will_not_clone_ends_provisioning_and_says_it_may_be_retried() {
     let workspace = scratch::Dir::new("workspace");
     let thread = thread_id();
@@ -288,6 +341,7 @@ async fn a_repo_that_will_not_clone_ends_provisioning_and_says_it_may_be_retried
         workspace.path(),
         &thread,
         &[repo("api", &missing), repo("web", &missing)],
+        &[],
     )
     .await
     .expect("a refused clone is a reported failure, not a satellite error");
@@ -484,7 +538,7 @@ async fn a_personal_access_token_never_reaches_the_cloned_repository() {
         ..repo("api", &url)
     };
 
-    let report = provision_repos(workspace.path(), &thread, &[authenticated])
+    let report = provision_repos(workspace.path(), &thread, &[authenticated], &[])
         .await
         .expect("should provision");
     assert!(report.failures.is_empty(), "{:?}", report.failures);

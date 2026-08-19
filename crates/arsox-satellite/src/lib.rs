@@ -17,6 +17,7 @@
 
 mod api;
 pub mod collector;
+mod commands;
 pub mod disk;
 pub mod harness;
 pub mod proxy;

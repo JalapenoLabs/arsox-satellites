@@ -10,7 +10,7 @@
 
 use arsox_satellite::collector::Collector;
 use arsox_satellite::harness::runner::Runner;
-use arsox_satellite::store::{NewThread, NewTurn, Store};
+use arsox_satellite::store::{NewThread, NewTurn, ProvisionOutcome, Store};
 use arsox_satellite::stream::EventBus;
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
@@ -85,6 +85,19 @@ async fn start(prompt: &str) -> (Harness, String, String) {
 
 /// Same, with the thread's settings chosen by the caller.
 async fn start_with(prompt: &str, settings: ThreadSettings) -> (Harness, String, String) {
+    start_prepared(prompt, settings, |_workspace, _thread_id| {}).await
+}
+
+/// Same, with the thread's workspace filled in before its first turn is queued.
+///
+/// The turn is queued last on purpose. The runner claims work the moment it
+/// exists, so anything a test needs on disk, such as the checkout a checker runs
+/// in, has to be there before the queue moves rather than racing it.
+async fn start_prepared(
+    prompt: &str,
+    settings: ThreadSettings,
+    prepare: impl FnOnce(&std::path::Path, &str),
+) -> (Harness, String, String) {
     // Set once for the process, and identical for every caller, so there is no
     // value here for one test to change out from under another. Anything that
     // does vary per run rides on the prompt instead.
@@ -110,6 +123,18 @@ async fn start_with(prompt: &str, settings: ThreadSettings) -> (Harness, String,
         .await
         .expect("should create a thread")
         .thread;
+
+    prepare(workspace.path(), &thread.thread_id);
+
+    // A thread that declared repos opens PROVISIONING, and the claim query
+    // refuses to hand out work from one. No `Provisioner` runs here because
+    // these tests fill the workspace themselves, so the thread is released the
+    // same way provisioning would have released it. A no-op for every other
+    // thread, which was IDLE from the moment it was created.
+    store
+        .finish_provisioning(&thread.thread_id, ProvisionOutcome::Ready)
+        .await
+        .expect("should release the thread");
 
     let turn = store
         .create_turn(NewTurn {
@@ -726,4 +751,244 @@ async fn a_thread_with_no_cost_ceiling_is_never_refused_for_cost() {
         settle(&harness.store, &thread_id, &second).await,
         TurnStatus::Completed
     );
+}
+
+/// Settings for a thread whose one repo declares a `checker`.
+///
+/// The repo is never cloned. These tests are about what happens after the agents
+/// say they are done, and a real remote would add a network to the fixture
+/// without adding anything to what is under test. The checkout is created on
+/// disk instead, which is the state provisioning would have left behind.
+fn with_checker(checker: &str) -> ThreadSettings {
+    ThreadSettings {
+        repos: vec![arsox_sdk::proto::settings::v1::Repo {
+            name: "api".to_owned(),
+            url: "https://example.com/api.git".to_owned(),
+            checker: checker.to_owned(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
+/// Creates the checkout a declared checker runs in.
+fn make_checkout(workspace: &std::path::Path, thread_id: &str) {
+    std::fs::create_dir_all(workspace.join(thread_id).join("repos").join("api"))
+        .expect("should create the checkout");
+}
+
+/// Every checker command that reached the stream, in order.
+async fn checker_events(
+    store: &Store,
+    thread_id: &str,
+) -> Vec<arsox_sdk::proto::turn::v1::CheckerResult> {
+    store
+        .events_after(thread_id, 0, 200)
+        .await
+        .expect("should replay")
+        .into_iter()
+        .filter_map(|event| match event.payload {
+            Some(Payload::CheckerResult(reported)) => reported.result,
+            _other => None,
+        })
+        .collect()
+}
+
+/// The turn's own account of what the checker stage did.
+fn checker_stage(
+    result: &arsox_sdk::proto::turn::v1::TurnResult,
+) -> &arsox_sdk::proto::turn::v1::StageOutcome {
+    result
+        .stages
+        .iter()
+        .find(|stage| stage.stage == i32::from(arsox_sdk::proto::turn::v1::Stage::Checkers))
+        .expect("the checker stage is always reported, even when it did nothing")
+}
+
+/// Reads a finished turn's result.
+async fn result_of(
+    store: &Store,
+    thread_id: &str,
+    turn_id: &str,
+) -> arsox_sdk::proto::turn::v1::TurnResult {
+    store
+        .turn(thread_id, turn_id)
+        .await
+        .expect("should read")
+        .1
+        .expect("a finished turn carries a result")
+}
+
+#[tokio::test]
+async fn a_passing_checker_is_recorded_and_the_turn_completes() {
+    // The verification that turns "the agent said it was done" into something
+    // checked. A green checker is recorded rather than assumed.
+    let (harness, thread_id, turn_id) =
+        start_prepared("run the probe", with_checker("exit 0"), make_checkout).await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Completed
+    );
+
+    let result = result_of(&harness.store, &thread_id, &turn_id).await;
+
+    assert_eq!(result.checker_results.len(), 1);
+    assert_eq!(result.checker_results[0].command, "exit 0");
+    assert_eq!(result.checker_results[0].exit_code, 0);
+
+    assert_eq!(
+        checker_stage(&result).disposition,
+        i32::from(arsox_sdk::proto::turn::v1::StageDisposition::Ran),
+        "a stage that ran must not report itself as skipped"
+    );
+
+    // A live consumer sees each command finish rather than learning about the
+    // whole stage when the turn ends.
+    assert_eq!(checker_events(&harness.store, &thread_id).await.len(), 1);
+}
+
+#[tokio::test]
+async fn a_failing_checker_wakes_the_agent_and_a_later_pass_completes_the_turn() {
+    // The whole point of the stage. A nonzero exit is not a crash: the agent is
+    // resumed with the failure and its output, and the checker runs again
+    // against whatever it did about it.
+    //
+    // The command fails the first time and passes the second, which is what a
+    // fixed checker looks like from the satellite's side. `mkdir` is the one
+    // stateful thing `sh` and `cmd` spell identically: it succeeds once and
+    // refuses afterwards, so the first run reaches `exit 1` and the second is
+    // routed to `exit 0`.
+    let (harness, thread_id, turn_id) = start_prepared(
+        "run the probe",
+        with_checker("mkdir stamp && exit 1 || exit 0"),
+        make_checkout,
+    )
+    .await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Completed
+    );
+
+    let reported = checker_events(&harness.store, &thread_id).await;
+    assert_eq!(reported.len(), 2, "the checker should have run twice");
+    assert_eq!(reported[0].exit_code, 1);
+    assert_eq!(reported[1].exit_code, 0);
+
+    let result = result_of(&harness.store, &thread_id, &turn_id).await;
+
+    // The turn's results are the state it ended in, not the history of getting
+    // there. The history is on the stream.
+    assert_eq!(result.checker_results.len(), 1);
+    assert_eq!(result.checker_results[0].exit_code, 0);
+    assert_eq!(
+        checker_stage(&result).disposition,
+        i32::from(arsox_sdk::proto::turn::v1::StageDisposition::Ran)
+    );
+
+    // Both sessions asked the same model through the same grant, and the
+    // transcript reports usage each time. Reporting one of two would understate
+    // every turn that had to fix a checker.
+    let tokens = result.tokens.expect("usage should be recorded");
+    let baseline = single_session_tokens().await;
+
+    assert!(
+        tokens.total_tokens > baseline.total_tokens,
+        "a two-session turn should have spent more than a one-session turn: \
+         {} against {}",
+        tokens.total_tokens,
+        baseline.total_tokens
+    );
+}
+
+/// What one harness session of the same transcript reports, as a baseline.
+async fn single_session_tokens() -> arsox_sdk::proto::usage::v1::TokenUsage {
+    let (harness, thread_id, turn_id) = start("run the probe").await;
+    settle(&harness.store, &thread_id, &turn_id).await;
+
+    result_of(&harness.store, &thread_id, &turn_id)
+        .await
+        .tokens
+        .expect("usage should be recorded")
+}
+
+#[tokio::test]
+async fn a_checker_that_never_passes_stops_at_the_cap_with_the_failure_recorded() {
+    // A flake that fails at random would otherwise hold a thread open forever,
+    // spending an agent session per attempt. The cap is what it cannot outlast,
+    // and the turn still completes: a check that will not go green is a fact
+    // about the work rather than a reason to throw the work away.
+    let (harness, thread_id, turn_id) =
+        start_prepared("run the probe", with_checker("exit 7"), make_checkout).await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Completed,
+        "reaching the end of the stack is what COMPLETED means"
+    );
+
+    // One initial run plus one per fix attempt, and no more.
+    let reported = checker_events(&harness.store, &thread_id).await;
+    assert_eq!(reported.len(), 3, "got {reported:?}");
+    assert!(reported.iter().all(|result| result.exit_code == 7));
+
+    let result = result_of(&harness.store, &thread_id, &turn_id).await;
+
+    assert_eq!(result.checker_results.len(), 1);
+    assert_eq!(result.checker_results[0].exit_code, 7);
+
+    let stage = checker_stage(&result);
+    assert_eq!(
+        stage.disposition,
+        i32::from(arsox_sdk::proto::turn::v1::StageDisposition::Failed)
+    );
+    assert!(
+        stage
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.contains("fix attempts")),
+        "the stage should say why it gave up, got {:?}",
+        stage.reason
+    );
+
+    // The incident outlives the thread, which is where "why was last night's
+    // run red" gets answered after the workspace is reclaimed.
+    let incidents = harness
+        .store
+        .incidents_for_thread(&thread_id)
+        .await
+        .expect("should read incidents");
+    let checker_failed = incidents
+        .iter()
+        .find(|incident| incident.code == i32::from(ErrorCode::CheckerFailed))
+        .expect("a checker the agents could not fix is recorded");
+
+    // Degraded rather than blocked: no permission gate closed. The work happened
+    // and finished with its verification missing.
+    assert_eq!(
+        checker_failed.disposition,
+        i32::from(arsox_sdk::proto::incident::v1::Disposition::Degraded)
+    );
+}
+
+#[tokio::test]
+async fn a_thread_with_no_checkers_runs_exactly_as_it_did_before() {
+    // The stage costs a thread that declared no checker one filter over its
+    // repos, and it is still reported: "not run" must never read as "found
+    // nothing".
+    let (harness, thread_id, turn_id) = start("run the probe").await;
+    settle(&harness.store, &thread_id, &turn_id).await;
+
+    let result = result_of(&harness.store, &thread_id, &turn_id).await;
+
+    assert!(result.checker_results.is_empty());
+    assert!(checker_events(&harness.store, &thread_id).await.is_empty());
+
+    let stage = checker_stage(&result);
+    assert_eq!(
+        stage.disposition,
+        i32::from(arsox_sdk::proto::turn::v1::StageDisposition::Skipped)
+    );
+    assert_eq!(stage.reason.as_deref(), Some("no repo declares a checker"));
 }

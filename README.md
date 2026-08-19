@@ -794,6 +794,12 @@ Pass an array of custom environment variables for the agents to use:
 
 Only `key` and `value` are required. If `isSecret` is omitted it defaults to `true`, because defaulting to secret fails safe. Every secret is scanned for and hidden before anything leaves the satellite. See [Secret redaction](#secret-redaction).
 
+These are set on top of the satellite's scrub rather than beside it, so they may only add. A key beginning `ARSOX_`, or one shaped like a provider credential such as `ANTHROPIC_API_KEY`, is refused when the thread is created, with `REQUEST_FIELD_INVALID` naming the key. A declared variable that put back what the scrub removes would hand an agent exactly the credentials the satellite withholds from it, so the list is a way to give an agent things and never a way around that boundary.
+
+`isSecret` decides what may be rendered, never what an agent is given: both kinds are set on the process, and only a value marked public is readable in a log.
+
+The same variables reach a repo's setup commands and checkers, since a `yarn install` needs its registry token for the same reason the agent that runs it later does.
+
 ### Ephemeral and cleanup
 
 Every thread must declare a lifetime when it is created. This is required, always, as a safety net against forgotten workspaces filling a disk.

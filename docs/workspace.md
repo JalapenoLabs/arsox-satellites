@@ -140,6 +140,11 @@ The separator is the schedule, and it is the same syntax checkers use:
 - **Semicolons** are barriers. Nothing below a barrier starts until everything
   above it has succeeded.
 
+One parser serves both, in `src/commands.rs`. Setup commands and checkers are the
+same idea at two ends of a turn, and two copies of the rule would be two chances
+to disagree about what a semicolon means, in two files nobody edits together. The
+checker end is documented with [the runner](./harness.md#checkers-run-after-the-harness-and-can-wake-it-back-up).
+
 A command that never ran because a barrier above it failed is reported as
 skipped rather than omitted, and gets its own `REPO_SETUP_FAILED` incident
 saying so. "Not run" and "found nothing" are different facts.
@@ -184,6 +189,11 @@ no way to notice.
 Every spawned process, git and setup commands alike, goes through
 `harness::spawn::scrubbed_command`, which strips every `ARSOX_*` variable and
 every provider credential. The same scrub a harness gets, for the same reason.
+
+The thread's declared variables are then set back on top of it for setup
+commands, so an install authenticates to a private registry exactly as the agent
+working in that checkout afterwards does. They are the same list, refused by the
+same rule, and `docs/harness.md` carries it.
 
 Anything reaching tracing or an incident is redacted twice over: a credential
 somebody wrote into a URL themselves is masked by pattern, and a token Arsox was
