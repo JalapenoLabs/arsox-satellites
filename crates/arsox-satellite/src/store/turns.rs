@@ -289,6 +289,46 @@ impl Store {
         })
     }
 
+    /// What a thread's finished turns reported spending, in billionths of a
+    /// unit.
+    ///
+    /// This is the only true cost the satellite has. No endpoint in the contract
+    /// publishes a rate, so a per-request price would have to be invented; what
+    /// each harness reports when its turn ends is measured rather than guessed,
+    /// which is why the thread's cost ceiling is enforced at turn boundaries.
+    ///
+    /// `None` when no finished turn reported a priced cost. That is a different
+    /// fact from a thread that has spent nothing: a model with no published
+    /// pricing produces no estimate at all rather than a confident zero, and
+    /// treating the two alike would make an unpriced thread look like a free
+    /// one.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error if the query fails.
+    pub async fn thread_cost_nanos(&self, thread_id: &str) -> Result<Option<i128>, StoreError> {
+        let results: Vec<Vec<u8>> = sqlx::query_scalar(
+            "SELECT result FROM turns WHERE thread_id = ? AND result IS NOT NULL",
+        )
+        .bind(thread_id)
+        .fetch_all(self.pool())
+        .await?;
+
+        Ok(results
+            .iter()
+            .filter_map(|encoded| {
+                // A result that will not decode was written by a different major
+                // version. Skipping it is right for the same reason the event
+                // replay skips one: the rest of the sum is still usable.
+                TurnResult::decode(encoded.as_slice())
+                    .ok()?
+                    .cost?
+                    .amount
+                    .map(|amount| amount.to_nanos())
+            })
+            .reduce(i128::saturating_add))
+    }
+
     /// How many turns are waiting, and which one is running.
     pub(crate) async fn queue_state(
         &self,

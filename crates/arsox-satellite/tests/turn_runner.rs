@@ -28,7 +28,7 @@ use std::time::Duration;
 /// different things.
 const TRANSCRIPT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../arsox-harness/fixtures/claude/tool-call.jsonl"
+    "/../arsox-harness/fixtures/claude/2.1.221/tool-call.stdout.jsonl"
 );
 
 struct Harness {
@@ -518,4 +518,212 @@ async fn await_collected(store: &Store, thread_id: &str) -> bool {
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
     false
+}
+
+/// Settings that declare the ceilings a budget test is about.
+///
+/// Everything not named is left unset, which reads as no ceiling. Budgets are
+/// required at thread creation by the API, not by the runner, so a test may
+/// declare exactly the one it is exercising.
+fn budgeted(budget: arsox_sdk::proto::settings::v1::Budget) -> ThreadSettings {
+    ThreadSettings {
+        budget: Some(budget),
+        ..Default::default()
+    }
+}
+
+fn wall_clock_of(millis: i32) -> arsox_sdk::proto::settings::v1::Budget {
+    use arsox_sdk::proto::common::v1::{DurationCeiling, duration_ceiling};
+
+    arsox_sdk::proto::settings::v1::Budget {
+        max_wall_clock_per_turn: Some(DurationCeiling {
+            ceiling: Some(duration_ceiling::Ceiling::Duration(
+                arsox_sdk::proto::common::v1::Duration {
+                    seconds: 0,
+                    nanos: millis.saturating_mul(1_000_000),
+                },
+            )),
+        }),
+        ..Default::default()
+    }
+}
+
+fn cost_ceiling_of(units: i64, nanos: i32) -> arsox_sdk::proto::settings::v1::Budget {
+    use arsox_sdk::proto::common::v1::{CostCeiling, Money, cost_ceiling};
+
+    arsox_sdk::proto::settings::v1::Budget {
+        max_cost_per_thread: Some(CostCeiling {
+            ceiling: Some(cost_ceiling::Ceiling::Cost(Money::usd(units, nanos))),
+        }),
+        ..Default::default()
+    }
+}
+
+/// Queues another turn on a thread that already has one.
+async fn queue_another(store: &Store, thread_id: &str, prompt: &str) -> String {
+    store
+        .create_turn(NewTurn {
+            thread_id: thread_id.to_owned(),
+            prompt: prompt.to_owned(),
+            metadata: BTreeMap::new(),
+            idempotency_key: None,
+            satellite_initiated: false,
+            triggered_by_turn_id: None,
+        })
+        .await
+        .expect("should queue a turn")
+        .turn
+        .turn_id
+}
+
+#[tokio::test]
+async fn a_turn_that_outruns_its_wall_clock_is_stopped_and_says_which_ceiling_did_it() {
+    // A harness stuck in a long shell command asks for no completions, so the
+    // proxy never sees it. Wall clock is the ceiling that ends this one, and it
+    // has to end gracefully: the work already done stays in the log.
+    let (harness, thread_id, turn_id) = start_with(
+        "run the probe [[stall=10000]]",
+        budgeted(wall_clock_of(500)),
+    )
+    .await;
+
+    let status = settle(&harness.store, &thread_id, &turn_id).await;
+    assert_eq!(status, TurnStatus::Failed);
+
+    let (_turn, result) = harness
+        .store
+        .turn(&thread_id, &turn_id)
+        .await
+        .expect("should read");
+    let result = result.expect("a stopped turn still carries a result");
+    let error = result.error.expect("a stopped turn says which ceiling");
+
+    assert_eq!(
+        error.code,
+        i32::from(ErrorCode::BudgetWallClockExhausted),
+        "one code per ceiling, so a caller never reads a message to learn which"
+    );
+    assert!(
+        !error.retryable,
+        "a ceiling does not move by being asked again"
+    );
+
+    // The transcript replayed before the stall, and every event it produced is
+    // still here. A ceiling stops a turn; it does not discard its work.
+    let events = harness
+        .store
+        .events_after(&thread_id, 0, 100)
+        .await
+        .expect("should replay");
+    let names: Vec<&str> = events.iter().map(|event| event.r#type.as_str()).collect();
+
+    assert!(names.contains(&"tool.started"), "got {names:?}");
+    assert!(names.contains(&"agent.message"), "got {names:?}");
+    assert!(
+        names.contains(&"budget.warning"),
+        "eighty percent of the ceiling should have warned before the wall, got {names:?}"
+    );
+
+    let warning = events
+        .iter()
+        .find_map(|event| match event.payload.as_ref() {
+            Some(Payload::BudgetWarning(warning)) => Some(warning),
+            _other => None,
+        })
+        .expect("the warning should carry which ceiling");
+
+    assert_eq!(
+        warning.ceiling,
+        i32::from(arsox_sdk::proto::event::v1::Ceiling::WallClockPerTurn)
+    );
+    assert_eq!(warning.percent_used, 80);
+}
+
+#[tokio::test]
+async fn a_thread_that_has_spent_its_cost_ceiling_runs_no_further_turns() {
+    // The transcript reports just over ten cents, so one turn spends this
+    // ceiling and the next one has nothing to run on. Enforced before anything
+    // is spawned: launching a harness to discover an exhausted budget would
+    // spend more of it.
+    let (harness, thread_id, first) =
+        start_with("run the probe", budgeted(cost_ceiling_of(0, 100_000_000))).await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &first).await,
+        TurnStatus::Completed,
+        "the turn that crosses the ceiling still completes"
+    );
+
+    let second = queue_another(&harness.store, &thread_id, "keep going").await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &second).await,
+        TurnStatus::Failed
+    );
+
+    let (_turn, result) = harness
+        .store
+        .turn(&thread_id, &second)
+        .await
+        .expect("should read");
+    let error = result
+        .expect("a refused turn carries a result")
+        .error
+        .expect("a refused turn says why");
+
+    assert_eq!(error.code, i32::from(ErrorCode::BudgetCostExhausted));
+}
+
+#[tokio::test]
+async fn a_thread_approaching_its_cost_ceiling_is_warned_and_keeps_working() {
+    // Eighty percent is a warning, not a wall. A host application gets one
+    // chance to react before the ceiling, and the thread runs on either way.
+    let (harness, thread_id, first) =
+        start_with("run the probe", budgeted(cost_ceiling_of(0, 120_000_000))).await;
+
+    settle(&harness.store, &thread_id, &first).await;
+
+    let second = queue_another(&harness.store, &thread_id, "keep going").await;
+    assert_eq!(
+        settle(&harness.store, &thread_id, &second).await,
+        TurnStatus::Completed,
+        "eighty-five percent of a ceiling is not a refusal"
+    );
+
+    let warning = harness
+        .store
+        .events_after(&thread_id, 0, 200)
+        .await
+        .expect("should replay")
+        .into_iter()
+        .find_map(|event| match event.payload {
+            Some(Payload::BudgetWarning(warning)) => Some(warning),
+            _other => None,
+        })
+        .expect("the approach should have been reported");
+
+    assert_eq!(
+        warning.ceiling,
+        i32::from(arsox_sdk::proto::event::v1::Ceiling::CostPerThread)
+    );
+    assert!(
+        (80..100).contains(&warning.percent_used),
+        "expected an eighty-something percent warning, got {}",
+        warning.percent_used
+    );
+}
+
+#[tokio::test]
+async fn a_thread_with_no_cost_ceiling_is_never_refused_for_cost() {
+    // Budgets are required at thread creation and `Unlimited` is a thing a
+    // caller may genuinely mean. Accounting must not become refusing on its own.
+    let (harness, thread_id, first) = start("run the probe").await;
+    settle(&harness.store, &thread_id, &first).await;
+
+    let second = queue_another(&harness.store, &thread_id, "keep going").await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &second).await,
+        TurnStatus::Completed
+    );
 }

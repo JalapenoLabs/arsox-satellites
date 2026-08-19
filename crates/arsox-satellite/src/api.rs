@@ -143,6 +143,24 @@ async fn create_thread(
         );
     }
 
+    // A repo's name becomes a directory under the thread's workspace, so one
+    // that could reach outside it is refused here rather than discovered
+    // minutes later in a provisioning incident. This is the last point at which
+    // the caller is still listening and can fix it.
+    for repo in &settings.repos {
+        if let Err(error) = crate::workspace::directory_name(repo) {
+            return contract_error(
+                StatusCode::BAD_REQUEST,
+                ErrorCode::RequestFieldInvalid,
+                &format!("settings.repos: {error}"),
+            );
+        }
+    }
+
+    // Kept before the settings are handed over, because provisioning needs them
+    // and a thread that declared none must cost nothing.
+    let repos = settings.repos.clone();
+
     match satellite
         .store
         .create_thread(NewThread {
@@ -163,6 +181,21 @@ async fn create_thread(
                         thread_id: stored.thread.thread_id.clone(),
                     }),
                 ));
+
+                // Behind the response rather than inside it. Cloning three repos
+                // and running their installs is minutes of work, and holding the
+                // create open for it would make the satellite's most ordinary
+                // call its slowest. The thread opens PROVISIONING and the claim
+                // query holds its queue until this finishes.
+                //
+                // A deduplicated create provisions nothing: the workspace it
+                // would build already exists, and building it twice would clone
+                // over a checkout the thread may already be working in.
+                if !repos.is_empty() {
+                    satellite
+                        .provisioner
+                        .spawn(stored.thread.thread_id.clone(), repos);
+                }
             }
 
             protobuf(&CreateThreadResponse {

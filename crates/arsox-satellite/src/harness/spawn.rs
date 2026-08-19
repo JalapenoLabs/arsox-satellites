@@ -143,19 +143,33 @@ pub struct ModelAccess {
 /// is why this lives in one function that the runner cannot spawn without.
 #[must_use]
 pub fn process_for(command: &HarnessCommand) -> tokio::process::Command {
-    let mut process = tokio::process::Command::new(&command.program);
+    let mut process = scrubbed_command(&command.program);
     process
         .args(&command.args)
         .current_dir(&command.working_dir);
+
+    for (key, value) in &command.env {
+        process.env(key, value);
+    }
+
+    process
+}
+
+/// A process that inherits none of the satellite's own credentials.
+///
+/// Shared with workspace provisioning, because `git` and a repo's setup
+/// commands are spawned by the satellite exactly as a harness is and inherit
+/// exactly the same environment unless something takes it away. One scrub, used
+/// by every spawn, is what keeps the rule from holding in one place and lapsing
+/// in the next.
+#[must_use]
+pub fn scrubbed_command(program: &str) -> tokio::process::Command {
+    let mut process = tokio::process::Command::new(program);
 
     for (key, _value) in std::env::vars() {
         if key.starts_with("ARSOX_") || is_provider_credential(&key) {
             process.env_remove(&key);
         }
-    }
-
-    for (key, value) in &command.env {
-        process.env(key, value);
     }
 
     process

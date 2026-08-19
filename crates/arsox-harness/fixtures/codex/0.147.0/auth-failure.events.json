@@ -1,0 +1,41 @@
+{
+  "events": [
+    {
+      "member_id": null,
+      "occurred_at": null,
+      "payload": {
+        "code": "ERROR_CODE_INTERNAL",
+        "disposition": "DISPOSITION_DEGRADED",
+        "message": "harness reported an error: Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.",
+        "retryable": false
+      },
+      "type": "incident"
+    }
+  ],
+  "harness_session_id": "01a01bb8-0c55-7ef2-9774-39703eec4482",
+  "result": {
+    "by_model": [],
+    "cost": {
+      "amount": null,
+      "is_partial": false
+    },
+    "is_error": true,
+    "permission_denials": [],
+    "stop_reason": null,
+    "summary": "Your access token could not be refreshed because your refresh token was already used. Please log out and sign in again.",
+    "timing": {
+      "llm": null,
+      "model_round_trips": null,
+      "time_to_first_token": null,
+      "total": null
+    },
+    "tokens": {
+      "cache_read_tokens": null,
+      "cache_write_tokens": null,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_output_tokens": null,
+      "total_tokens": 0
+    }
+  }
+}

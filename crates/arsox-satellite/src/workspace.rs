@@ -1,13 +1,55 @@
 // Copyright © 2026 Jalapeno Labs
 
-//! Thread workspaces on disk.
+//! Thread workspaces on disk: creating them, filling them, and removing them.
 //!
 //! Every thread owns one subtree of the workspace root, named for the thread.
-//! Creating it is the runner's job, because it happens on the way to spawning a
-//! harness. Removing it is the collector's, because it happens long after
-//! anything is running.
+//! Removing it is the collector's job, because it happens long after anything is
+//! running. Filling it is this module's, and it happens exactly once, at thread
+//! creation.
+//!
+//! # Provisioning happens once, in the background
+//!
+//! A thread declaring three repos with a `yarn install` apiece is minutes of
+//! work. Doing it inside the create request would hold an HTTP connection open
+//! for those minutes and turn a satellite's most ordinary call into its slowest,
+//! so a created thread opens `PROVISIONING` and the work runs behind it.
+//!
+//! That state is not decoration. **The claim query refuses to hand a runner work
+//! from a thread that is still provisioning**, so a turn submitted a millisecond
+//! after the create simply waits, and the guarantee that no turn ever runs in a
+//! half-cloned workspace holds in the database rather than in a runner's
+//! goodwill. Later turns inherit the clones and provision nothing.
+//!
+//! A thread that declares no repos has nothing to provision and opens `IDLE`,
+//! exactly as it did before any of this existed.
+//!
+//! # Failure is loud, and it is two different things
+//!
+//! A repo that will not clone leaves a workspace the thread cannot work in, so
+//! `REPO_CLONE_FAILED` is fatal: provisioning stops and the thread is parked
+//! rather than being handed work it cannot do. A setup command that exits
+//! nonzero leaves a workspace that is merely incomplete, so `REPO_SETUP_FAILED`
+//! is degraded: the thread comes up, and the agents meet a checkout that is
+//! missing whatever the command was supposed to install.
+//!
+//! Both are recorded as incidents and both reach the thread's event stream.
+//! Neither is returned to the caller, because by the time either happens the
+//! create request has long since answered, which is precisely why incidents
+//! exist.
 
+mod repos;
+mod setup;
+
+pub use repos::directory_name;
+
+use crate::store::{ProvisionOutcome, Store};
+use arsox_sdk::proto::common::v1::Timestamp;
+use arsox_sdk::proto::error::v1::ErrorCode;
+use arsox_sdk::proto::event::v1::thread_event::Payload;
+use arsox_sdk::proto::incident::v1::{Disposition, Incident};
+use arsox_sdk::proto::settings::v1::Repo;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// The directory a thread owns.
 ///
@@ -30,6 +72,19 @@ pub fn thread_directory(root: &Path, thread_id: &str) -> Result<PathBuf, Workspa
     }
 
     Ok(root.join(thread_id))
+}
+
+/// Where a thread's repos are cloned.
+///
+/// One clone per repo, shared by every team member through a git worktree rather
+/// than cloned again, which is what keeps disk cost at one working copy per
+/// member instead of one full clone.
+///
+/// # Errors
+///
+/// Returns [`WorkspaceError::UnsafeThreadId`] when the id is not a plain UUID.
+pub fn repos_directory(root: &Path, thread_id: &str) -> Result<PathBuf, WorkspaceError> {
+    Ok(thread_directory(root, thread_id)?.join("repos"))
 }
 
 /// Removes a thread's subtree, including anything not downloaded from it.
@@ -61,11 +116,480 @@ pub enum WorkspaceError {
     #[error("thread id {0} is not safe to use as a path")]
     UnsafeThreadId(String),
 
+    #[error("repo name {0} is not safe to use as a path")]
+    UnsafeRepoName(String),
+
+    #[error("could not create {path}")]
+    Create {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+
     #[error("could not remove {path}")]
     Remove {
         path: PathBuf,
         source: std::io::Error,
     },
+}
+
+/// One thing that went wrong while provisioning a workspace.
+///
+/// Carries the evidence rather than a conclusion, because this becomes an
+/// incident that outlives the thread and "the setup script is wrong" is worth
+/// far less afterwards than the command, its exit code, and what it printed.
+#[derive(Debug, Clone)]
+pub struct ProvisionFailure {
+    /// The same enum a returned error would carry.
+    pub code: ErrorCode,
+
+    /// Whether this ended provisioning rather than degrading it.
+    pub fatal: bool,
+
+    pub retryable: bool,
+
+    /// The repo this belongs to, by its directory name.
+    pub repo: String,
+
+    /// The setup command that failed. Absent for a clone failure, which has no
+    /// command of its own.
+    pub command: Option<String>,
+
+    pub exit_code: Option<i32>,
+
+    pub message: String,
+
+    /// What the failing process said, with any credential already removed.
+    pub output: String,
+}
+
+impl ProvisionFailure {
+    fn disposition(&self) -> Disposition {
+        if self.fatal {
+            Disposition::Fatal
+        } else {
+            // Work continued and something is missing, which is exactly what a
+            // repo whose setup did not finish leaves behind.
+            Disposition::Degraded
+        }
+    }
+}
+
+/// What provisioning did, and everything that went wrong while it did it.
+#[derive(Debug, Default)]
+pub struct ProvisionReport {
+    /// Repos cloned, by directory name, in the order they were provisioned.
+    pub cloned: Vec<String>,
+
+    /// Every failure worth an incident, in the order it happened.
+    pub failures: Vec<ProvisionFailure>,
+}
+
+impl ProvisionReport {
+    /// Whether the workspace is unusable rather than merely incomplete.
+    #[must_use]
+    pub fn is_fatal(&self) -> bool {
+        self.failures.iter().any(|failure| failure.fatal)
+    }
+}
+
+/// Clones every repo into a thread's workspace and runs their setup commands.
+///
+/// Repos are provisioned one at a time. A failed clone ends provisioning, so
+/// racing the rest only to throw the results away buys nothing, and a serial
+/// walk keeps a thread with six repos from saturating the disk of a satellite
+/// running four threads at once.
+///
+/// Deliberately knows nothing about the database. Everything it learns comes
+/// back in the report, so a caller decides what is an incident and this can be
+/// exercised against a `file://` remote without a store, a bus, or a network.
+///
+/// # Errors
+///
+/// Returns a [`WorkspaceError`] only for something the satellite got wrong: an
+/// unusable id, a name that could escape `repos/`, or a directory that will not
+/// be created. A remote that refuses a clone is a reported failure, not an
+/// error.
+pub async fn provision_repos(
+    root: &Path,
+    thread_id: &str,
+    declared: &[Repo],
+) -> Result<ProvisionReport, WorkspaceError> {
+    let mut report = ProvisionReport::default();
+
+    if declared.is_empty() {
+        return Ok(report);
+    }
+
+    let repos_root = repos_directory(root, thread_id)?;
+    create_directory(&repos_root).await?;
+
+    for repo in declared {
+        let name = directory_name(repo)?;
+        let checkout = repos_root.join(&name);
+
+        if let Err(failure) = repos::clone(repo, &checkout).await {
+            // The captured output stays in the incident rather than being
+            // repeated here. It is already durable there, and a full git stderr
+            // in a log line is noise in front of the one sentence that matters.
+            tracing::error!(
+                event.name = "workspace.repo.clone_failed",
+                thread.id = thread_id,
+                repo.name = name,
+                error.message = %failure.message,
+                "could not clone {{repo.name}}: {{error.message}}",
+            );
+
+            report.failures.push(ProvisionFailure {
+                code: ErrorCode::RepoCloneFailed,
+                // The workspace is not what the thread was created to work in,
+                // and no amount of setup makes it so.
+                fatal: true,
+                // A clone fails for reasons that pass: a rate limit, a remote
+                // restarting, a name that has not propagated yet.
+                retryable: true,
+                repo: name,
+                command: None,
+                exit_code: None,
+                message: failure.message,
+                output: failure.output,
+            });
+
+            return Ok(report);
+        }
+
+        tracing::info!(
+            event.name = "workspace.repo.cloned",
+            thread.id = thread_id,
+            repo.name = name,
+            "cloned {{repo.name}} into the thread's workspace",
+        );
+
+        collect_setup_failures(repo, &name, &checkout, &mut report).await;
+        report.cloned.push(name);
+    }
+
+    Ok(report)
+}
+
+/// Runs one repo's setup commands and records what did not work.
+async fn collect_setup_failures(
+    repo: &Repo,
+    name: &str,
+    checkout: &Path,
+    report: &mut ProvisionReport,
+) {
+    if repo.setup_commands.trim().is_empty() {
+        return;
+    }
+
+    let run = setup::run(&repo.setup_commands, checkout).await;
+
+    for failed in run.failures() {
+        report.failures.push(ProvisionFailure {
+            code: ErrorCode::RepoSetupFailed,
+            // The checkout is there and the thread can work in it. What is
+            // missing is whatever this command was supposed to leave behind.
+            fatal: false,
+            // The same command will exit the same way next time.
+            retryable: false,
+            repo: name.to_owned(),
+            command: Some(failed.command.clone()),
+            exit_code: Some(failed.exit_code),
+            message: format!(
+                "setup command `{}` exited with {}",
+                failed.command, failed.exit_code
+            ),
+            output: failed.output.clone(),
+        });
+    }
+
+    for skipped in &run.skipped {
+        report.failures.push(ProvisionFailure {
+            code: ErrorCode::RepoSetupFailed,
+            fatal: false,
+            retryable: false,
+            repo: name.to_owned(),
+            command: Some(skipped.clone()),
+            exit_code: None,
+            message: format!("setup command `{skipped}` never ran: a barrier above it failed"),
+            output: String::new(),
+        });
+    }
+}
+
+/// Creates a directory, saying which one when it cannot.
+async fn create_directory(path: &Path) -> Result<(), WorkspaceError> {
+    tokio::fs::create_dir_all(path)
+        .await
+        .map_err(|error| WorkspaceError::Create {
+            path: path.to_owned(),
+            source: error,
+        })
+}
+
+/// Fills a new thread's workspace, then releases the thread to run turns.
+///
+/// Cheap to clone: it holds a store handle and a path.
+#[derive(Debug, Clone)]
+pub struct Provisioner {
+    store: Store,
+    workspace_root: PathBuf,
+
+    /// Nudged once a thread is ready, so a turn queued while it was
+    /// provisioning starts immediately rather than waiting out the idle poll.
+    work_queued: Arc<tokio::sync::Notify>,
+}
+
+impl Provisioner {
+    #[must_use]
+    pub fn new(
+        store: Store,
+        workspace_root: PathBuf,
+        work_queued: Arc<tokio::sync::Notify>,
+    ) -> Self {
+        Self {
+            store,
+            workspace_root,
+            work_queued,
+        }
+    }
+
+    /// Provisions a thread without making its creator wait.
+    ///
+    /// The create request returns the moment the row is written. Everything the
+    /// thread needs to work arrives behind it, and the thread's `PROVISIONING`
+    /// state is what stops a turn starting in the meantime.
+    pub fn spawn(&self, thread_id: String, repos: Vec<Repo>) {
+        let provisioner = self.clone();
+
+        tokio::spawn(async move {
+            provisioner.provision(&thread_id, &repos).await;
+        });
+    }
+
+    /// Rebuilds the workspaces a restart left half-built.
+    ///
+    /// A thread still `PROVISIONING` when the process stopped has never run a
+    /// turn, because the claim query would not let it, so there is nothing in
+    /// its subtree worth keeping and everything in it is of unknown
+    /// completeness. It is removed and the clones are attempted again from the
+    /// settings the thread still carries.
+    ///
+    /// Leaving those threads as they were would be worse than it looks: nothing
+    /// else ever revisits `PROVISIONING`, so each one would hold its queue for
+    /// the life of the satellite while reporting itself perfectly healthy.
+    pub async fn resume_interrupted(&self) {
+        let interrupted = match self.store.provisioning_threads().await {
+            Ok(threads) => threads,
+            Err(error) => {
+                tracing::error!(
+                    event.name = "workspace.provision.sweep_failed",
+                    "could not look for half-built workspaces: {error}",
+                );
+                return;
+            }
+        };
+
+        if interrupted.is_empty() {
+            return;
+        }
+
+        tracing::warn!(
+            event.name = "workspace.provision.interrupted",
+            thread.count = interrupted.len(),
+            "a restart interrupted {{thread.count}} workspaces, rebuilding them",
+        );
+
+        for thread in interrupted {
+            let repos = thread
+                .settings
+                .map(|settings| settings.repos)
+                .unwrap_or_default();
+
+            if let Err(error) =
+                remove_thread_directory(&self.workspace_root, &thread.thread_id).await
+            {
+                tracing::error!(
+                    event.name = "workspace.provision.unclearable",
+                    thread.id = %thread.thread_id,
+                    "could not clear a half-built workspace: {error}",
+                );
+                self.release(&thread.thread_id, ProvisionOutcome::Failed)
+                    .await;
+                continue;
+            }
+
+            self.spawn(thread.thread_id, repos);
+        }
+    }
+
+    /// Clones the thread's repos, records what went wrong, and releases it.
+    ///
+    /// Never returns a failure. There is nobody left to return one to: the
+    /// create request answered long ago, which is why every outcome here becomes
+    /// an incident instead.
+    pub async fn provision(&self, thread_id: &str, repos: &[Repo]) {
+        tracing::info!(
+            event.name = "workspace.provision.started",
+            thread.id = thread_id,
+            repo.count = repos.len(),
+            "provisioning a workspace with {{repo.count}} repos",
+        );
+
+        let report = match provision_repos(&self.workspace_root, thread_id, repos).await {
+            Ok(report) => report,
+            Err(error) => {
+                // A path the satellite cannot use is a satellite problem rather
+                // than anything the caller did: repo names are checked when the
+                // thread is created, while it can still be told. It still has to
+                // be visible, and this is the one failure mode that would
+                // otherwise reach nothing but stderr.
+                self.report(
+                    thread_id,
+                    &ProvisionFailure {
+                        code: ErrorCode::Internal,
+                        fatal: true,
+                        retryable: false,
+                        repo: String::new(),
+                        command: None,
+                        exit_code: None,
+                        message: format!("could not prepare the workspace: {error}"),
+                        output: String::new(),
+                    },
+                )
+                .await;
+
+                self.release(thread_id, ProvisionOutcome::Failed).await;
+                return;
+            }
+        };
+
+        for failure in &report.failures {
+            self.report(thread_id, failure).await;
+        }
+
+        let outcome = if report.is_fatal() {
+            ProvisionOutcome::Failed
+        } else {
+            ProvisionOutcome::Ready
+        };
+
+        self.release(thread_id, outcome).await;
+    }
+
+    /// Writes one failure where it will still be readable next week.
+    ///
+    /// The event goes first so the incident row can carry the sequence it
+    /// landed at, which is what lets a query result be located in the stream and
+    /// a stream frame be looked up afterwards.
+    async fn report(&self, thread_id: &str, failure: &ProvisionFailure) {
+        let mut incident = Incident {
+            incident_id: uuid::Uuid::now_v7().to_string(),
+            sequence: None,
+            thread_id: Some(thread_id.to_owned()),
+            // Provisioning happens at thread creation, before any turn exists.
+            turn_id: None,
+            member_id: None,
+            code: failure.code.into(),
+            disposition: failure.disposition().into(),
+            retryable: failure.retryable,
+            message: failure.message.clone(),
+            details: Some(details(failure)),
+            occurred_at: Some(Timestamp::now()),
+        };
+
+        match self
+            .store
+            .append_event(crate::store::AppendEvent {
+                thread_id: thread_id.to_owned(),
+                turn_id: None,
+                member_id: None,
+                type_name: "incident".to_owned(),
+                occurred_at: None,
+                payload: Payload::Incident(incident.clone()),
+            })
+            .await
+        {
+            Ok(event) => incident.sequence = Some(event.sequence),
+            Err(error) => tracing::error!(
+                event.name = "event.append.failed",
+                thread.id = thread_id,
+                "could not stream a provisioning incident: {error}",
+            ),
+        }
+
+        if let Err(error) = self.store.record_incident(&incident).await {
+            tracing::error!(
+                event.name = "incident.record.failed",
+                thread.id = thread_id,
+                "could not record a provisioning incident: {error}",
+            );
+        }
+    }
+
+    /// Moves the thread out of `PROVISIONING` into the state it earned.
+    async fn release(&self, thread_id: &str, outcome: ProvisionOutcome) {
+        if let Err(error) = self.store.finish_provisioning(thread_id, outcome).await {
+            tracing::error!(
+                event.name = "workspace.provision.unreleased",
+                thread.id = thread_id,
+                "the workspace settled but the thread could not be released: {error}",
+            );
+            return;
+        }
+
+        match outcome {
+            ProvisionOutcome::Ready => {
+                tracing::info!(
+                    event.name = "workspace.provision.completed",
+                    thread.id = thread_id,
+                    "the workspace is ready",
+                );
+
+                // Work may have queued while this ran, and the runner should not
+                // sit through its idle poll before noticing.
+                self.work_queued.notify_one();
+            }
+            ProvisionOutcome::Failed => tracing::error!(
+                event.name = "workspace.provision.failed",
+                thread.id = thread_id,
+                "the workspace could not be provisioned, the thread is paused with its queue held",
+            ),
+        }
+    }
+}
+
+/// The evidence behind a failure, in the shape `Incident.details` takes.
+fn details(failure: &ProvisionFailure) -> prost_types::Struct {
+    let mut fields = std::collections::BTreeMap::new();
+
+    fields.insert("repo".to_owned(), text(failure.repo.clone()));
+
+    if let Some(command) = failure.command.clone() {
+        fields.insert("command".to_owned(), text(command));
+    }
+    if let Some(code) = failure.exit_code {
+        fields.insert("exit_code".to_owned(), number(f64::from(code)));
+    }
+    if !failure.output.is_empty() {
+        fields.insert("output".to_owned(), text(failure.output.clone()));
+    }
+
+    prost_types::Struct {
+        fields: fields.into_iter().collect(),
+    }
+}
+
+fn text(value: String) -> prost_types::Value {
+    prost_types::Value {
+        kind: Some(prost_types::value::Kind::StringValue(value)),
+    }
+}
+
+fn number(value: f64) -> prost_types::Value {
+    prost_types::Value {
+        kind: Some(prost_types::value::Kind::NumberValue(value)),
+    }
 }
 
 #[cfg(test)]
@@ -129,5 +653,44 @@ mod tests {
 
         assert!(!directory.exists());
         let _ignored = tokio::fs::remove_dir_all(&root).await;
+    }
+
+    #[tokio::test]
+    async fn a_thread_with_no_repos_provisions_into_an_empty_report() {
+        // Repos are not required to perform any work, and a thread that declares
+        // none must cost exactly what it did before provisioning existed:
+        // nothing, including no directories nobody asked for.
+        let root = std::env::temp_dir().join(format!("arsox-empty-{}", uuid::Uuid::now_v7()));
+        let thread_id = "019fd32f-2222-7222-8222-222222222222";
+
+        let report = provision_repos(&root, thread_id, &[])
+            .await
+            .expect("nothing to do is not a failure");
+
+        assert!(report.cloned.is_empty());
+        assert!(report.failures.is_empty());
+        assert!(!report.is_fatal());
+        assert!(!root.join(thread_id).exists());
+    }
+
+    #[tokio::test]
+    async fn a_repo_name_that_could_escape_the_workspace_is_refused_before_git_runs() {
+        let root = std::env::temp_dir().join(format!("arsox-hostile-{}", uuid::Uuid::now_v7()));
+
+        let error = provision_repos(
+            &root,
+            "019fd32f-3333-7333-8333-333333333333",
+            &[Repo {
+                name: "../../escape".to_owned(),
+                url: "https://example.com/x.git".to_owned(),
+                ..Repo::default()
+            }],
+        )
+        .await
+        .expect_err("a traversal must not reach git");
+
+        assert!(matches!(error, WorkspaceError::UnsafeRepoName(_)));
+
+        drop(tokio::fs::remove_dir_all(&root).await);
     }
 }

@@ -62,13 +62,12 @@ a consumer may already have.
 > silently drops a field looks correct until somebody reconciles a bill against
 > it. The conformance suite exists for exactly this contract.
 
-There is one fixture today (`fixtures/claude/tool-call.jsonl`). The suite that
-the contract asks for wants recordings per harness **per pinned CLI version**,
-because an output shape belongs to a version and to nothing else:
+Fixtures are recordings per harness **per pinned CLI version**, because an
+output shape belongs to a version and to nothing else:
 
 ```
 crates/arsox-harness/fixtures/
-  claude/2.1.226/<scenario>.stdout.jsonl   +   <scenario>.events.json
+  claude/2.1.221/<scenario>.stdout.jsonl   +   <scenario>.events.json
   codex/0.147.0/...
   kimi/0.34.0/...
 ```
@@ -76,6 +75,11 @@ crates/arsox-harness/fixtures/
 A version bump then becomes: record new fixtures, and let the suite say exactly
 what changed. That turns the worst failure mode, a shape that shifts silently on
 upgrade, into a red test.
+
+Two harnesses are covered today. Each fixture records whether it was captured or
+constructed, and `fixtures/README.md` holds the table: everything is a recording
+except Codex's successful run, which is built from the event schema published
+with that exact CLI version and is shaped so a recording replaces it.
 
 Material already measured against real runs rather than read from documentation:
 
@@ -122,11 +126,13 @@ translation layer whose only job is to undo the choice of protobuf.
 
 ## Order
 
-1. **`arsox-harness`**, by moving the two files that are already pure. Small.
-2. **Conformance fixtures** per harness per pinned version, seeded from real
-   recorded runs.
-3. **A Codex mapper**, which the contract promises and the code does not yet
-   have.
-4. **`arsox-runner`**, if and when a second consumer wants the supervision.
+`arsox-harness` exists, carries both mappers, and holds the versioned fixtures.
+What is left:
+
+1. **A spawn path for Codex**, so a satellite can drive the harness its mapper
+   already reads.
+2. **A recorded fixture for a successful Codex run**, replacing the one
+   constructed from the published schema.
+3. **`arsox-runner`**, if and when a second consumer wants the supervision.
 
 A consumer can stop after any of them.

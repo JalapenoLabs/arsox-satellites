@@ -134,6 +134,9 @@ pub(crate) struct Satellite {
     /// Removes threads and the workspaces they own.
     pub(crate) collector: Arc<collector::Collector>,
 
+    /// Fills a new thread's workspace before its first turn can claim it.
+    pub(crate) provisioner: workspace::Provisioner,
+
     /// What this satellite's harnesses support, resolved once at boot.
     harness: GetHarnessResponse,
 }
@@ -507,6 +510,18 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
 
     let harness = harness::capabilities::resolve().await;
 
+    let provisioner = workspace::Provisioner::new(
+        store.clone(),
+        std::path::PathBuf::from(&options.workspace_root),
+        Arc::clone(&work_queued),
+    );
+
+    // A workspace half-built when the satellite stopped is rebuilt rather than
+    // left as it was. Nothing else ever revisits PROVISIONING, so each one would
+    // otherwise hold its queue for the life of the process while reporting
+    // itself perfectly healthy.
+    provisioner.resume_interrupted().await;
+
     Ok(Assembled {
         router: router(Arc::new(Satellite {
             auth,
@@ -516,6 +531,7 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
             work_queued,
             bus,
             collector,
+            provisioner,
             harness,
         })),
         store,

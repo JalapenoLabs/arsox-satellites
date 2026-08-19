@@ -4,8 +4,9 @@ A harness is the CLI that drives an agent. Each speaks its own event vocabulary,
 and a mapper turns that vocabulary into the one canonical contract, so an
 application is written once and never rewritten when the harness changes.
 
-Claude is implemented. Codex is next, and the contract is already designed
-against its published schema.
+Two mappers exist: Claude and Codex. A satellite spawns Claude only, so the
+Codex mapper is knowledge the runner cannot reach yet, and the spawn path is
+what remains.
 
 ## Lenient in, strict out
 
@@ -30,7 +31,7 @@ satellite down. Neither is a silent skip, because a mapping layer that quietly
 discards what it does not understand looks correct right up until somebody
 reconciles a bill against it.
 
-## Where the native shape disagrees
+## Where the Claude shape disagrees
 
 Three mismatches in the Claude vocabulary are worth knowing, because each is a
 place a naive mapper would produce something wrong rather than something missing.
@@ -52,6 +53,44 @@ member id in the native stream, so one is derived from `parent_tool_use_id`.
 Deriving is what keeps that field out of the contract: a consumer sees a stable
 member id and never learns which harness produced its stream.
 
+## Where the Codex shape disagrees
+
+Codex models a run as a thread holding turns, and a turn as a list of *items*.
+Lifecycle events bracket the run and the items carry the work, which is a
+different envelope from Claude's and disagrees with the contract in three of its
+own places.
+
+**`codex exec` emits JSONL only with `--json`.** Without the flag it writes a
+human report, and a mapper pointed at that parses prose as protocol. The flag is
+part of the spawn and the consequence belongs to the mapper.
+
+**The usage event names no model.** `turn.completed` carries token counts and
+nothing else. A mapper that required a model and a count on one object would
+discard every count Codex reports, so usage is mapped without one and `by_model`
+is left to the runner, which knows the endpoint that answered.
+
+**`input_tokens` includes what came from cache**, with the cached count broken
+out beside it. Anthropic excludes it and the canonical shape follows Anthropic,
+so the cached count is subtracted. Copying the field across overstates a cached
+run by most of its prompt, in a number nobody checks until a reconciliation.
+
+Two smaller decisions are worth stating because both are deliberate:
+
+- **`cache_write_tokens` is absent, not zero.** Codex reports a zero, and the
+  provider behind it has no cache-write concept, so the zero is a structural
+  placeholder rather than a measurement. `usage.proto` names this case. A count
+  above zero is carried through, so a provider that grows the concept is already
+  mapped.
+- **A to-do list, a patch, and a web search are items rather than tool calls.**
+  Claude delivers all three as tool calls and the contract has one shape for a
+  tool call, so they map to `tool.started` and `tool.completed` rather than to
+  nothing.
+
+Codex also stamps `client_metadata` on its API requests, carrying `session_id`,
+`thread_id`, `turn_id`, and `turn_started_at_unix_ms`. None of it reaches stdout,
+which is why the harness session id comes from `thread.started`, the same id
+`codex exec resume` takes.
+
 ## Names that had to change
 
 `num_turns` becomes `TurnTiming.model_round_trips`. A harness counts one request
@@ -71,23 +110,30 @@ invoice it was meant to predict is the failure that shape exists to prevent.
 
 ## Conformance fixtures
 
-`crates/arsox-satellite/fixtures/claude/` holds real transcripts captured from
-the CLI, scrubbed of the capturing machine's paths, session identifiers, and
-installed tooling.
+`crates/arsox-harness/fixtures/` holds transcripts captured from the CLIs,
+scrubbed of the capturing machine's paths, session identifiers, and installed
+tooling. One directory per harness per pinned CLI version, because an output
+shape belongs to a version and to nothing else:
 
-Their value is that nobody wrote them from imagination. Every field, and every
-place the native shape disagrees with the contract, is something the harness
-actually emitted. Tests assert the exact canonical sequence a transcript
-produces, so a mapper that starts dropping or reordering events fails loudly.
-
-Capturing a new one:
-
-```bash
-claude -p "<prompt>" --output-format stream-json --verbose --allowedTools "Bash" < /dev/null
+```
+<harness>/<cli-version>/<scenario>.stdout.jsonl   the native transcript
+<harness>/<cli-version>/<scenario>.events.json    the canonical output it must produce
 ```
 
-`< /dev/null` matters. The CLI waits on stdin for a few seconds otherwise, which
-looks like a hang.
+The suite asserts the whole canonical document rather than a field at a time,
+which is what stops a mapper from dropping a field nobody wrote an assertion for.
+A version bump becomes: record new fixtures, and let the suite say exactly what
+changed.
+
+Their value is that nobody wrote them from imagination, so each one states
+whether it was recorded or constructed and `fixtures/README.md` keeps the table.
+Every field a recording carries is something the harness actually emitted. The
+one constructed fixture is Codex's successful run, built from the event schema
+published with the same pinned CLI version, and it is shaped so a recording drops
+in as a replacement.
+
+Capturing a new one is documented with the fixtures, in
+`crates/arsox-harness/fixtures/README.md`.
 
 ## The runner
 
@@ -111,6 +157,17 @@ being interrupted. Checking every line would be a query per line of output.
 **A clean exit with no result line fails the turn.** The harness ended without
 saying what it did, and reporting that as success is exactly the silent failure
 the incident system exists to prevent.
+
+**A ceiling ends a turn gracefully.** Reading harness output is a `select!` over
+the three things that can end it: the harness finishing, a cancellation, and a
+budget crossing. Wall clock is a deadline in that loop rather than a check in the
+proxy, because the proxy sees requests and not the gaps between them, and a
+harness stuck in a shell command would outlive a ceiling counted per request.
+Token exhaustion arrives from the proxy on a channel, so it is acted on the
+moment it happens rather than whenever the next line of output does. Either way
+the harness is torn down, the work it committed survives, the events it already
+produced stay in the log, and the result carries the code for the ceiling that
+stopped it. See [the proxy doc](./llm-proxy.md#counting-and-refusing).
 
 ### The agent's environment is built, not inherited
 
@@ -152,7 +209,11 @@ test.
 - **Bidirectional mode.** Both CLIs accept streaming input as well as emitting
   streaming output, which suits a long-lived process per thread better than a
   spawn per turn. It is also what makes cancellation and mid-turn input possible.
-- **Codex.** Its app-server protocol exposes command, patch, and network
+- **Spawning Codex.** The mapper reads `codex exec --json` today; the runner
+  cannot start one. That spawn path also has to take the turn summary from the
+  last `agent.message`, since Codex's closing message is an item rather than
+  part of `turn.completed` and a per-line mapper holds no state to fold it in.
+- **Codex over its app-server protocol.** It exposes command, patch, and network
   approvals as first-class requests, which is a better fit for the permission
   model than a one-way event stream.
 - **Pairing `tool.completed` back to `tool.started`** for the elapsed duration

@@ -39,9 +39,17 @@
 //! against it, and silence is exactly what makes that class of bug survive.
 
 pub mod claude;
+pub mod codex;
+
+mod json;
+
+#[cfg(test)]
+mod conformance;
 
 use arsox_sdk::proto::common::v1::Timestamp;
+use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
+use arsox_sdk::proto::incident::v1::{Disposition, Incident};
 
 /// One canonical event, before the event log assigns it a sequence number.
 ///
@@ -65,6 +73,61 @@ pub struct MappedEvent {
     pub occurred_at: Option<Timestamp>,
 
     pub payload: Payload,
+}
+
+impl MappedEvent {
+    /// Builds one canonical event, naming the payload with its wire name.
+    ///
+    /// The name is derived rather than passed, so a mapper cannot label an
+    /// event as something it is not.
+    pub(crate) fn new(
+        payload: Payload,
+        member_id: Option<String>,
+        occurred_at: Option<Timestamp>,
+    ) -> Self {
+        Self {
+            type_name: wire_name(&payload),
+            member_id,
+            occurred_at,
+            payload,
+        }
+    }
+
+    /// Builds the incident a mapper emits instead of dropping something.
+    ///
+    /// Not attributed to a member and not timestamped: the native line that
+    /// caused it is by definition one the mapper could not read, so claiming
+    /// either would be inventing detail. The event log stamps arrival time.
+    pub(crate) fn incident(code: ErrorCode, disposition: Disposition, message: &str) -> Self {
+        Self::new(
+            Payload::Incident(Incident {
+                code: code.into(),
+                disposition: disposition.into(),
+                message: message.to_owned(),
+                retryable: false,
+                ..Incident::default()
+            }),
+            None,
+            None,
+        )
+    }
+}
+
+/// The stable wire name for a payload, kept beside the payload it names.
+///
+/// An SDK built against an older proto minor cannot decode a payload arm it has
+/// never heard of, but it can still name and forward the event, which is what
+/// makes a wildcard subscription forward-compatible.
+pub(crate) fn wire_name(payload: &Payload) -> &'static str {
+    match payload {
+        Payload::AgentMessage(_) => "agent.message",
+        Payload::AgentThinking(_) => "agent.thinking",
+        Payload::ToolStarted(_) => "tool.started",
+        Payload::ToolCompleted(_) => "tool.completed",
+        Payload::RateLimitReported(_) => "rate_limit.reported",
+        Payload::Incident(_) => "incident",
+        _other => "unknown",
+    }
 }
 
 /// Everything one native line produced.

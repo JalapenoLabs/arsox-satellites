@@ -25,7 +25,7 @@ mod turns;
 
 pub use claims::{ClaimedTurn, Interrupted};
 pub use events::AppendEvent;
-pub use threads::{Listing, NewThread, StoredThread, ThreadFilter};
+pub use threads::{Listing, NewThread, ProvisionOutcome, StoredThread, ThreadFilter};
 pub use turns::{Drained, NewTurn, StoredTurn};
 
 use anyhow::{Context as _, Result};

@@ -1,0 +1,94 @@
+{
+  "events": [
+    {
+      "member_id": null,
+      "occurred_at": null,
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "text": "**Running the probe command**"
+      },
+      "type": "agent.thinking"
+    },
+    {
+      "member_id": null,
+      "occurred_at": null,
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "input": {
+          "command": "echo arsox-probe"
+        },
+        "tool_call_id": "item_1",
+        "tool_name": "shell"
+      },
+      "type": "tool.started"
+    },
+    {
+      "member_id": null,
+      "occurred_at": null,
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "elapsed": null,
+        "ok": true,
+        "output_preview": "arsox-probe\n",
+        "tool_call_id": "item_1",
+        "tool_name": "shell"
+      },
+      "type": "tool.completed"
+    },
+    {
+      "member_id": null,
+      "occurred_at": null,
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "text": "done"
+      },
+      "type": "agent.message"
+    }
+  ],
+  "harness_session_id": "01a01bb8-0c55-7ef2-9774-39703eec4482",
+  "result": {
+    "by_model": [],
+    "cost": {
+      "amount": null,
+      "is_partial": false
+    },
+    "is_error": false,
+    "permission_denials": [],
+    "stop_reason": null,
+    "summary": "",
+    "timing": {
+      "llm": null,
+      "model_round_trips": null,
+      "time_to_first_token": null,
+      "total": null
+    },
+    "tokens": {
+      "cache_read_tokens": 11008,
+      "cache_write_tokens": null,
+      "input_tokens": 1337,
+      "output_tokens": 57,
+      "reasoning_output_tokens": 32,
+      "total_tokens": 1394
+    }
+  }
+}

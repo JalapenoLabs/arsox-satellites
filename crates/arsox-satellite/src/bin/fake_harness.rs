@@ -24,6 +24,10 @@
 //! - `[[report_env=NAME]]` writes what the child can see of `NAME` to stderr,
 //!   so a test can assert on the environment an agent actually receives rather
 //!   than on the environment the satellite intended to give it.
+//! - `[[stall=MS]]` holds the process open for MS milliseconds after the
+//!   transcript, producing nothing. A real harness stuck in a long shell command
+//!   looks exactly like this from the satellite's side, which is what the wall
+//!   clock ceiling exists to end.
 
 use std::io::Write as _;
 
@@ -75,6 +79,14 @@ fn main() {
         if writeln!(out, "{line}").is_err() || out.flush().is_err() {
             return;
         }
+    }
+
+    // After the replay rather than before it, so a stalled run still proves that
+    // the work a turn already did survives the ceiling that stops it.
+    if let Some(millis) = directive(&prompt, "stall") {
+        std::thread::sleep(std::time::Duration::from_millis(
+            u64::try_from(millis).unwrap_or(u64::MAX),
+        ));
     }
 
     #[expect(

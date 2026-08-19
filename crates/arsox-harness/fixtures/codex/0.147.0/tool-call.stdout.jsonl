@@ -1,0 +1,10 @@
+{"type":"thread.started","thread_id":"01a01bb8-0c55-7ef2-9774-39703eec4482"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"item_0","type":"reasoning","text":""}}
+{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Running the probe command**"}}
+{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"echo arsox-probe","aggregated_output":"","status":"in_progress"}}
+{"type":"item.updated","item":{"id":"item_1","type":"command_execution","command":"echo arsox-probe","aggregated_output":"arsox-probe\n","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"echo arsox-probe","aggregated_output":"arsox-probe\n","exit_code":0,"status":"completed"}}
+{"type":"item.started","item":{"id":"item_2","type":"agent_message","text":""}}
+{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"done"}}
+{"type":"turn.completed","usage":{"input_tokens":12345,"cached_input_tokens":11008,"cache_write_input_tokens":0,"output_tokens":57,"reasoning_output_tokens":32}}

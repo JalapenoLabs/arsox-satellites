@@ -29,6 +29,20 @@ pub struct Listing {
     pub next_cursor: String,
 }
 
+/// How a thread's workspace provisioning ended.
+///
+/// Two outcomes rather than a boolean, because the state each lands in is not
+/// obvious from `true` and `false` at the call site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProvisionOutcome {
+    /// The workspace holds what the thread was created to work in.
+    Ready,
+
+    /// A repo the thread declared is not there. The thread keeps its queue and
+    /// refuses to run it.
+    Failed,
+}
+
 /// A thread as stored, plus whether this call created it.
 #[derive(Debug, Clone)]
 pub struct StoredThread {
@@ -82,9 +96,11 @@ impl Store {
     /// Opens a thread, or returns the existing one when the idempotency key
     /// matches.
     ///
-    /// The thread opens `IDLE` rather than `PROVISIONING`, because nothing
-    /// provisions a workspace yet and a state the thread never leaves would be a
-    /// lie. `PROVISIONING` returns with repo cloning.
+    /// A thread that declared repos opens `PROVISIONING` and stays there until
+    /// they are cloned and their setup commands have run. Turns may be queued
+    /// against it in the meantime and simply wait, because the claim query will
+    /// not hand a runner work from a thread in that state. A thread that
+    /// declared none has nothing to provision and opens `IDLE`.
     ///
     /// The thread id is generated here and never accepted from a client. It
     /// becomes a filesystem path, so a client-supplied one is a path traversal
@@ -118,6 +134,12 @@ impl Store {
             .as_ref()
             .map(|ttl| now_nanos.saturating_add(arsox_sdk::helpers::duration_to_nanos(ttl)));
 
+        let opening_state = if new.settings.repos.is_empty() {
+            ThreadState::Idle
+        } else {
+            ThreadState::Provisioning
+        };
+
         let mut transaction = self.pool().begin().await?;
 
         sqlx::query(
@@ -126,7 +148,7 @@ impl Store {
              VALUES (?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&thread_id)
-        .bind(i32::from(ThreadState::Idle))
+        .bind(i32::from(opening_state))
         .bind(new.settings.encode_to_vec())
         .bind(now_nanos)
         .bind(now_nanos)
@@ -149,7 +171,7 @@ impl Store {
         Ok(StoredThread {
             thread: Thread {
                 thread_id,
-                state: ThreadState::Idle.into(),
+                state: opening_state.into(),
                 settings: Some(new.settings),
                 created_at: Some(now.clone()),
                 last_activity_at: Some(now),
@@ -316,6 +338,65 @@ impl Store {
         })
     }
 
+    /// Releases a thread from `PROVISIONING` into the state its outcome earned.
+    ///
+    /// A provisioned thread goes to `IDLE` and its queue starts moving. A thread
+    /// whose repos are not there goes to `PAUSED`, which is exactly the shape of
+    /// the situation: alive, holding everything it was given, and refusing to
+    /// start work it cannot do. The queue is kept rather than drained, because
+    /// the incident says what failed and an operator who fixes the remote can
+    /// resume the thread onto the turns already waiting.
+    ///
+    /// Only a thread that is still provisioning is moved. A thread destroyed
+    /// while its repos cloned must stay destroyed, and a tombstone that came
+    /// back as idle would be a thread nothing can collect twice.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error if the update fails.
+    pub async fn finish_provisioning(
+        &self,
+        thread_id: &str,
+        outcome: ProvisionOutcome,
+    ) -> Result<(), StoreError> {
+        let target = match outcome {
+            ProvisionOutcome::Ready => ThreadState::Idle,
+            ProvisionOutcome::Failed => ThreadState::Paused,
+        };
+
+        sqlx::query("UPDATE threads SET state = ? WHERE thread_id = ? AND state = ?")
+            .bind(i32::from(target))
+            .bind(thread_id)
+            .bind(i32::from(ThreadState::Provisioning))
+            .execute(self.pool())
+            .await?;
+
+        Ok(())
+    }
+
+    /// Threads still provisioning, which after a restart means none of them are.
+    ///
+    /// Nothing else ever revisits that state, so a thread the satellite stopped
+    /// halfway through building would hold its queue forever. This is how the
+    /// boot sweep finds them.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error if the query fails.
+    pub async fn provisioning_threads(&self) -> Result<Vec<Thread>, StoreError> {
+        let rows = sqlx::query("SELECT thread_id FROM threads WHERE state = ?")
+            .bind(i32::from(ThreadState::Provisioning))
+            .fetch_all(self.pool())
+            .await?;
+
+        let mut threads = Vec::with_capacity(rows.len());
+        for row in &rows {
+            threads.push(self.thread(row.get::<&str, _>("thread_id")).await?);
+        }
+
+        Ok(threads)
+    }
+
     /// Stops a thread claiming queued work, without losing anything.
     ///
     /// Pausing an already paused thread is a no-op rather than an error: an
@@ -451,6 +532,10 @@ impl Store {
     /// without producing anything, but "only matters rarely" is not a reason to
     /// leave a race that destroys work.
     ///
+    /// A thread still provisioning is held back for the same reason. A clone in
+    /// progress is work in flight, and removing the subtree underneath it would
+    /// leave git writing into a directory that no longer exists.
+    ///
     /// # Errors
     ///
     /// Returns a database error if the query fails.
@@ -462,7 +547,7 @@ impl Store {
                FROM threads t
               WHERE t.expires_at IS NOT NULL
                 AND t.expires_at <= ?
-                AND t.state NOT IN (?, ?)
+                AND t.state NOT IN (?, ?, ?)
                 AND NOT EXISTS (
                       SELECT 1 FROM turns running
                        WHERE running.thread_id = t.thread_id
@@ -474,6 +559,7 @@ impl Store {
         .bind(now)
         .bind(i32::from(ThreadState::Expired))
         .bind(i32::from(ThreadState::Destroyed))
+        .bind(i32::from(ThreadState::Provisioning))
         .bind(i32::from(TurnStatus::Running))
         .bind(limit)
         .fetch_all(self.pool())

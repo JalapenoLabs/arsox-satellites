@@ -43,6 +43,11 @@ impl Store {
     /// driving one harness. Polling and then updating would leave exactly that
     /// window open.
     ///
+    /// Nothing is claimed from a thread that is paused or still provisioning.
+    /// Both rules live in the query rather than in the runner, which is what
+    /// makes "no turn ever runs in a half-cloned workspace" a property of the
+    /// database instead of a promise a second runner could break.
+    ///
     /// # Errors
     ///
     /// Returns a database error if the claim fails.
@@ -52,8 +57,9 @@ impl Store {
         let mut transaction = self.pool().begin().await?;
 
         // One turn at a time per thread, forever, and nothing at all from a
-        // paused thread. Both rules live in this subquery rather than in the
-        // runner, which is what makes them hold even if a second runner appears.
+        // thread that is paused or still provisioning. Every rule lives in this
+        // subquery rather than in the runner, which is what makes them hold even
+        // if a second runner appears.
         let Some(row) = sqlx::query(
             "UPDATE turns
                 SET status = ?, started_at = ?
@@ -62,7 +68,7 @@ impl Store {
                       FROM turns candidate
                       JOIN threads owner ON owner.thread_id = candidate.thread_id
                      WHERE candidate.status = ?
-                       AND owner.state != ?
+                       AND owner.state NOT IN (?, ?)
                        AND candidate.thread_id NOT IN (
                              SELECT running.thread_id FROM turns running WHERE running.status = ?
                            )
@@ -75,6 +81,7 @@ impl Store {
         .bind(now)
         .bind(i32::from(TurnStatus::Queued))
         .bind(i32::from(ThreadState::Paused))
+        .bind(i32::from(ThreadState::Provisioning))
         .bind(i32::from(TurnStatus::Running))
         .fetch_optional(&mut *transaction)
         .await?

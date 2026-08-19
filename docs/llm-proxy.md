@@ -104,6 +104,84 @@ is never configured by an operator and nothing outside the container connects to
 it, so a fixed port would only be a collision waiting to happen on a host
 running several satellites.
 
+## Counting, and refusing
+
+The chokepoint exists to carry ceilings, and this is them.
+
+**Who counts and who decides.** The proxy counts. The runner decides how a turn
+ends. A `Meter` is shared between them: the proxy adds up what each response
+reported and refuses the next request once the ceiling is reached, and the
+crossings it finds travel a channel to the runner, which owns the turn's
+lifetime and is the only thing that writes to the event log. An accountant that
+also emitted events would be emitting them for turns it cannot see the end of.
+
+**What is counted.** `input_tokens + output_tokens`, exactly the `total_tokens`
+the canonical `TokenUsage` carries. Anthropic's `input_tokens` excludes what came
+from cache, so a heavily cached turn spends fewer budgeted tokens than it sent to
+the model. That is consistency chosen over strictness: counting cache reads here
+would make the ceiling disagree with the total the same turn reports in its
+result, and an operator meeting `BUDGET_TOKENS_EXHAUSTED` at four thousand tokens
+while the report says two thousand has been handed a contradiction rather than a
+limit.
+
+**Where it is read from.** Both shapes the provider answers in. A streamed
+response reports usage on `message_start` and again, cumulatively, on
+`message_delta`; a non-streamed one reports it once at the top level of the body.
+Which is arriving is decided by the response's own `Content-Type` rather than
+guessed at from the bytes, because a JSON document and a `data:` line are only
+distinguishable by luck. The body is still relayed as it arrives; the scan reads
+the bytes on their way past rather than collecting them.
+
+**When the count lands.** After the response finishes, because that is when the
+provider has finished saying what it cost. The request that crosses the ceiling
+is therefore always allowed to complete, and the next one is refused: cutting a
+completion off mid-stream to save the overshoot would discard tokens already paid
+for. The total commits on drop as well as on a clean end, so a harness that hangs
+up mid-response is still charged for what it generated.
+
+**What a refusal looks like.** A 403 shaped like the provider's own
+`permission_error`, not a 429. Both stop the request and only one of them tells
+the CLI to retry against a wall that will not move before the turn ends.
+
+### The three ceilings
+
+| Ceiling | Enforced by | When |
+|---|---|---|
+| `maxTokensPerTurn` | the proxy | per request, from usage the provider reported |
+| `maxWallClockPerTurn` | the runner | a deadline in the loop reading harness output |
+| `maxCostPerThread` | the runner | at turn boundaries, from cost the harness reported |
+
+Wall clock is the runner's because the proxy sees requests and not the gaps
+between them: a harness stuck in a shell command never reaches the proxy and
+would outlive any ceiling the proxy counted.
+
+**Cost is the honest exception, and worth stating plainly.** Nothing in the
+contract publishes a price. `ModelEndpoint` carries a name, a model, a base URL,
+auth and a retry policy, and no rate, so the proxy cannot price a request without
+a table of vendor prices invented here and stale within a quarter. What the
+satellite does know is what each harness reports its turn cost, which is measured
+rather than guessed. So the thread's cost ceiling is summed from finished turn
+results and checked before a turn starts: a thread that has spent its ceiling
+runs no further turns, and the turn that crosses it completes. Absent is not
+zero here either, a thread whose turns reported no priced cost has nothing
+comparable and is not enforced against rather than being treated as free.
+
+Per-request cost enforcement needs pricing in the contract. That is a proto
+change, not a proxy change.
+
+### Warnings
+
+At 80% of any ceiling a `budget.warning` event reaches the thread's stream
+carrying which ceiling and how much of it is gone, so a host application can
+react before the wall. Once per ceiling per turn: a warning on every request past
+the threshold is noise rather than a signal.
+
+A ceiling actually reached emits no warning. It ends the turn, and the turn's own
+error names which one did it: `BUDGET_TOKENS_EXHAUSTED`, `BUDGET_COST_EXHAUSTED`,
+or `BUDGET_WALL_CLOCK_EXHAUSTED`, alongside a `fatal` incident. The stop is
+graceful, so work already committed survives and the events the harness produced
+stay in the log.
+
 ## Verifying it
 
 `tests/llm_proxy.rs` drives the proxy over a real socket against a stub
@@ -112,18 +190,18 @@ that can see what was attached after the agent let go of the request.
 
 Covered: the real credential arrives and the turn token does not, an ungranted
 token is refused without reaching the provider, a revoked token stops working, a
-path and key that disagree are refused, and a credential the agent supplied is
-replaced rather than forwarded alongside ours.
+path and key that disagree are refused, a credential the agent supplied is
+replaced rather than forwarded alongside ours, usage is counted from both a
+streamed and a non-streamed response, the warning arrives at 80%, and a turn past
+its ceiling is refused **without the request reaching the provider**, which is
+the assertion the whole feature rests on.
 
 ## Roadmap
 
-Everything above is the chokepoint. What it exists to carry is still to come:
-
-- Token and cost accounting per thread, turn, and model, which is what
-  `GET /v1/statistics` reports.
-- Ceilings: `BUDGET_TOKENS_EXHAUSTED`, `BUDGET_COST_EXHAUSTED`, and the
-  `budget_warning` event at 80% of any ceiling.
+- Cost per request, once the contract carries model pricing.
 - Endpoint failover in the documented order, with each endpoint's own retry
   policy, and an incident recorded for every endpoint given up on.
 - OAuth refresh, so an endpoint whose access token expires mid-thread recovers
   rather than failing over.
+- `GET /v1/statistics`, which is where lifetime totals per model and per thread
+  surface.

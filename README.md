@@ -411,7 +411,7 @@ A mapping layer that silently drops a field looks correct until somebody reconci
 
 Each supported harness carries a captured native transcript and the canonical output it must produce. Adding a harness means writing a mapper and passing the existing suite. A harness that cannot produce a valid canonical `TokenUsage` fails at build time rather than in production.
 
-**Claude is the harness implemented today, and the suite has one entry.** That is a smaller claim than it will be, and worth stating plainly rather than implying a suite that already spans several. `GET /v1/harness` reports what a given satellite actually supports, so a consumer never has to infer it.
+**Claude is the harness a satellite spawns today.** The suite covers two: Claude and Codex, one directory per harness per pinned CLI version. Codex has a mapper and fixtures and no spawn path yet, so `GET /v1/harness` still reports Claude alone. It reports what a given satellite actually supports rather than what this repo contains, so a consumer never has to infer it.
 
 The canonical shapes are nonetheless designed against more than one vocabulary, because a contract derived from a single harness is that harness wearing different field names. Reading a second harness's published schema is what surfaced `reasoning_output_tokens`, confirmed that `cache_write_tokens` must be genuinely absent rather than zero for a harness with no cache-write concept, and turned rate limits from one CLI's quirk into a shape the contract carries. None of those would have been found from one transcript.
 
@@ -826,7 +826,9 @@ Team mode can run nine LLM contexts at once for days. Without a ceiling, a singl
 
 Enforcement is deterministic, not advisory. Every model request passes through the Arsox LLM proxy, so the proxy counts tokens and refuses further completions once the ceiling is reached. An agent cannot talk its way past it.
 
-At 80% of any ceiling, a `budget_warning` event is emitted so your application can react before the wall.
+**Wall clock and cost are enforced where each is actually knowable.** The proxy sees requests, not the gaps between them, so a turn's wall clock is a deadline in the satellite rather than a count at the proxy: a harness stuck in a long shell command is stopped on time. And nothing in the contract publishes a model price, so the only cost the satellite truly knows is what each harness reports when its turn ends. `maxCostPerThread` is therefore summed from finished turns and checked before the next one starts. A thread that has spent its ceiling runs no further turns, and the turn that crossed it completes rather than being discarded. Per-request cost enforcement waits on pricing entering the contract, and inventing a price table here would be a number that drifts from your invoice.
+
+At 80% of any ceiling, a `budget_warning` event is emitted so your application can react before the wall. Once per ceiling per turn, because a warning on every request past the threshold is noise rather than a signal.
 
 When a ceiling is hit, the turn ends with the code for the ceiling that was actually hit: `BUDGET_TOKENS_EXHAUSTED`, `BUDGET_COST_EXHAUSTED`, or `BUDGET_WALL_CLOCK_EXHAUSTED`. This is a graceful stop, not a kill: the commander is told the budget is gone, work already committed to branches survives, and artifacts already produced remain downloadable.
 
@@ -844,7 +846,7 @@ They compose freely, which is the interesting part. You can run an Anthropic mod
 
 #### The harness axis
 
-The Claude CLI harness is implemented and is the default. Codex is next on this axis, and the contract is already designed against its published schema.
+The Claude CLI harness is implemented and is the default. Codex is next on this axis: its mapper and its conformance fixtures are written, and what remains is the spawn path that lets a satellite drive it.
 
 Adding a harness is a satellite-side change: write the mapper from its native events into the canonical shapes and pass the [conformance suite](#conformance-tests). Nothing in your application changes, and no SDK release is required to make an existing consumer work with a new harness. That is the property worth protecting, and it is why the axis exists even while one harness occupies it. Gemini CLI, Grok CLI, and Kimi CLI are all plausible additions, because each has behavior that makes it worth choosing for a given job.
 

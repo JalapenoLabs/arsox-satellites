@@ -36,16 +36,22 @@ A separate structure would be a second source of truth that could fall out of
 step with the turns it describes, and reconciling the two after a crash is a
 problem worth not having.
 
-## Pausing is enforced in the claim, not the runner
+## Pausing and provisioning are enforced in the claim, not the runner
 
-`claim_next_turn` joins `threads` and excludes any thread in `PAUSED`, in the
-same statement that takes the turn.
+`claim_next_turn` joins `threads` and excludes any thread in `PAUSED` or
+`PROVISIONING`, in the same statement that takes the turn.
 
 Putting the check in the runner instead would make it a rule the runner has to
 remember, and a second runner appearing later would not know about it. In the
 claim it is structural: whatever does the claiming inherits the guarantee. This
 is the same reasoning that keeps one-turn-at-a-time in the subquery rather than
 in Rust.
+
+`PROVISIONING` rides on the same mechanism, which is what makes "no turn ever
+runs in a half-cloned workspace" a property of the database. A thread that
+declared repos opens in that state, accepts queued turns while its clones run,
+and is released to `IDLE` when they finish. See
+[the workspace](./workspace.md).
 
 Draining is one `UPDATE ... RETURNING` over the thread's queued rows for the same
 reason. Cancelling turns in a loop races the runner claiming the next one, and an
@@ -163,7 +169,7 @@ docker run -d --name arsox-test -p 18080:8080 \
   -e ARSOX_CLAUDE_BIN=/opt/arsox/fake-harness.sh \
   -e ARSOX_COLLECT_INTERVAL=2 \
   -v "$(pwd)/scripts/fake-harness.sh:/opt/arsox/fake-harness.sh:ro" \
-  -v "$(pwd)/crates/arsox-satellite/fixtures/claude:/fixtures:ro" \
+  -v "$(pwd)/crates/arsox-harness/fixtures/claude/2.1.221:/fixtures:ro" \
   -v arsox-test-db:/var/arsox arsox-satellite:dev
 python scripts/smoke-test.py
 ```

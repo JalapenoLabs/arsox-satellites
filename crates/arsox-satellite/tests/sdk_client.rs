@@ -38,7 +38,7 @@ const SECRET: &str = "sdk-test-secret";
 /// different things.
 const TRANSCRIPT: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../arsox-harness/fixtures/claude/tool-call.jsonl"
+    "/../arsox-harness/fixtures/claude/2.1.221/tool-call.stdout.jsonl"
 );
 
 /// Starts a satellite and returns the URL a client would be given.

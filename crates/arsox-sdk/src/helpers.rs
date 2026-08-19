@@ -22,6 +22,13 @@ pub const DEFAULT_TIMEZONE: &str = "Etc/UTC";
 /// Nanoseconds in one second, as the fractional field is defined.
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
 
+/// Billionths in one whole currency unit, as `Money.nanos` is defined.
+///
+/// Numerically the same as [`NANOS_PER_SECOND`] and named separately on
+/// purpose: money and time share an integer scale by coincidence, and a single
+/// constant serving both would make either one look like a unit error.
+const NANOS_PER_UNIT: i128 = 1_000_000_000;
+
 impl Timestamp {
     /// Builds a timestamp from a system instant, tagged with an IANA zone.
     ///
@@ -103,6 +110,25 @@ impl Money {
             units,
             nanos,
         }
+    }
+
+    /// The amount as a single count of billionths, for comparing two sums.
+    ///
+    /// Accumulating spend against a ceiling needs one number rather than a pair,
+    /// and `i128` holds every amount the two 64-bit halves can express without
+    /// the saturation an `i64` would need.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use arsox_sdk::proto::common::v1::Money;
+    ///
+    /// assert_eq!(Money::usd(0, 750_000_000).to_nanos(), 750_000_000);
+    /// assert_eq!(Money::usd(2, 500_000_000).to_nanos(), 2_500_000_000);
+    /// ```
+    #[must_use]
+    pub fn to_nanos(&self) -> i128 {
+        i128::from(self.units) * NANOS_PER_UNIT + i128::from(self.nanos)
     }
 
     /// Renders the amount as a decimal string, without going through a float.

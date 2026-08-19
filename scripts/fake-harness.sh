@@ -13,7 +13,7 @@
 # environment is shared by every spawn.
 set -eu
 
-TRANSCRIPT="${ARSOX_FAKE_TRANSCRIPT:-/fixtures/tool-call.jsonl}"
+TRANSCRIPT="${ARSOX_FAKE_TRANSCRIPT:-/fixtures/tool-call.stdout.jsonl}"
 
 # The satellite passes the prompt as the argument after --print.
 prompt=""

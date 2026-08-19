@@ -22,6 +22,7 @@
 //! Neither shape is wrong; they are just a different model. Absorbing that
 //! difference is the entire job of this module.
 
+use crate::json::{string_at, to_struct, u64_at};
 use crate::{HarnessResult, MappedEvent, Mapping};
 use arsox_sdk::proto::common::v1::{Duration, Money, Timestamp};
 use arsox_sdk::proto::error::v1::ErrorCode;
@@ -29,7 +30,7 @@ use arsox_sdk::proto::event::v1::thread_event::Payload;
 use arsox_sdk::proto::event::v1::{
     AgentMessage, AgentThinking, Author, AuthorKind, RateLimitReported, ToolCompleted, ToolStarted,
 };
-use arsox_sdk::proto::incident::v1::{Disposition, Incident};
+use arsox_sdk::proto::incident::v1::Disposition;
 use arsox_sdk::proto::turn::v1::{StopReason, TurnTiming};
 use arsox_sdk::proto::usage::v1::{
     CostEstimate, ModelStatistics, RateLimitStatus, RateLimitWindow, ServerToolUsage, TokenUsage,
@@ -48,7 +49,7 @@ const NANOS_PER_UNIT: f64 = 1_000_000_000.0;
 pub fn map_line(line: &str) -> Mapping {
     let Ok(event) = serde_json::from_str::<Value>(line) else {
         return Mapping {
-            events: vec![incident(
+            events: vec![MappedEvent::incident(
                 ErrorCode::Internal,
                 Disposition::Degraded,
                 "harness emitted a line that is not valid JSON",
@@ -93,7 +94,7 @@ pub fn map_line(line: &str) -> Mapping {
         },
 
         unknown => Mapping {
-            events: vec![incident(
+            events: vec![MappedEvent::incident(
                 ErrorCode::Internal,
                 Disposition::Degraded,
                 &format!(
@@ -155,17 +156,16 @@ fn map_assistant(
                     tool_name: string_at(block, "name"),
                     // Tool inputs are open-ended by nature, so they travel as a
                     // Struct and are redacted like any other content.
-                    input: block.get("input").and_then(json_to_struct),
+                    input: block.get("input").and_then(to_struct),
                 }),
                 _unrecognized => return None,
             };
 
-            Some(MappedEvent {
-                type_name: type_name_of(&payload),
-                member_id: author.member_id.clone(),
-                occurred_at: occurred_at.cloned(),
+            Some(MappedEvent::new(
                 payload,
-            })
+                author.member_id.clone(),
+                occurred_at.cloned(),
+            ))
         })
         .collect()
 }
@@ -206,12 +206,7 @@ fn map_tool_results(
                 elapsed: None,
             });
 
-            MappedEvent {
-                type_name: type_name_of(&payload),
-                member_id: author.member_id.clone(),
-                occurred_at: occurred_at.cloned(),
-                payload,
-            }
+            MappedEvent::new(payload, author.member_id.clone(), occurred_at.cloned())
         })
         .collect()
 }
@@ -247,12 +242,7 @@ fn map_rate_limit(event: &Value, occurred_at: Option<Timestamp>) -> Vec<MappedEv
         endpoint_name: String::new(),
     });
 
-    vec![MappedEvent {
-        type_name: type_name_of(&payload),
-        member_id: None,
-        occurred_at,
-        payload,
-    }]
+    vec![MappedEvent::new(payload, None, occurred_at)]
 }
 
 fn map_result(event: &Value) -> HarnessResult {
@@ -393,34 +383,6 @@ fn stop_reason(raw: &str) -> Option<StopReason> {
     }
 }
 
-/// The stable wire name for a payload, kept beside the payload it names.
-fn type_name_of(payload: &Payload) -> &'static str {
-    match payload {
-        Payload::AgentMessage(_) => "agent.message",
-        Payload::AgentThinking(_) => "agent.thinking",
-        Payload::ToolStarted(_) => "tool.started",
-        Payload::ToolCompleted(_) => "tool.completed",
-        Payload::RateLimitReported(_) => "rate_limit.reported",
-        Payload::Incident(_) => "incident",
-        _other => "unknown",
-    }
-}
-
-fn incident(code: ErrorCode, disposition: Disposition, message: &str) -> MappedEvent {
-    MappedEvent {
-        type_name: "incident",
-        member_id: None,
-        occurred_at: None,
-        payload: Payload::Incident(Incident {
-            code: code.into(),
-            disposition: disposition.into(),
-            message: message.to_owned(),
-            retryable: false,
-            ..Incident::default()
-        }),
-    }
-}
-
 fn timestamp(raw: Option<&str>) -> Option<Timestamp> {
     let parsed = chrono::DateTime::parse_from_rfc3339(raw?).ok()?;
 
@@ -444,55 +406,11 @@ fn millis(raw: Option<&Value>) -> Option<Duration> {
     })
 }
 
-fn string_at(value: &Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(Value::as_str)
-        .unwrap_or_default()
-        .to_owned()
-}
-
-fn u64_at(value: &Value, key: &str) -> u64 {
-    value.get(key).and_then(Value::as_u64).unwrap_or_default()
-}
-
-/// Converts arbitrary JSON into the protobuf `Struct` the contract carries.
-fn json_to_struct(value: &Value) -> Option<prost_types::Struct> {
-    let object = value.as_object()?;
-
-    Some(prost_types::Struct {
-        fields: object
-            .iter()
-            .map(|(key, value)| (key.clone(), json_to_value(value)))
-            .collect(),
-    })
-}
-
-fn json_to_value(value: &Value) -> prost_types::Value {
-    use prost_types::value::Kind;
-
-    let kind = match value {
-        Value::Null => Kind::NullValue(0),
-        Value::Bool(flag) => Kind::BoolValue(*flag),
-        Value::Number(number) => Kind::NumberValue(number.as_f64().unwrap_or_default()),
-        Value::String(text) => Kind::StringValue(text.clone()),
-        Value::Array(items) => Kind::ListValue(prost_types::ListValue {
-            values: items.iter().map(json_to_value).collect(),
-        }),
-        Value::Object(fields) => Kind::StructValue(prost_types::Struct {
-            fields: fields
-                .iter()
-                .map(|(key, value)| (key.clone(), json_to_value(value)))
-                .collect(),
-        }),
-    };
-
-    prost_types::Value { kind: Some(kind) }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::conformance;
 
     /// A real `stream-json` transcript, captured from the CLI and scrubbed of
     /// the capturing machine's identifiers.
@@ -500,14 +418,14 @@ mod tests {
     /// This is the conformance fixture, and its value is that nobody wrote it
     /// from imagination. Every field, and every place the native shape disagrees
     /// with the contract, is something the harness actually emitted.
-    const TOOL_CALL_TRANSCRIPT: &str = include_str!("../fixtures/claude/tool-call.jsonl");
+    const TOOL_CALL_TRANSCRIPT: &str =
+        include_str!("../fixtures/claude/2.1.221/tool-call.stdout.jsonl");
+
+    /// The canonical output that transcript must produce, byte for byte.
+    const TOOL_CALL_EVENTS: &str = include_str!("../fixtures/claude/2.1.221/tool-call.events.json");
 
     fn map_all(transcript: &str) -> Vec<Mapping> {
-        transcript
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(map_line)
-            .collect()
+        conformance::map_all(transcript, map_line)
     }
 
     fn all_events(transcript: &str) -> Vec<MappedEvent> {
@@ -522,6 +440,15 @@ mod tests {
             .into_iter()
             .find_map(|mapping| mapping.result)
             .expect("the transcript should end with a result")
+    }
+
+    #[test]
+    fn the_transcript_produces_the_recorded_canonical_output() {
+        // The whole conformance claim in one assertion: this transcript, these
+        // canonical events, exactly. A mapper that starts dropping, reordering,
+        // or renaming anything fails here with a diff rather than passing a
+        // narrower test that happened not to look at the field it broke.
+        conformance::assert_matches(&map_all(TOOL_CALL_TRANSCRIPT), TOOL_CALL_EVENTS);
     }
 
     #[test]

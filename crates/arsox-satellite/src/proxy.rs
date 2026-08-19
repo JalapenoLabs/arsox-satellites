@@ -14,8 +14,10 @@
 //!
 //! **Ceilings.** A budget written into a prompt is a suggestion, and an agent
 //! under pressure routes around a suggestion. A budget enforced at the socket
-//! the completions travel over is arithmetic. Counting and refusing land here,
-//! on top of this.
+//! the completions travel over is arithmetic. Every response is read for the
+//! usage the provider reported, the total is added to the turn's [`Meter`], and
+//! once the ceiling is reached the next request is refused here rather than
+//! discouraged upstream. See [`budget`].
 //!
 //! # The grant
 //!
@@ -30,18 +32,23 @@
 //! guessed the URL still needs the token, and the CLI has a credential-shaped
 //! thing to send so it does not refuse to start.
 
+use crate::proxy::budget::{Meter, UsageReader};
 use crate::proxy::upstream::Upstream;
 use axum::Router;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
-use axum::http::{HeaderMap, HeaderName, StatusCode};
+use axum::http::{HeaderMap, HeaderName, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
+use futures_util::{Stream, StreamExt as _};
 use std::collections::HashMap;
 use std::net::SocketAddr;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use tokio::sync::RwLock;
 
+pub mod budget;
 pub mod upstream;
 
 /// Headers that describe one hop and must not be forwarded to the next.
@@ -80,6 +87,12 @@ struct Grant {
     thread_id: String,
     turn_id: String,
     upstream: Upstream,
+
+    /// What this turn has spent and what it may spend.
+    ///
+    /// Shared with the runner rather than owned here: the proxy counts, and the
+    /// runner is the only thing that knows how to end a turn.
+    meter: Arc<Meter>,
 }
 
 /// Routes an agent's model requests, holding the credential it must not.
@@ -146,12 +159,18 @@ impl LlmProxy {
         format!("http://{}/t/{token}", self.address)
     }
 
-    /// Issues a turn its token.
+    /// Issues a turn its token, metered by `meter`.
     ///
     /// The token is a UUID rather than anything derived from the turn, because
     /// a token an agent can predict is a token it can mint for a turn that is
     /// not its own.
-    pub async fn grant(&self, thread_id: &str, turn_id: &str, upstream: Upstream) -> String {
+    pub async fn grant(
+        &self,
+        thread_id: &str,
+        turn_id: &str,
+        upstream: Upstream,
+        meter: Arc<Meter>,
+    ) -> String {
         let token = uuid::Uuid::now_v7().to_string();
 
         self.grants.write().await.insert(
@@ -160,6 +179,7 @@ impl LlmProxy {
                 thread_id: thread_id.to_owned(),
                 turn_id: turn_id.to_owned(),
                 upstream,
+                meter,
             },
         );
 
@@ -207,6 +227,26 @@ async fn forward(
         );
     }
 
+    if let Some(ceiling) = grant.meter.reached() {
+        tracing::info!(
+            event.name = "proxy.budget.refused",
+            thread.id = grant.thread_id,
+            turn.id = grant.turn_id,
+            budget.ceiling = ceiling.as_str_name(),
+            budget.tokens_spent = grant.meter.tokens_spent(),
+            "refusing a completion: this turn has reached {{budget.ceiling}}",
+        );
+
+        // A 403 rather than a 429. Both would stop the request, and only one of
+        // them tells the CLI to try again in a moment against a wall that will
+        // not move before the turn ends.
+        return provider_error(
+            StatusCode::FORBIDDEN,
+            "permission_error",
+            "this turn has reached the token ceiling its thread was created with",
+        );
+    }
+
     let url = grant.upstream.url_for(&path, parts.uri.query());
 
     // The request body is collected, the response body is not. A completion
@@ -238,7 +278,7 @@ async fn forward(
     }
 
     match outbound.send().await {
-        Ok(response) => relay(response),
+        Ok(response) => relay(response, grant.meter),
         Err(error) => {
             tracing::warn!(
                 event.name = "proxy.upstream.failed",
@@ -256,12 +296,14 @@ async fn forward(
     }
 }
 
-/// Streams the upstream's response back without buffering it.
+/// Streams the upstream's response back without buffering it, counting as it
+/// goes.
 ///
 /// Completions arrive as server-sent events. Collecting one before returning it
 /// would turn a streaming API into a blocking one and defeat every event the
-/// harness emits as it goes.
-fn relay(response: reqwest::Response) -> Response {
+/// harness emits as it goes, so the usage the provider reports is read out of
+/// the bytes on their way past instead.
+fn relay(response: reqwest::Response, meter: Arc<Meter>) -> Response {
     let mut builder = Response::builder().status(response.status());
 
     for (name, value) in response.headers() {
@@ -271,8 +313,21 @@ fn relay(response: reqwest::Response) -> Response {
         builder = builder.header(name, value);
     }
 
+    let reader = UsageReader::for_content_type(
+        response
+            .headers()
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok()),
+    );
+
+    let counted = Metered {
+        inner: Box::pin(response.bytes_stream()),
+        reader,
+        meter,
+    };
+
     builder
-        .body(Body::from_stream(response.bytes_stream()))
+        .body(Body::from_stream(counted))
         .unwrap_or_else(|_error| {
             provider_error(
                 StatusCode::BAD_GATEWAY,
@@ -280,6 +335,42 @@ fn relay(response: reqwest::Response) -> Response {
                 "the upstream response could not be relayed",
             )
         })
+}
+
+/// A response body that counts the usage it carries on its way past.
+///
+/// The total is committed on drop rather than when the stream ends. A harness
+/// that hangs up mid-response still spent the tokens the provider generated, and
+/// a turn whose accounting is discarded because its last request was abandoned
+/// is a ceiling with a hole in it.
+struct Metered {
+    inner: Pin<Box<dyn Stream<Item = reqwest::Result<Bytes>> + Send>>,
+    reader: UsageReader,
+    meter: Arc<Meter>,
+}
+
+impl Stream for Metered {
+    type Item = reqwest::Result<Bytes>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        // Every field is `Unpin`, so the pin places no restriction on taking a
+        // mutable reference and no projection machinery is needed.
+        let this = self.get_mut();
+
+        let polled = this.inner.poll_next_unpin(cx);
+
+        if let Poll::Ready(Some(Ok(chunk))) = &polled {
+            this.reader.push(chunk);
+        }
+
+        polled
+    }
+}
+
+impl Drop for Metered {
+    fn drop(&mut self) {
+        self.meter.record_tokens(self.reader.take_total());
+    }
 }
 
 /// Whether the API key the caller presented is the token it was routed with.
