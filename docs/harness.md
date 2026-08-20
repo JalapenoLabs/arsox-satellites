@@ -125,12 +125,10 @@ which is what stops a mapper from dropping a field nobody wrote an assertion for
 A version bump becomes: record new fixtures, and let the suite say exactly what
 changed.
 
-Their value is that nobody wrote them from imagination, so each one states
-whether it was recorded or constructed and `fixtures/README.md` keeps the table.
-Every field a recording carries is something the harness actually emitted. The
-one constructed fixture is Codex's successful run, built from the event schema
-published with the same pinned CLI version, and it is shaped so a recording drops
-in as a replacement.
+Their value is that nobody wrote them from imagination. Every fixture is a
+recording, so every field one carries is something the harness actually emitted.
+Each still states its provenance and `fixtures/README.md` keeps the table, so a
+fixture ever built from a published schema rather than captured has to say so.
 
 Capturing a new one is documented with the fixtures, in
 `crates/arsox-harness/fixtures/README.md`.

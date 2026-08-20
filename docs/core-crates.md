@@ -76,10 +76,9 @@ A version bump then becomes: record new fixtures, and let the suite say exactly
 what changed. That turns the worst failure mode, a shape that shifts silently on
 upgrade, into a red test.
 
-Two harnesses are covered today. Each fixture records whether it was captured or
-constructed, and `fixtures/README.md` holds the table: everything is a recording
-except Codex's successful run, which is built from the event schema published
-with that exact CLI version and is shaped so a recording replaces it.
+Two harnesses are covered today and every fixture is a recording. Each one still
+states its provenance in `fixtures/README.md`, so a fixture ever built from a
+published schema rather than captured has to say so out loud.
 
 Material already measured against real runs rather than read from documentation:
 
@@ -90,6 +89,11 @@ Material already measured against real runs rather than read from documentation:
   and keeps session state in versioned SQLite (`state_5.sqlite`), not a rollout
   file. Anything reading that store is reading an undocumented schema whose name
   carries its version.
+- **Codex's exec stream announces work but not prose.** A tool call arrives as
+  an `item.started` and an `item.completed`; an agent message arrives only as an
+  `item.completed`, and `item.updated` never appears at all. A turn also emits
+  several agent messages, a preamble and then the answer, which is why the
+  runner takes its summary from the last rather than the first.
 - **The two vendors disagree about `input_tokens`.** Anthropic excludes what
   came from cache; OpenAI includes it, with the cached count broken out beneath.
   A mapper that copies the field across overstates a cached run by most of its
@@ -131,8 +135,6 @@ What is left:
 
 1. **A spawn path for Codex**, so a satellite can drive the harness its mapper
    already reads.
-2. **A recorded fixture for a successful Codex run**, replacing the one
-   constructed from the published schema.
-3. **`arsox-runner`**, if and when a second consumer wants the supervision.
+2. **`arsox-runner`**, if and when a second consumer wants the supervision.
 
 A consumer can stop after any of them.
