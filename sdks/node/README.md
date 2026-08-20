@@ -175,10 +175,10 @@ Nothing reads a `.proto` at runtime. The contract is checked by the compiler.
 `test-util` fake harness, which replays a recorded Claude transcript rather than
 calling a model. No network, no token budget, and a deterministic turn.
 
-It needs a Rust toolchain and **port 8080 free**. The satellite binds that port
-with no override, deliberately: the container's port mapping is where its
-reachable address is decided, and a second knob would only be a way for the two
-to disagree. The suite therefore runs one satellite at a time and skips itself
-with a clear message when something else holds the port.
+It needs a Rust toolchain and nothing else. Each satellite it starts takes a port
+of its own through `ARSOX_PORT`: the harness binds port 0 to learn a free number,
+releases it, and hands it over. So no particular port has to be free, two
+satellites coexist, and the suite never skips. A container is unaffected, still
+exposing 8080 and still reached through `docker run -p`.
 
-Run only the tests that need neither with `yarn test:unit`.
+Run only the tests that need no toolchain with `yarn test:unit`.

@@ -1,0 +1,99 @@
+# Copyright © 2026 Jalapeno Labs
+
+# The Node SDK. Its integration tests drive a real satellite rather than a mock
+# of the HTTP layer, so this job builds the binary they spawn before it installs
+# a single package. That is also why it watches `crates/`: a satellite change can
+# break the SDK without touching a line of TypeScript.
+name: Node
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'sdks/node/**'
+      - 'gen/ts/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/node.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'sdks/node/**'
+      - 'gen/ts/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/node.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node:
+    name: Build, typecheck, and test the Node SDK
+    runs-on: [ linux, rocky9, flagship, earthly, docker ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # rustup reads rust-toolchain.toml and installs the exact pinned version,
+      # so the toolchain is pinned in one place rather than here and there.
+      - name: Install the pinned toolchain
+        run: |
+          set -euo pipefail
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
+
+      # `packageManager` pins yarn, and corepack is what honours it. Asserting
+      # the version means a runner carrying a different yarn fails loudly here
+      # rather than resolving the lockfile with a different resolver.
+      - name: Install the pinned package manager
+        run: |
+          set -euo pipefail
+          node --version
+          corepack enable
+          corepack prepare yarn@4.17.0 --activate
+          version="$(corepack yarn --version)"
+          echo "yarn $version"
+          test "$version" = '4.17.0'
+
+      # The integration suite spawns `target/debug/arsox-satellite` with the
+      # `test-util` fake harness. Debug rather than release, because debug is the
+      # path the suite looks for, and a release build would be a second compile
+      # of a binary nothing here runs. Lints are the Rust workflow's job.
+      - name: Build the satellite the integration tests spawn
+        run: cargo build -p arsox-satellite --features test-util
+
+      # `--immutable` fails on a lockfile the install would have changed, which
+      # is the whole point of committing one.
+      - name: Install dependencies
+        working-directory: sdks/node
+        run: corepack yarn install --immutable
+
+      # Build first: it syncs the generated contract from `gen/ts` and compiles
+      # the package a consumer installs, so a broken contract fails before the
+      # tests spend a satellite proving it.
+      - name: Build
+        working-directory: sdks/node
+        run: corepack yarn build
+
+      - name: Typecheck
+        working-directory: sdks/node
+        run: corepack yarn typecheck
+
+      # Each satellite the suite starts takes a port of its own through
+      # `ARSOX_PORT`, so this job collides with nothing else on the runner and
+      # never skips itself for a busy port.
+      - name: Test
+        working-directory: sdks/node
+        run: corepack yarn test

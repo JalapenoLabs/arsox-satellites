@@ -90,6 +90,9 @@ async fn start() -> String {
         database_path: directory.join("arsox.db").to_string_lossy().into_owned(),
         workspace_root: directory.to_string_lossy().into_owned(),
         max_concurrent_threads: 2,
+        // Inert here: this test assembles the router and binds its own ephemeral
+        // listener below rather than calling `serve`.
+        port: 0,
         // Long enough that no test races the collector.
         collect_interval: std::time::Duration::from_hours(1),
     })
