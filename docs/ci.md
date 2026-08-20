@@ -26,6 +26,7 @@ checksum-verified each run.
 | Proto | `.github/workflows/proto.yml` | pushes and PRs touching `proto/` or either generated output root |
 | Rust | `.github/workflows/rust.yml` | pushes and PRs touching `crates/`, the workspace manifest, or the toolchain pin |
 | Node | `.github/workflows/node.yml` | pushes and PRs touching `sdks/node/`, `gen/ts/`, `crates/`, the workspace manifest, or the toolchain pin |
+| Python | `.github/workflows/python.yml` | pushes and PRs touching `sdks/python/`, `gen/python/`, `crates/`, the workspace manifest, or the toolchain pin |
 | Docker | `.github/workflows/docker.yml` | pushes and PRs touching the `Dockerfile`, `crates/`, the workspace manifest, or the toolchain pin |
 | Release | `.github/workflows/release.yml` | `v*` tags, and `workflow_dispatch` with a version |
 
@@ -132,6 +133,33 @@ Each satellite the suite starts takes its own port through `ARSOX_PORT`, picked
 by binding port 0 and releasing it. Two jobs on one runner cannot collide, and
 the suite never skips itself for a busy port, so a green run means the tests ran
 rather than stood aside.
+
+## Python
+
+The Python job proves the same two claims the Node one does: the package
+installs from its own pins, and it still drives a satellite. So it builds
+`arsox-satellite` with `--features test-util` before it installs anything, and
+watches `crates/` alongside `sdks/python/` and `gen/python/`. Both suites run:
+the unit tests need nothing, and the integration tests spawn the real binary
+with the fake harness and exercise the client from a consumer's seat.
+
+**The runner must carry `python3.12`, and the workflow names it explicitly.**
+Rocky 9 ships 3.9 as `python3`, the package requires 3.10 or newer, and a
+workflow that said `python3` would fail somewhere inside pip rather than at the
+top with a reason. The venv step runs the interpreter rather than only resolving
+its name, so an absent one, or a shim pointing at an interpreter that has moved,
+fails with a sentence naming what to install.
+
+Nothing after that step activates the environment. Each step is its own shell,
+so an activation would not survive to the next one, and every command names
+`.venv/bin/python` instead. Every version it installs is pinned exactly in
+`pyproject.toml`, dev tools included, which is what makes a ruff or mypy finding
+on a runner the same finding a laptop reports.
+
+`scripts/sync_proto.py` runs before lint, typecheck, and test. It copies the
+committed contract from `gen/python` into the package, where the copy is git
+ignored and rebuilt on every run, so a stale one cannot exist to be tested
+against. Nothing imports without it.
 
 ## Docker
 
@@ -261,8 +289,6 @@ credential. Docker is logged out for the same reason.
 
 ## Roadmap
 
-- **The Python SDK build**, consuming `gen/` rather than regenerating it, the
-  way the Node job does.
 - **Conformance suite** once harness mappers exist. That is the job that proves
   the normalization claim, so it belongs in CI from the day the first mapper
   lands.
