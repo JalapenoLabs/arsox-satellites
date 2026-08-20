@@ -629,20 +629,9 @@ async fn try_destination(
             continue;
         }
 
-        if failover::is_auth_rejection(status.as_u16()) {
-            return Attempted::Failed {
-                reason: GaveUp::Unauthorized {
-                    status: status.as_u16(),
-                },
-                made: attempt,
-            };
-        }
-
         if status.is_client_error() || status.is_server_error() {
             return Attempted::Failed {
-                reason: GaveUp::Refused {
-                    status: status.as_u16(),
-                },
+                reason: failover::refusal(status.as_u16()),
                 made: attempt,
             };
         }

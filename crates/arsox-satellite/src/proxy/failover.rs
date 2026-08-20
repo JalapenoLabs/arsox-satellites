@@ -358,10 +358,18 @@ pub struct Attempt {
     pub gave_up: GaveUp,
 }
 
-/// Whether the answer to `status` is to wait, to move on, or to relay it.
+/// What a status outside an endpoint's retry set means for that endpoint.
+///
+/// Never a retry either way. A rejected credential is rejected on the tenth
+/// attempt too, and any other status the policy does not retry is the endpoint
+/// saying something it will say again.
 #[must_use]
-pub fn is_auth_rejection(status: u16) -> bool {
-    AUTH_REJECTIONS.contains(&status)
+pub fn refusal(status: u16) -> GaveUp {
+    if AUTH_REJECTIONS.contains(&status) {
+        GaveUp::Unauthorized { status }
+    } else {
+        GaveUp::Refused { status }
+    }
 }
 
 /// The evidence behind a failover, in the shape `Incident.details` takes.
@@ -399,10 +407,12 @@ fn attempted(attempt: &Attempt) -> prost_types::Value {
 
     fields.insert(
         "position".to_owned(),
-        number(round(u32::try_from(attempt.position).unwrap_or(u32::MAX))),
+        number(f64::from(
+            u32::try_from(attempt.position).unwrap_or(u32::MAX),
+        )),
     );
     fields.insert("endpoint".to_owned(), text(attempt.name.clone()));
-    fields.insert("attempts".to_owned(), number(round(attempt.made)));
+    fields.insert("attempts".to_owned(), number(f64::from(attempt.made)));
     fields.insert(
         "code".to_owned(),
         text(attempt.gave_up.code().as_str_name().to_owned()),
@@ -418,11 +428,6 @@ fn attempted(attempt: &Attempt) -> prost_types::Value {
             fields: fields.into_iter().collect(),
         })),
     }
-}
-
-/// A count as the `Struct` number every JSON reader will see it as.
-fn round(count: u32) -> f64 {
-    f64::from(count)
 }
 
 fn text(value: String) -> prost_types::Value {
@@ -697,6 +702,8 @@ mod tests {
             ErrorCode::LlmModelUnknown,
             "an endpoint that does not serve the model has its own code"
         );
+        assert_eq!(refusal(403), GaveUp::Unauthorized { status: 403 });
+        assert_eq!(refusal(500), GaveUp::Refused { status: 500 });
     }
 
     #[test]
