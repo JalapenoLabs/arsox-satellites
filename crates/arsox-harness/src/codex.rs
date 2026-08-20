@@ -277,11 +277,16 @@ fn tool_input(kind: &str, item: &Value) -> Option<prost_types::Struct> {
 /// A command that ran to completion and exited nonzero is a failed tool call,
 /// not a successful one, so the exit code decides the outcome wherever the
 /// harness reports one.
+///
+/// `declined` is named alongside `failed` because a recorded run carries it: the
+/// sandbox refused a command, and the item completed with `exit_code: -1`. The
+/// exit code alone happens to catch that, which is luck rather than a
+/// guarantee, and a refusal reported without one would read as a success.
 fn succeeded(item: &Value) -> bool {
     let exit_code = item.get("exit_code").and_then(Value::as_i64);
 
     match item.get("status").and_then(Value::as_str) {
-        Some("failed") => false,
+        Some("failed" | "declined") => false,
         // No status at all: the item has no way to fail, e.g. a web search.
         _completed_or_absent => exit_code.unwrap_or(0) == 0,
     }
@@ -852,6 +857,27 @@ mod tests {
             !completed.ok,
             "a command that ran and exited nonzero failed, whatever the item status says"
         );
+    }
+
+    #[test]
+    fn a_declined_command_fails_even_without_an_exit_code() {
+        // The recorded refusal carries `exit_code: -1`, so the exit code check
+        // catches it and the status is redundant there. It is not redundant
+        // here: an item refused before it ran has no exit code to report, and
+        // reading the absence as zero would put a permission gate on the stream
+        // as a tool call that worked.
+        let mapping = map_line(
+            r#"{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"rm -rf /","aggregated_output":"rejected: blocked by policy","status":"declined"}}"#,
+        );
+
+        let [event] = mapping.events.as_slice() else {
+            panic!("a declined command should produce one event");
+        };
+        let Payload::ToolCompleted(completed) = &event.payload else {
+            panic!("a declined command should be a tool result");
+        };
+
+        assert!(!completed.ok);
     }
 
     #[test]
