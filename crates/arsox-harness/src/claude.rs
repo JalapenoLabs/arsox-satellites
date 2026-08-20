@@ -62,9 +62,16 @@ pub fn map_line(line: &str) -> Mapping {
     let author = author(event.get("parent_tool_use_id").and_then(Value::as_str));
 
     match event.get("type").and_then(Value::as_str) {
-        // Announces the session and the environment. Carries no canonical
-        // event: everything in it is either configuration the satellite already
-        // knows or capability detail reported through `GET /v1/harness`.
+        // Session and environment, under several subtypes. `init` announces the
+        // run; 2.1.237 also reports reasoning progress as `thinking_tokens`.
+        //
+        // None carries a canonical event: everything in one is either
+        // configuration the satellite already knows, capability detail reported
+        // through `GET /v1/harness`, or a progress count the result line reports
+        // properly at the end. The session id is taken from whichever of them
+        // carries it, rather than from `init` alone, because a version that
+        // stopped naming its subtypes would otherwise lose the id that joins a
+        // thread to its transcript on disk.
         Some("system") => Mapping {
             harness_session_id: event
                 .get("session_id")
@@ -790,6 +797,24 @@ mod tests {
                 result_of(ERROR_RESULT_TRANSCRIPT).summary,
                 "No conversation found with session ID: 00000000-0000-4000-8000-0000000000ff"
             );
+        }
+
+        #[test]
+        fn a_reasoning_progress_line_is_known_rather_than_degraded() {
+            // 2.1.237 reports reasoning progress as `system` with a subtype the
+            // older recording never carried. It is a known type, so it produces
+            // no event and no incident: an unrecognized one would flood a
+            // reasoning turn's stream with `degraded` incidents that say only
+            // that the agent is still thinking.
+            let progress = MULTI_MESSAGE_TRANSCRIPT
+                .lines()
+                .find(|line| line.contains(r#""subtype":"thinking_tokens""#))
+                .expect("the recording should carry a thinking_tokens line");
+
+            let mapping = map_line(progress);
+
+            assert!(mapping.events.is_empty());
+            assert!(mapping.result.is_none());
         }
 
         #[test]
