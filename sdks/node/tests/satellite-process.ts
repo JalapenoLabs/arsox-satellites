@@ -14,12 +14,11 @@
  *
  * # The port
  *
- * `serve()` binds `0.0.0.0:8080` with no override, deliberately: the container's
- * port mapping is where the satellite's reachable address is decided, and a
- * second knob would only be a way for the two to disagree. That is right for the
- * satellite and it means this suite cannot pick an ephemeral port. So it runs on
- * 8080, one satellite at a time, and skips itself with a clear message when
- * something else already holds the port. CI must leave 8080 free.
+ * Every satellite this module starts gets a port of its own through
+ * `ARSOX_PORT`, so two of them coexist and the suite never has to be told which
+ * machine is free. The container story is untouched: an image still exposes 8080
+ * and `docker run -p` still decides where a container is reachable. The override
+ * is for exactly this, a run with no port mapping in front of it.
  */
 
 // Core
@@ -27,21 +26,20 @@ import { createServer } from 'node:net'
 import { execFile, spawn } from 'node:child_process'
 import { get } from 'node:http'
 import { access, mkdtemp, rm } from 'node:fs/promises'
+import { once } from 'node:events'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tmpdir } from 'node:os'
 import { promisify } from 'node:util'
 
-/** Fixed by the satellite. See the note above. */
-export const SATELLITE_PORT = 8080
-
-export const SATELLITE_URL = `http://127.0.0.1:${SATELLITE_PORT}`
-
 export const SECRET = 'node-sdk-test-secret'
 
 /** How long the satellite gets to answer /healthz before the suite gives up. */
 const READY_TIMEOUT_MILLISECONDS = 60_000
+
+/** How long a killed satellite gets to exit before its files are removed anyway. */
+const EXIT_TIMEOUT_MILLISECONDS = 5_000
 
 const packageRoot = dirname(dirname(fileURLToPath(import.meta.url)))
 const repositoryRoot = join(packageRoot, '..', '..')
@@ -71,14 +69,38 @@ export type RunningSatellite = {
   stop: () => Promise<void>
 }
 
-/** Whether anything already holds the satellite's fixed port. */
-export function portIsFree(): Promise<boolean> {
-  return new Promise((resolve) => {
+/**
+ * Asks the kernel for a port nothing is listening on.
+ *
+ * Bind port 0, read what the kernel handed out, release it, and give it to the
+ * satellite. There is a race in that gap: another process could take the port
+ * between the close here and the satellite's own bind.
+ *
+ * That is worth naming rather than hiding. The window is milliseconds, kernels
+ * do not immediately reissue a port they just released, and the failure is loud:
+ * a satellite that cannot bind exits, and `startSatellite` reports its stderr
+ * rather than hanging. The alternative is a fixed port, which collides every
+ * time two satellites run rather than almost never.
+ *
+ * Probed on the interface the satellite binds, so a port free only on loopback
+ * is never mistaken for a port free everywhere.
+ */
+function reserveEphemeralPort(): Promise<number> {
+  return new Promise((resolve, reject) => {
     const probe = createServer()
 
-    probe.once('error', () => resolve(false))
-    probe.once('listening', () => probe.close(() => resolve(true)))
-    probe.listen(SATELLITE_PORT, '0.0.0.0')
+    probe.once('error', reject)
+    probe.listen(0, '0.0.0.0', () => {
+      const address = probe.address()
+
+      if (address === null || typeof address === 'string') {
+        console.debug('the probe socket reported no numeric address, got', address)
+        probe.close(() => reject(new Error('the probe socket reported no port')))
+        return
+      }
+
+      probe.close(() => resolve(address.port))
+    })
   })
 }
 
@@ -104,7 +126,7 @@ export async function buildSatellite(): Promise<void> {
 }
 
 /**
- * Starts a satellite on its fixed port and waits for it to answer.
+ * Starts a satellite on a port of its own and waits for it to answer.
  *
  * The workspace and the database land in a scratch directory that goes with the
  * process, so nothing a test does survives into the next run.
@@ -112,6 +134,8 @@ export async function buildSatellite(): Promise<void> {
 export async function startSatellite(): Promise<RunningSatellite> {
   await buildSatellite()
 
+  const port = await reserveEphemeralPort()
+  const url = `http://127.0.0.1:${port}`
   const scratch = await mkdtemp(join(tmpdir(), 'arsox-node-sdk-'))
 
   const child = spawn(satelliteBinary, {
@@ -120,6 +144,7 @@ export async function startSatellite(): Promise<RunningSatellite> {
     env: {
       ...process.env,
       ARSOX_SECRET: SECRET,
+      ARSOX_PORT: String(port),
       ARSOX_DB_PATH: join(scratch, 'arsox.db'),
       ARSOX_WORKSPACE_ROOT: scratch,
       ARSOX_MAX_CONCURRENT_THREADS: '2',
@@ -145,6 +170,11 @@ export async function startSatellite(): Promise<RunningSatellite> {
   const stop = async (): Promise<void> => {
     if (exited === null) {
       child.kill()
+      // Waited for rather than assumed. The satellite holds its database open,
+      // and removing the scratch directory out from under a live process fails
+      // outright on Windows. Bounded, so a process that refuses to die costs a
+      // slow teardown rather than a hung suite.
+      await Promise.race([ once(child, 'exit'), sleep(EXIT_TIMEOUT_MILLISECONDS) ])
     }
     await rm(scratch, { recursive: true, force: true, maxRetries: 5 })
   }
@@ -156,8 +186,8 @@ export async function startSatellite(): Promise<RunningSatellite> {
       throw new Error(`the satellite exited with ${exited}:\n${output.join('')}`)
     }
 
-    if (await isServing()) {
-      return { url: SATELLITE_URL, stop }
+    if (await isServing(url)) {
+      return { url, stop }
     }
 
     await sleep(100)
@@ -168,27 +198,13 @@ export async function startSatellite(): Promise<RunningSatellite> {
 }
 
 /** Asks the satellite's unauthenticated liveness endpoint whether it is up. */
-function isServing(): Promise<boolean> {
+function isServing(url: string): Promise<boolean> {
   return new Promise((resolve) => {
-    const request = get(`${SATELLITE_URL}/healthz`, (response) => {
+    const request = get(`${url}/healthz`, (response) => {
       response.resume()
       resolve(response.statusCode === 200)
     })
 
     request.once('error', () => resolve(false))
   })
-}
-
-/** Waits for the satellite's port to be free again, so a stop is really a stop. */
-export async function waitForPortRelease(): Promise<void> {
-  const deadline = Date.now() + 10_000
-
-  while (Date.now() < deadline) {
-    if (await portIsFree()) {
-      return
-    }
-    await sleep(50)
-  }
-
-  console.warn(`arsox tests: port ${SATELLITE_PORT} is still held after the satellite was stopped`)
 }

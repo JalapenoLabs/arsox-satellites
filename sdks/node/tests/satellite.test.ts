@@ -7,7 +7,8 @@
  * needs and cannot reach from the published surface is a hole in the SDK, and a
  * test written from the consumer's seat is the only place that shows up.
  *
- * One satellite for the whole file, because its port is fixed. See
+ * One satellite serves most of the file because starting one costs a second, not
+ * because it has to be alone. Each gets a port of its own. See
  * `satellite-process.ts`.
  */
 
@@ -27,7 +28,7 @@ import {
   ThreadState,
   TurnStatus
 } from '../src/index.js'
-import { SECRET, portIsFree, startSatellite, waitForPortRelease } from './satellite-process.js'
+import { SECRET, startSatellite } from './satellite-process.js'
 
 /**
  * The settings a thread must declare: an idle TTL and a budget.
@@ -62,17 +63,7 @@ async function failureFrom(call: Promise<unknown>): Promise<ArsoxError> {
   throw new Error('the call was expected to fail and did not')
 }
 
-// The suite cannot pick an ephemeral port, so it skips rather than failing
-// confusingly when something else already holds 8080.
-const available = await portIsFree()
-if (!available) {
-  console.warn(
-    'arsox tests: port 8080 is taken, skipping the integration suite. '
-    + 'The satellite binds it with no override, so CI must leave it free.'
-  )
-}
-
-describe.skipIf(!available)('the Node SDK against a running satellite', () => {
+describe('the Node SDK against a running satellite', () => {
   let running: RunningSatellite
   let client: Satellite
 
@@ -83,7 +74,6 @@ describe.skipIf(!available)('the Node SDK against a running satellite', () => {
 
   afterAll(async () => {
     await running?.stop()
-    await waitForPortRelease()
   })
 
   it('checks the contract version when it connects', async () => {
@@ -339,6 +329,30 @@ describe.skipIf(!available)('the Node SDK against a running satellite', () => {
 
     const afterTeardown = await client.incidents({ threadIds: [ created.thread.threadId ] })
     expect(afterTeardown).toHaveLength(2)
+  })
+
+  it('runs alongside a second satellite on the same host', async () => {
+    // What `ARSOX_PORT` bought. Before the override every satellite bound 8080,
+    // so a second one on the same machine failed to start and this suite had to
+    // check the port and skip itself.
+    const second = await startSatellite()
+
+    try {
+      expect(second.url).not.toBe(running.url)
+
+      const other = await Satellite.connect(second.url, SECRET)
+      expect((await other.version()).protoMajor).toBe(1)
+
+      // Two satellites, two databases. Neither sees the other's threads.
+      const created = await other.threads().create(settings)
+      const mine = await client.threads().list()
+      expect(mine.map((summary) => summary.threadId)).not.toContain(created.thread.threadId)
+
+      await created.handle.destroy()
+    }
+    finally {
+      await second.stop()
+    }
   })
 
   it('reports what it is holding, and stops holding a destroyed thread', async () => {

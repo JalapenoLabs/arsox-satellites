@@ -150,18 +150,23 @@ contract.
 thread socket sits behind the same bearer check as every other authenticated
 route, and the WHATWG WebSocket API cannot set a header on the handshake.
 
-### The integration suite runs on 8080
+### Every satellite the suite starts gets its own port
 
 The Rust suite starts a satellite with `assemble` and binds an ephemeral port
-in-process. A Node client cannot: it drives the binary, and `serve` binds
-`0.0.0.0:8080` with no override.
+in-process. A Node client cannot, because it drives the binary rather than the
+router, so it uses `ARSOX_PORT`: the harness binds port 0 to learn a free number,
+releases it, and hands it to the satellite it spawns.
 
-That fixed port is right for the satellite. The container's port mapping is where
-its reachable address is decided, and a second knob would only be a way for the
-two to disagree. So the Node suite runs one satellite at a time on 8080, and
-skips itself with a message naming the port when something else holds it. A CI
-runner must leave 8080 free, and a skipped suite is reported rather than passing
-quietly.
+There is a race in that gap, and it is worth stating rather than hiding.
+Something else could take the port between the release and the satellite's bind.
+The window is milliseconds, and the failure is loud: the satellite exits with a
+bind error and the harness reports its stderr. A fixed port collides every time
+two satellites run rather than almost never.
+
+So the suite needs no particular port free, runs its files in parallel, and never
+skips. `ARSOX_PORT` is for exactly this kind of run, one with no port mapping in
+front of it. A container still exposes 8080 and is still reached through
+`docker run -p`.
 
 ### Ceilings and durations are typed out
 
