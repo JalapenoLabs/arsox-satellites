@@ -47,7 +47,10 @@
 //! The closing message is an ordinary `agent_message` item rather than part of
 //! `turn.completed`. Mapping is a pure function of one line and carries no state
 //! between lines, so [`HarnessResult::summary`] is left empty and the runner
-//! takes the summary from the last `agent.message` it saw.
+//! takes the summary from the last `agent.message` it saw. *Last* is
+//! load-bearing rather than incidental: a recorded turn opens with a preamble
+//! message announcing what the agent is about to do and closes with the answer,
+//! so a runner taking the first would report the plan as the result.
 
 use crate::json::{string_at, to_struct, u64_at};
 use crate::{HarnessResult, MappedEvent, Mapping};
@@ -170,9 +173,11 @@ fn map_item_started(event: &Value) -> Vec<MappedEvent> {
         return Vec::new();
     };
 
-    // Prose and reasoning start empty and are worth reporting only once they
-    // are finished, and an error item is the failure itself rather than the
-    // start of one.
+    // Prose and reasoning carry nothing until they finish, and an error item is
+    // the failure itself rather than the start of one. Recorded 0.147.0 opens
+    // none of the three with an `item.started` at all, so this guard is
+    // defensive rather than load-bearing. It stays because a harness that began
+    // announcing them would otherwise put empty prose on the stream.
     let payload = match item.get("type").and_then(Value::as_str) {
         Some("agent_message" | "reasoning" | "error") | None => return Vec::new(),
         Some(kind) => Payload::ToolStarted(ToolStarted {
@@ -431,11 +436,10 @@ mod tests {
     use super::*;
     use crate::conformance;
 
-    /// A `codex exec --json` transcript for a single shell command.
+    /// A `codex exec --json` transcript for a patch and a shell command.
     ///
-    /// Its lifecycle lines are recorded from Codex 0.147.0; the rest is built
-    /// from the event schema published with that exact version. See
-    /// `fixtures/README.md`, which says precisely which lines are which.
+    /// Recorded in full from Codex 0.147.0: a live run that wrote a file and
+    /// then read it back. See `fixtures/README.md` for how it was captured.
     const TOOL_CALL_TRANSCRIPT: &str =
         include_str!("../fixtures/codex/0.147.0/tool-call.stdout.jsonl");
 
@@ -496,15 +500,17 @@ mod tests {
             .map(|event| event.type_name)
             .collect();
 
-        // Ten native lines in, four canonical events out. The lifecycle lines
+        // Nine native lines in, six canonical events out. The lifecycle lines
         // carry no events of their own: `thread.started` carries the session id,
         // `turn.started` carries nothing, and `turn.completed` becomes a
-        // HarnessResult. An item's start and its updates are silent for
-        // everything whose content only exists once it has finished.
+        // HarnessResult. The two agent messages bracket the work, which is what
+        // makes the *last* one the summary rather than the only one.
         assert_eq!(
             names,
             vec![
-                "agent.thinking",
+                "agent.message",
+                "tool.started",
+                "tool.completed",
                 "tool.started",
                 "tool.completed",
                 "agent.message",
@@ -513,7 +519,10 @@ mod tests {
     }
 
     #[test]
-    fn a_command_pairs_its_start_with_its_completion() {
+    fn a_patch_is_a_tool_call_rather_than_nothing() {
+        // Codex writes a file as a `file_change` item rather than as a tool
+        // call, and Claude delivers the same act as one. Dropping it would
+        // leave the stream missing the edit the run existed to make.
         let events = all_events(TOOL_CALL_TRANSCRIPT);
 
         let Payload::ToolStarted(started) = &events[1].payload else {
@@ -523,13 +532,34 @@ mod tests {
             panic!("expected the third event to be a tool result");
         };
 
+        assert_eq!(started.tool_name, "apply_patch");
+        assert_eq!(started.tool_call_id, completed.tool_call_id);
+        assert!(completed.ok);
+        assert_eq!(
+            completed.output_preview.as_deref(),
+            Some("add E:\\tmp\\codex-fixture\\work\\hello.txt"),
+            "a patch is rendered for a human rather than dumped as JSON"
+        );
+    }
+
+    #[test]
+    fn a_command_pairs_its_start_with_its_completion() {
+        let events = all_events(TOOL_CALL_TRANSCRIPT);
+
+        let Payload::ToolStarted(started) = &events[3].payload else {
+            panic!("expected the fourth event to be a tool call");
+        };
+        let Payload::ToolCompleted(completed) = &events[4].payload else {
+            panic!("expected the fifth event to be a tool result");
+        };
+
         assert_eq!(started.tool_name, "shell");
         assert_eq!(started.tool_call_id, completed.tool_call_id);
         assert!(completed.ok);
         assert_eq!(
             completed.output_preview.as_deref(),
-            Some("arsox-probe\n"),
-            "the command's output is what a consumer reads"
+            Some("hello\r\n"),
+            "the command's output is what a consumer reads, byte for byte"
         );
 
         // The command survives into the Struct rather than being flattened to a
@@ -549,7 +579,7 @@ mod tests {
 
         assert_eq!(
             session.as_deref(),
-            Some("01a01bb8-0c55-7ef2-9774-39703eec4482")
+            Some("01a01cd2-200b-77f0-b4b8-7421557ff5ed")
         );
     }
 
@@ -561,10 +591,10 @@ mod tests {
         // prompt, in a number somebody eventually reconciles against a bill.
         let tokens = result_of(TOOL_CALL_TRANSCRIPT).tokens;
 
-        assert_eq!(tokens.cache_read_tokens, Some(11_008));
+        assert_eq!(tokens.cache_read_tokens, Some(17_920));
         assert_eq!(
-            tokens.input_tokens, 1_337,
-            "12,345 reported minus 11,008 cached"
+            tokens.input_tokens, 11_117,
+            "29,037 reported minus 17,920 cached"
         );
         assert_eq!(
             tokens.total_tokens,
@@ -606,7 +636,16 @@ mod tests {
     fn reasoning_tokens_are_reported_rather_than_folded_into_output() {
         let tokens = result_of(TOOL_CALL_TRANSCRIPT).tokens;
 
-        assert_eq!(tokens.reasoning_output_tokens, Some(32));
+        // The recorded turn reasoned none, and that zero is kept rather than
+        // dropped. Codex has a reasoning concept and measured nothing, which is
+        // a measurement. The cache-write zero is dropped for the opposite
+        // reason: there the concept itself is missing.
+        assert_eq!(tokens.reasoning_output_tokens, Some(0));
+        assert_eq!(
+            usage_of(r#"{"output_tokens":57,"reasoning_output_tokens":32}"#)
+                .reasoning_output_tokens,
+            Some(32)
+        );
         assert_eq!(
             usage_of(r#"{"output_tokens":57}"#).reasoning_output_tokens,
             None,
@@ -670,6 +709,41 @@ mod tests {
 
         assert_eq!(incident.disposition, Disposition::Degraded as i32);
         assert!(incident.message.contains("some_future_event"));
+    }
+
+    #[test]
+    fn a_reasoning_summary_becomes_agent_thinking() {
+        // Not covered by the recorded transcript: that turn reasoned nothing,
+        // and a fixture cannot be staged into producing a shape a real run did
+        // not produce. So the shape is asserted from the event schema published
+        // with 0.147.0, and the assertion says which of the two it is.
+        let mapping = map_line(
+            r#"{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Reading the file back**"}}"#,
+        );
+
+        let [event] = mapping.events.as_slice() else {
+            panic!("a reasoning item should produce exactly one event");
+        };
+        let Payload::AgentThinking(thinking) = &event.payload else {
+            panic!("a reasoning summary is the canonical thinking event");
+        };
+
+        assert_eq!(thinking.text, "**Reading the file back**");
+    }
+
+    #[test]
+    fn an_item_update_carries_no_event_of_its_own() {
+        // Also not in the recorded transcript: 0.147.0's exec stream sends no
+        // `item.updated` at all. It stays mapped because an update restates an
+        // item the stream delivers in full when it completes, so a harness that
+        // began sending them would otherwise put one tool call on the stream a
+        // dozen times.
+        let mapping = map_line(
+            r#"{"type":"item.updated","item":{"id":"item_1","type":"command_execution","command":"ls","aggregated_output":"partial","status":"in_progress"}}"#,
+        );
+
+        assert!(mapping.events.is_empty());
+        assert!(mapping.result.is_none());
     }
 
     #[test]
