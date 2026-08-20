@@ -56,6 +56,17 @@
 //! - `[[hang_once=MS]]` is the same, on the first run in this working directory
 //!   only. A restart therefore gets past it and finishes the transcript, which
 //!   is what makes "restarted once, and then the turn completed" testable.
+//! - `[[crash_once=N]]` exits with N **before** the transcript, on the first run
+//!   in this working directory only. `exit` is the harness that dies every time
+//!   and this is the one that dies once, which is what makes "restarted once,
+//!   and then the turn completed" testable for a crash as well as for a hang.
+//!   Before the transcript on purpose: a process that died before it said
+//!   anything reported no session id either, which is the case a restart has to
+//!   open a session rather than resume one.
+//! - `[[transcript=PATH]]` replays PATH instead of the transcript this process
+//!   was configured with, for a test that needs a recording the process-wide
+//!   variable does not carry. The vocabulary still has to match the harness
+//!   being stood in for, which is the caller's to get right.
 //!
 //! "First run" is a marker file in the working directory rather than a counter
 //! in this process, because a restart is a **new** process. The same trick a
@@ -68,6 +79,12 @@ use std::io::Write as _;
 /// In the working directory, which the satellite gives one per thread, so two
 /// threads hanging at once cannot see each other's marker.
 const HUNG_ALREADY: &str = "arsox-fake-harness-hung";
+
+/// Names the run that already died, so the next one does not.
+///
+/// Its own marker rather than one shared with [`HUNG_ALREADY`], so a test can
+/// ask for a hang and then a crash and get one of each.
+const CRASHED_ALREADY: &str = "arsox-fake-harness-crashed";
 
 /// Which harness's command line this replay was invoked with.
 ///
@@ -128,12 +145,22 @@ impl Invocation {
 async fn main() {
     let arguments: Vec<String> = std::env::args().collect();
     let invocation = Invocation::of(&arguments);
-    let variable = invocation.transcript_env();
 
-    let Ok(path) = std::env::var(variable) else {
-        eprintln!("{variable} is not set");
-        std::process::exit(64);
-    };
+    // The directives arrive with the prompt, which is an argument and so belongs
+    // to one spawn.
+    let prompt = invocation.prompt(&arguments);
+
+    // A named transcript outranks the configured one, so a test needing a
+    // recording this process was not configured with says so per spawn rather
+    // than reconfiguring every other test in the process.
+    let path = text_directive(&prompt, "transcript").unwrap_or_else(|| {
+        let variable = invocation.transcript_env();
+
+        std::env::var(variable).unwrap_or_else(|_unset| {
+            eprintln!("{variable} is not set");
+            std::process::exit(64);
+        })
+    });
 
     let transcript = match std::fs::read_to_string(&path) {
         Ok(contents) => contents,
@@ -142,10 +169,6 @@ async fn main() {
             std::process::exit(66);
         }
     };
-
-    // The directives arrive with the prompt, which is an argument and so belongs
-    // to one spawn.
-    let prompt = invocation.prompt(&arguments);
 
     let truncate_after = directive(&prompt, "truncate").unwrap_or(usize::MAX);
     let exit_code = directive(&prompt, "exit").unwrap_or(0);
@@ -181,18 +204,20 @@ async fn main() {
         hang(millis);
     }
 
-    // `create_new` is the whole test: it succeeds exactly once per working
-    // directory, so the first process hangs and every restart after it does not.
-    // Asking and then creating would be two steps a second process could run
-    // between.
     if let Some(millis) = directive(&prompt, "hang_once")
-        && std::fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(HUNG_ALREADY)
-            .is_ok()
+        && first_run(HUNG_ALREADY)
     {
         hang(millis);
+    }
+
+    // Before the transcript, and before the session id it would have announced.
+    // A restart after this one has nothing to resume, which is exactly the shape
+    // a harness that died on startup leaves behind.
+    if let Some(code) = directive(&prompt, "crash_once")
+        && first_run(CRASHED_ALREADY)
+    {
+        eprintln!("the fake harness is dying with {code} before it says anything");
+        exit_with(code);
     }
 
     let stdout = std::io::stdout();
@@ -216,12 +241,31 @@ async fn main() {
         hang(millis);
     }
 
+    exit_with(exit_code);
+}
+
+/// Ends this replay with the code a directive asked for.
+fn exit_with(code: usize) -> ! {
     #[expect(
         clippy::cast_possible_truncation,
         clippy::cast_possible_wrap,
         reason = "a test directive is small by construction"
     )]
-    std::process::exit(exit_code as i32);
+    std::process::exit(code as i32);
+}
+
+/// Whether this is the first run in this working directory to claim `marker`.
+///
+/// `create_new` is the whole trick: it succeeds exactly once per directory, so
+/// the first process takes the branch and every restart after it does not.
+/// Asking and then creating would be two steps a second process could run
+/// between.
+fn first_run(marker: &str) -> bool {
+    std::fs::OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(marker)
+        .is_ok()
 }
 
 /// Asks for a completion the way this CLI does, through the satellite's proxy.
