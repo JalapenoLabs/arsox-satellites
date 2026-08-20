@@ -8,7 +8,7 @@
 //! it, since the agent's side cannot see what was added after it.
 
 use arsox_satellite::proxy::budget::{Ceilings, Crossing, Meter};
-use arsox_satellite::proxy::upstream::Upstream;
+use arsox_satellite::proxy::failover::Route;
 use arsox_satellite::proxy::{Grant, LlmProxy};
 use arsox_sdk::proto::common::v1::{Secret, TokenCeiling, token_ceiling};
 use arsox_sdk::proto::error::v1::ErrorCode;
@@ -140,12 +140,12 @@ async fn the_real_credential_is_attached_and_the_agents_token_never_leaves() {
     let (upstream_url, provider) = stub_upstream().await;
     let proxy = LlmProxy::start().await.expect("should start");
 
-    let upstream = Upstream::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
+    let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
         .grant(Grant::new(
             "thread-1",
             "turn-1",
-            upstream,
+            route,
             Arc::new(Meter::unmetered()),
         ))
         .await;
@@ -173,12 +173,12 @@ async fn a_request_carrying_no_valid_token_is_refused() {
     let (upstream_url, provider) = stub_upstream().await;
     let proxy = LlmProxy::start().await.expect("should start");
 
-    let upstream = Upstream::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
+    let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
         .grant(Grant::new(
             "thread-1",
             "turn-1",
-            upstream,
+            route,
             Arc::new(Meter::unmetered()),
         ))
         .await;
@@ -209,12 +209,12 @@ async fn a_revoked_token_stops_working_the_moment_its_turn_ends() {
     let (upstream_url, _provider) = stub_upstream().await;
     let proxy = LlmProxy::start().await.expect("should start");
 
-    let upstream = Upstream::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
+    let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
         .grant(Grant::new(
             "thread-1",
             "turn-1",
-            upstream,
+            route,
             Arc::new(Meter::unmetered()),
         ))
         .await;
@@ -244,12 +244,12 @@ async fn the_path_token_and_the_presented_key_must_agree() {
     let (upstream_url, provider) = stub_upstream().await;
     let proxy = LlmProxy::start().await.expect("should start");
 
-    let upstream = Upstream::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
+    let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
         .grant(Grant::new(
             "thread-1",
             "turn-1",
-            upstream,
+            route,
             Arc::new(Meter::unmetered()),
         ))
         .await;
@@ -277,12 +277,12 @@ async fn a_credential_the_agent_supplied_is_replaced_rather_than_passed_along() 
     let (upstream_url, provider) = stub_upstream().await;
     let proxy = LlmProxy::start().await.expect("should start");
 
-    let upstream = Upstream::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
+    let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
         .grant(Grant::new(
             "thread-1",
             "turn-1",
-            upstream,
+            route,
             Arc::new(Meter::unmetered()),
         ))
         .await;
@@ -343,14 +343,9 @@ async fn the_usage_a_response_reports_is_counted_against_the_turn() {
     let proxy = LlmProxy::start().await.expect("should start");
 
     let (meter, _reported) = metered(10_000);
-    let upstream = Upstream::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
+    let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
-        .grant(Grant::new(
-            "thread-1",
-            "turn-1",
-            upstream,
-            Arc::clone(&meter),
-        ))
+        .grant(Grant::new("thread-1", "turn-1", route, Arc::clone(&meter)))
         .await;
 
     let response = post_completion(&proxy.base_url_for(&token), &token).await;
@@ -376,14 +371,9 @@ async fn a_turn_is_warned_at_eighty_percent_of_its_token_ceiling() {
     let proxy = LlmProxy::start().await.expect("should start");
 
     let (meter, mut reported) = metered(1_000);
-    let upstream = Upstream::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
+    let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
-        .grant(Grant::new(
-            "thread-1",
-            "turn-1",
-            upstream,
-            Arc::clone(&meter),
-        ))
+        .grant(Grant::new("thread-1", "turn-1", route, Arc::clone(&meter)))
         .await;
 
     let _body = post_completion(&proxy.base_url_for(&token), &token)
@@ -415,14 +405,9 @@ async fn a_turn_past_its_token_ceiling_is_refused_before_it_reaches_the_provider
     let proxy = LlmProxy::start().await.expect("should start");
 
     let (meter, mut reported) = metered(500);
-    let upstream = Upstream::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
+    let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
-        .grant(Grant::new(
-            "thread-1",
-            "turn-1",
-            upstream,
-            Arc::clone(&meter),
-        ))
+        .grant(Grant::new("thread-1", "turn-1", route, Arc::clone(&meter)))
         .await;
 
     let first = post_completion(&proxy.base_url_for(&token), &token).await;
@@ -466,14 +451,9 @@ async fn usage_is_counted_from_a_response_that_did_not_stream() {
     let proxy = LlmProxy::start().await.expect("should start");
 
     let (meter, _reported) = metered(10_000);
-    let upstream = Upstream::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
+    let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
-        .grant(Grant::new(
-            "thread-1",
-            "turn-1",
-            upstream,
-            Arc::clone(&meter),
-        ))
+        .grant(Grant::new("thread-1", "turn-1", route, Arc::clone(&meter)))
         .await;
 
     let _body = post_completion(&proxy.base_url_for(&token), &token)
@@ -550,12 +530,12 @@ async fn serving(router: Router) -> String {
 /// bound cannot decide the limit for every other turn on the satellite. That is
 /// also what makes it injectable here without a satellite-wide constant.
 fn bounded_grant(
-    upstream: Upstream,
+    route: Route,
     millis: u64,
 ) -> (Grant, tokio::sync::mpsc::UnboundedReceiver<Incident>) {
     let (incidents, reported) = tokio::sync::mpsc::unbounded_channel();
 
-    let grant = Grant::new("thread-1", "turn-1", upstream, Arc::new(Meter::unmetered()))
+    let grant = Grant::new("thread-1", "turn-1", route, Arc::new(Meter::unmetered()))
         .bounded(Duration::from_millis(millis))
         .reporting_to(incidents);
 
@@ -583,8 +563,8 @@ async fn a_request_the_endpoint_never_answers_is_abandoned_at_the_bound() {
     let (upstream_url, reached) = stub_that_never_answers().await;
     let proxy = LlmProxy::start().await.expect("should start");
 
-    let upstream = Upstream::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
-    let (grant, mut reported) = bounded_grant(upstream, 300);
+    let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
+    let (grant, mut reported) = bounded_grant(route, 300);
     let token = proxy.grant(grant).await;
 
     let started = std::time::Instant::now();
@@ -617,8 +597,8 @@ async fn a_response_still_streaming_past_the_bound_is_cut_off() {
     let upstream_url = stub_that_stalls_mid_stream().await;
     let proxy = LlmProxy::start().await.expect("should start");
 
-    let upstream = Upstream::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
-    let (grant, mut reported) = bounded_grant(upstream, 500);
+    let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
+    let (grant, mut reported) = bounded_grant(route, 500);
     let token = proxy.grant(grant).await;
 
     let response = post_completion(&proxy.base_url_for(&token), &token).await;
@@ -648,8 +628,8 @@ async fn a_request_answered_inside_its_bound_reports_nothing() {
     let (upstream_url, _provider) = stub_upstream().await;
     let proxy = LlmProxy::start().await.expect("should start");
 
-    let upstream = Upstream::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
-    let (grant, mut reported) = bounded_grant(upstream, 30_000);
+    let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
+    let (grant, mut reported) = bounded_grant(route, 30_000);
     let token = proxy.grant(grant).await;
 
     let response = post_completion(&proxy.base_url_for(&token), &token).await;
@@ -668,14 +648,9 @@ async fn a_turn_that_declared_no_ceiling_is_never_refused() {
     let proxy = LlmProxy::start().await.expect("should start");
 
     let meter = Arc::new(Meter::unmetered());
-    let upstream = Upstream::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
+    let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
-        .grant(Grant::new(
-            "thread-1",
-            "turn-1",
-            upstream,
-            Arc::clone(&meter),
-        ))
+        .grant(Grant::new("thread-1", "turn-1", route, Arc::clone(&meter)))
         .await;
 
     for _request in 0..2 {

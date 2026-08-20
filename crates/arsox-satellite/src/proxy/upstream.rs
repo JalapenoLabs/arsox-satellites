@@ -42,22 +42,14 @@ pub struct Upstream {
 }
 
 impl Upstream {
-    /// Resolves where a turn's requests should go.
+    /// Where one declared endpoint's requests go, and what they carry.
     ///
-    /// A thread that declares endpoints uses the first. Order is strict and
-    /// documented as strict, so the first entry is the one to try, and failover
-    /// to later entries is a separate concern from choosing a destination.
+    /// One destination rather than a choice between several. Which destinations
+    /// exist and in what order they are tried is [`Route`]'s to decide.
     ///
-    /// A thread that declares none still goes through the proxy, using whatever
-    /// credential the satellite itself holds. That is what keeps the chokepoint
-    /// universal: an unconfigured thread must not be a thread whose spending is
-    /// unmeasured and whose credential sits in the agent's environment.
+    /// [`Route`]: crate::proxy::failover::Route
     #[must_use]
-    pub fn resolve(endpoints: &[ModelEndpoint]) -> Self {
-        endpoints.first().map_or_else(Self::ambient, Self::declared)
-    }
-
-    fn declared(endpoint: &ModelEndpoint) -> Self {
+    pub fn declared(endpoint: &ModelEndpoint) -> Self {
         let presentation = match endpoint
             .auth
             .as_ref()
@@ -88,7 +80,14 @@ impl Upstream {
         }
     }
 
-    fn ambient() -> Self {
+    /// Where a thread that declared no endpoint goes.
+    ///
+    /// Still through the proxy, using whatever credential the satellite itself
+    /// holds. That is what keeps the chokepoint universal: an unconfigured
+    /// thread must not be the one whose spending is unmeasured and whose
+    /// credential sits in the agent's environment.
+    #[must_use]
+    pub fn ambient() -> Self {
         let presentation = std::env::var(AMBIENT_BEARER)
             .ok()
             .filter(|token| !token.is_empty())
@@ -220,7 +219,7 @@ mod tests {
         // The chokepoint has to be universal. A thread that declared nothing
         // must still traverse the proxy, or its spending is unmeasured and its
         // credential is back in the agent's environment.
-        let upstream = Upstream::resolve(&[]);
+        let upstream = Upstream::ambient();
 
         assert_eq!(
             upstream.url_for("v1/messages", None),

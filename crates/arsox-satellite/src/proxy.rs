@@ -47,16 +47,25 @@
 //! hour has failed in a way that a bound on the handshake alone would never
 //! catch. The alternative, an idle bound between chunks, would let a slow drip
 //! run forever while never technically being idle.
+//!
+//! # Endpoints are tried in order
+//!
+//! A turn's [`Route`] is a failover list, not a pool. Each endpoint is tried
+//! until its own retry policy is spent, then the next one is, and a request that
+//! outlives the list ends the turn with `LLM_ALL_ENDPOINTS_EXHAUSTED` carrying
+//! why each endpoint was given up on. A failover that lands records a
+//! `recovered` incident, because a failover that works looks exactly like
+//! success and is otherwise paid for on every turn forever. See [`failover`].
 
 use crate::proxy::budget::{Meter, UsageReader};
-use crate::proxy::upstream::Upstream;
+use crate::proxy::failover::{Attempt, Destination, GaveUp, Route, Waits};
 use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::incident::v1::{Disposition, Incident};
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
-use axum::http::{HeaderMap, HeaderName, StatusCode, header};
+use axum::http::{HeaderMap, HeaderName, Method, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
 use futures_util::{Stream, StreamExt as _, TryStreamExt as _};
@@ -71,6 +80,7 @@ use tokio::sync::RwLock;
 use tokio::sync::mpsc::UnboundedSender;
 
 pub mod budget;
+pub mod failover;
 pub mod upstream;
 
 /// Headers that describe one hop and must not be forwarded to the next.
@@ -108,7 +118,9 @@ const MAX_REQUEST_BODY: usize = 128 * 1024 * 1024;
 pub struct Grant {
     thread_id: String,
     turn_id: String,
-    upstream: Upstream,
+
+    /// Where this turn's requests go, in the order they are tried.
+    route: Route,
 
     /// What this turn has spent and what it may spend.
     ///
@@ -128,26 +140,37 @@ pub struct Grant {
     /// turn behind this" case, and dropping the report is the right answer to
     /// it.
     incidents: UnboundedSender<Incident>,
+
+    /// How this turn waits between two attempts at the same endpoint.
+    waits: Waits,
 }
 
 impl Grant {
     /// Admits one turn to the proxy, with the documented request bound and no
     /// incident reporting.
     #[must_use]
-    pub fn new(thread_id: &str, turn_id: &str, upstream: Upstream, meter: Arc<Meter>) -> Self {
+    pub fn new(thread_id: &str, turn_id: &str, route: Route, meter: Arc<Meter>) -> Self {
         let (nowhere, _nobody_listening) = tokio::sync::mpsc::unbounded_channel();
 
         Self {
             thread_id: thread_id.to_owned(),
             turn_id: turn_id.to_owned(),
-            upstream,
+            route,
             meter,
             request_timeout: crate::timeouts::DEFAULT_LLM_REQUEST,
             incidents: nowhere,
+            waits: Waits::Sleeping,
         }
     }
 
     /// Bounds each of this turn's requests by `request_timeout`.
+    ///
+    /// Per attempt rather than per harness request. Each attempt is one model
+    /// request, which is what the bound names, and a policy that retried ten
+    /// times inside a single ten minute bound would be a policy that never got
+    /// to its tenth attempt. A timed-out attempt gives up on its endpoint rather
+    /// than being retried, so the worst case is one bound per endpoint rather
+    /// than one per attempt.
     #[must_use]
     pub fn bounded(mut self, request_timeout: Duration) -> Self {
         self.request_timeout = request_timeout;
@@ -161,14 +184,25 @@ impl Grant {
         self
     }
 
+    /// Waits out this turn's backoffs with `waits`.
+    ///
+    /// The waiter rides on the grant for the same reason the request bound does:
+    /// one turn's schedule must not decide how every other turn on the satellite
+    /// waits. It is also what lets a test exercise a policy measured in seconds
+    /// in milliseconds. See [`Waits`].
+    #[must_use]
+    pub fn waiting_with(mut self, waits: Waits) -> Self {
+        self.waits = waits;
+        self
+    }
+
     /// Reports a request that ran past this turn's bound.
     ///
-    /// **Degraded rather than fatal.** The harness is answered with an error it
-    /// can read, so it may retry the request or fail over to the next endpoint
-    /// and the turn goes on. That is exactly why the incident matters: a timeout
-    /// that was quietly retried and then succeeded looks identical to success,
-    /// and a tax paid on every turn forever is invisible until somebody
-    /// reconciles a bill against it.
+    /// **Degraded rather than fatal.** The endpoint is given up on and the next
+    /// one is tried, so the turn goes on. That is exactly why the incident
+    /// matters: a timeout that was quietly failed over and then answered looks
+    /// identical to success, and a tax paid on every turn forever is invisible
+    /// until somebody reconciles a bill against it.
     fn report_timeout(&self, during: &'static str) {
         tracing::warn!(
             event.name = "proxy.request.timed_out",
@@ -180,6 +214,99 @@ impl Grant {
              bound {{llm.phase}}",
         );
 
+        self.report(
+            ErrorCode::LlmEndpointTimeout,
+            Disposition::Degraded,
+            // The next attempt meets a different socket, and an endpoint that
+            // stopped answering frequently starts again.
+            true,
+            format!(
+                "a model request exceeded the thread's {:?} bound {during} and was abandoned",
+                self.request_timeout
+            ),
+            None,
+        );
+    }
+
+    /// Reports a request a later endpoint answered after an earlier one failed.
+    ///
+    /// **Recovered, and recorded because it recovered.** This is the incident
+    /// people forget and the one that pays for the feature: if the first
+    /// endpoint rejects every request and the second quietly covers, the
+    /// failover tax is paid on every call forever and nothing says so. The cache
+    /// prefix at the endpoint that failed is gone, so the request that lands
+    /// here paid full price for the entire conversation.
+    fn report_failover(&self, attempts: &[Attempt], answered_by: &str) {
+        let Some(first) = attempts.first() else {
+            return;
+        };
+
+        tracing::warn!(
+            event.name = "proxy.endpoint.failed_over",
+            thread.id = self.thread_id,
+            turn.id = self.turn_id,
+            llm.endpoints_given_up = attempts.len(),
+            llm.answered_by = answered_by,
+            "{{llm.endpoints_given_up}} endpoints were given up on before \
+             {{llm.answered_by}} answered",
+        );
+
+        self.report(
+            // The failure the failover recovered from, rather than a code for
+            // failover itself. The whole list is in the details either way.
+            first.gave_up.code(),
+            Disposition::Recovered,
+            true,
+            format!(
+                "{} endpoint(s) were given up on and {answered_by} answered, so this request \
+                 paid full price for a conversation the failed endpoint had cached",
+                attempts.len()
+            ),
+            Some(failover::details(attempts, Some(answered_by))),
+        );
+    }
+
+    /// Reports a request that outlived every endpoint the thread declared.
+    ///
+    /// **Fatal.** The runner ends the turn on it, which is what the contract
+    /// promises for `LLM_ALL_ENDPOINTS_EXHAUSTED`. The thread and its workspace
+    /// survive, so once working credentials are added a new turn resumes from
+    /// where this one stopped, which is why it is retryable.
+    fn report_exhausted(&self, attempts: &[Attempt]) {
+        tracing::error!(
+            event.name = "proxy.endpoints.exhausted",
+            thread.id = self.thread_id,
+            turn.id = self.turn_id,
+            llm.endpoints_tried = attempts.len(),
+            "every one of {{llm.endpoints_tried}} declared endpoints failed",
+        );
+
+        self.report(
+            ErrorCode::LlmAllEndpointsExhausted,
+            Disposition::Fatal,
+            true,
+            format!(
+                "every one of the {} model endpoints this thread declared failed; \
+                 details.attempts records why each was given up on",
+                attempts.len()
+            ),
+            Some(failover::details(attempts, None)),
+        );
+    }
+
+    /// Sends one finding to the runner, which is what records it.
+    ///
+    /// The proxy holds no database, deliberately. Assembling the incident here
+    /// rather than at the far end is what keeps its code, disposition, and
+    /// message from being re-derived by something that did not see the failure.
+    fn report(
+        &self,
+        code: ErrorCode,
+        disposition: Disposition,
+        retryable: bool,
+        message: String,
+        details: Option<prost_types::Struct>,
+    ) {
         let incident = Incident {
             incident_id: uuid::Uuid::now_v7().to_string(),
             // Assigned by the log if this incident reaches the stream. The proxy
@@ -188,16 +315,11 @@ impl Grant {
             thread_id: Some(self.thread_id.clone()),
             turn_id: Some(self.turn_id.clone()),
             member_id: None,
-            code: ErrorCode::LlmEndpointTimeout.into(),
-            disposition: Disposition::Degraded.into(),
-            // The next attempt meets a different socket, and an endpoint that
-            // stopped answering frequently starts again.
-            retryable: true,
-            message: format!(
-                "a model request exceeded the thread's {:?} bound {during} and was abandoned",
-                self.request_timeout
-            ),
-            details: None,
+            code: code.into(),
+            disposition: disposition.into(),
+            retryable,
+            message,
+            details,
             occurred_at: Some(Timestamp::now()),
         };
 
@@ -344,12 +466,14 @@ async fn forward(
         );
     }
 
-    let url = grant.upstream.url_for(&path, parts.uri.query());
-
     // The request body is collected, the response body is not. A completion
     // request is one bounded JSON document, and buffering it costs a copy while
     // avoiding chunked-encoding differences between providers. The response is
     // the half that streams, and that one is relayed as it arrives.
+    //
+    // Collecting it is also what makes failover possible at all: a body that was
+    // streamed straight through would be gone by the time the first endpoint
+    // refused it.
     let body = match axum::body::to_bytes(body, MAX_REQUEST_BODY).await {
         Ok(collected) => collected,
         Err(_too_large) => {
@@ -361,58 +485,270 @@ async fn forward(
         }
     };
 
-    let mut outbound = proxy.client.request(parts.method.clone(), &url).body(body);
+    let relayed = Relayed {
+        method: parts.method,
+        path,
+        query: parts.uri.query().map(str::to_owned),
+        headers: forwardable(&parts.headers),
+        body,
+    };
 
-    for (name, value) in &parts.headers {
+    try_endpoints(&proxy.client, &grant, &relayed).await
+}
+
+/// Walks the turn's endpoints in the declared order until one answers.
+///
+/// Strict order, never a pool. Every endpoint given up on is added to the
+/// attempt list, which is what `details.attempts` carries whether a later
+/// endpoint covered or the list ran out.
+async fn try_endpoints(client: &reqwest::Client, grant: &Grant, request: &Relayed) -> Response {
+    let mut attempts: Vec<Attempt> = Vec::new();
+
+    for (index, destination) in grant.route.destinations().iter().enumerate() {
+        match try_destination(client, grant, destination, request).await {
+            Attempted::Answered { response, deadline } => {
+                if !attempts.is_empty() {
+                    grant.report_failover(&attempts, &destination.name);
+                }
+
+                // Cloned rather than moved: the loop above still holds the
+                // grant's route, and the relayed body outlives this function
+                // because it carries the meter that counts what it reported.
+                return relay(response, grant.clone(), deadline);
+            }
+
+            Attempted::Failed { reason, made } => {
+                tracing::warn!(
+                    event.name = "proxy.endpoint.given_up",
+                    thread.id = grant.thread_id,
+                    turn.id = grant.turn_id,
+                    llm.endpoint = destination.name,
+                    llm.attempts = made,
+                    llm.reason = reason.reason(),
+                    "giving up on {{llm.endpoint}} after {{llm.attempts}} attempts: \
+                     {{llm.reason}}",
+                );
+
+                attempts.push(Attempt {
+                    position: index + 1,
+                    name: destination.name.clone(),
+                    made,
+                    gave_up: reason,
+                });
+            }
+        }
+    }
+
+    grant.report_exhausted(&attempts);
+    exhausted_response(&attempts)
+}
+
+/// Tries one endpoint until its own retry policy is spent.
+///
+/// Three things end an endpoint's turn rather than a request's: a retryable
+/// status still arriving once the policy is spent, an answer the policy does not
+/// retry, and a request that never came back. Each of them moves to the next
+/// endpoint, because each is a fact about this endpoint rather than about the
+/// request.
+async fn try_destination(
+    client: &reqwest::Client,
+    grant: &Grant,
+    destination: &Destination,
+    request: &Relayed,
+) -> Attempted {
+    let url = destination
+        .upstream
+        .url_for(&request.path, request.query.as_deref());
+    let policy = &destination.policy;
+
+    for attempt in 1..=policy.attempts() {
+        // One deadline per attempt, taken before the request goes out. The
+        // streaming half inherits it rather than starting a second clock, so a
+        // response that arrives at the last moment and then dribbles cannot
+        // spend the bound twice.
+        let deadline = tokio::time::Instant::now() + grant.request_timeout;
+
+        let response = match tokio::time::timeout_at(
+            deadline,
+            request.outbound(client, &url, &destination.upstream).send(),
+        )
+        .await
+        {
+            Ok(Ok(response)) => response,
+
+            Ok(Err(error)) => {
+                return Attempted::Failed {
+                    reason: GaveUp::Unreachable {
+                        reason: error.to_string(),
+                    },
+                    made: attempt,
+                };
+            }
+
+            Err(_elapsed) => {
+                grant.report_timeout("while waiting for a response");
+
+                return Attempted::Failed {
+                    reason: GaveUp::TimedOut,
+                    made: attempt,
+                };
+            }
+        };
+
+        let status = response.status();
+
+        if policy.retries(status.as_u16()) {
+            if attempt == policy.attempts() {
+                return Attempted::Failed {
+                    reason: GaveUp::RateLimited {
+                        status: status.as_u16(),
+                    },
+                    made: attempt,
+                };
+            }
+
+            // The endpoint's own answer wins over our schedule when it gave one:
+            // a provider knows better than we do when it will serve again.
+            let wait = policy
+                .asked_wait(response.headers())
+                .unwrap_or_else(|| policy.backoff_after(attempt));
+
+            tracing::info!(
+                event.name = "proxy.endpoint.retrying",
+                thread.id = grant.thread_id,
+                turn.id = grant.turn_id,
+                llm.endpoint = destination.name,
+                llm.attempt = attempt,
+                http.response.status_code = status.as_u16(),
+                llm.backoff_seconds = wait.as_secs(),
+                "{{llm.endpoint}} answered {{http.response.status_code}}, retrying in \
+                 {{llm.backoff_seconds}} seconds",
+            );
+
+            grant.waits.take(wait).await;
+            continue;
+        }
+
+        if status.is_client_error() || status.is_server_error() {
+            return Attempted::Failed {
+                reason: failover::refusal(status.as_u16()),
+                made: attempt,
+            };
+        }
+
+        return Attempted::Answered { response, deadline };
+    }
+
+    // Every path through the loop returns or waits, and the policy resolves to
+    // at least one attempt, so arriving here is a bug in `Policy::resolve`
+    // rather than anything a caller did.
+    unreachable!("an endpoint is tried at least once")
+}
+
+/// The answer to a request no endpoint would take.
+///
+/// A 5xx rather than the satellite's own contract error, for the same reason
+/// every other refusal here wears the provider's shape: the harness speaks one
+/// provider's error format and nothing else, and a 5xx is what its own retry
+/// policy is written against. The turn ends regardless, on the fatal
+/// `LLM_ALL_ENDPOINTS_EXHAUSTED` incident the runner has already been sent.
+fn exhausted_response(attempts: &[Attempt]) -> Response {
+    let timed_out = matches!(
+        attempts.last().map(|attempt| &attempt.gave_up),
+        Some(&GaveUp::TimedOut)
+    );
+
+    let status = if timed_out {
+        StatusCode::GATEWAY_TIMEOUT
+    } else {
+        StatusCode::BAD_GATEWAY
+    };
+
+    provider_error(
+        status,
+        "api_error",
+        &format!(
+            "every one of the {} model endpoints this thread declared was given up on",
+            attempts.len()
+        ),
+    )
+}
+
+/// One harness request, held in the shape any endpoint can be sent it in.
+///
+/// Assembled once and reused for every attempt, because failover means the same
+/// request goes to a second endpoint and re-deriving it per attempt is how the
+/// retry quietly stops being the same request.
+#[derive(Debug)]
+struct Relayed {
+    method: Method,
+    path: String,
+    query: Option<String>,
+
+    /// The caller's headers, with the hop-by-hop and credential ones already
+    /// removed.
+    headers: HeaderMap,
+
+    body: Bytes,
+}
+
+impl Relayed {
+    /// Builds the outbound request for one endpoint, credential attached.
+    fn outbound(
+        &self,
+        client: &reqwest::Client,
+        url: &str,
+        upstream: &upstream::Upstream,
+    ) -> reqwest::RequestBuilder {
+        // `Bytes` is refcounted, so a retry against a second endpoint re-sends
+        // the same buffer rather than copying a conversation.
+        let mut outbound = client
+            .request(self.method.clone(), url)
+            .body(self.body.clone());
+
+        for (name, value) in &self.headers {
+            outbound = outbound.header(name, value);
+        }
+
+        for (name, value) in upstream.credential_headers() {
+            outbound = outbound.header(name, value);
+        }
+
+        outbound
+    }
+}
+
+/// How one attempt at one endpoint ended.
+#[derive(Debug)]
+enum Attempted {
+    /// The endpoint answered, and its response is on its way to the harness.
+    Answered {
+        response: reqwest::Response,
+
+        /// The bound taken for the attempt that answered, which the streaming
+        /// half inherits.
+        deadline: tokio::time::Instant,
+    },
+
+    /// The endpoint was given up on, after `made` requests.
+    Failed { reason: GaveUp, made: u32 },
+}
+
+/// The caller's headers, minus the ones that must not reach the next hop.
+fn forwardable(headers: &HeaderMap) -> HeaderMap {
+    let mut forwardable = HeaderMap::with_capacity(headers.len());
+
+    for (name, value) in headers {
         if is_hop_by_hop(name) || is_credential(name) {
             continue;
         }
-        outbound = outbound.header(name, value);
+
+        // Appended rather than inserted, so a header the caller sent twice
+        // reaches the endpoint twice.
+        forwardable.append(name.clone(), value.clone());
     }
 
-    for (name, value) in grant.upstream.credential_headers() {
-        outbound = outbound.header(name, value);
-    }
-
-    // One deadline for the whole relay, taken before the request goes out. The
-    // streaming half inherits it rather than starting a second clock, so a
-    // response that arrives at the last moment and then dribbles cannot spend
-    // the bound twice.
-    let deadline = tokio::time::Instant::now() + grant.request_timeout;
-
-    match tokio::time::timeout_at(deadline, outbound.send()).await {
-        Ok(Ok(response)) => relay(response, grant, deadline),
-
-        Ok(Err(error)) => {
-            tracing::warn!(
-                event.name = "proxy.upstream.failed",
-                thread.id = grant.thread_id,
-                turn.id = grant.turn_id,
-                "the upstream endpoint could not be reached: {error}",
-            );
-
-            provider_error(
-                StatusCode::BAD_GATEWAY,
-                "api_error",
-                "the upstream model endpoint could not be reached",
-            )
-        }
-
-        Err(_elapsed) => {
-            grant.report_timeout("while waiting for a response");
-
-            // A gateway timeout rather than the satellite's own contract error,
-            // for the same reason every other refusal here wears the provider's
-            // shape: the harness speaks one provider's error format and nothing
-            // else. A 5xx is also what its retry and failover policy is written
-            // against, which is what the contract says a timeout should trigger.
-            provider_error(
-                StatusCode::GATEWAY_TIMEOUT,
-                "api_error",
-                "the upstream model endpoint did not answer inside this thread's request timeout",
-            )
-        }
-    }
+    forwardable
 }
 
 /// Streams the upstream's response back without buffering it, counting as it

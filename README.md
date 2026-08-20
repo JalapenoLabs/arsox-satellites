@@ -881,12 +881,18 @@ We also support custom LLM endpoints, for example self-hosted Azure Anthropic mo
 
 You can pass multiple LLM endpoints per job. If one errors, because usage is exhausted or the provider is returning 529s, the satellite moves to the next. Order matters and is followed strictly. This lets you stack subscriptions, stack API keys, or list the same endpoint twice with different models.
 
-Each endpoint carries its own retry policy. By default it retries up to 10 times with increasing backoff, starting at 5 seconds and capping at 60 seconds, on 429 and 529. You can change the count, the backoff, and the exact set of status codes that trigger a retry.
+Each endpoint carries its own retry policy. By default it sends up to 10 requests with increasing backoff, starting at 5 seconds and capping at 60 seconds, on 429 and 529. You can change the count, the backoff, and the exact set of status codes that trigger a retry. A `Retry-After` the endpoint sends wins over that schedule, clamped to the same ceiling.
+
+An endpoint is given up on when a retryable status outlives its policy, when it rejects the credential, when it answers something the policy does not retry, when it cannot be reached, or when a request passes the thread's [request bound](#timeouts). Rejected credentials are never retried, because a key that is wrong is wrong on the tenth attempt too.
+
+**Every failover is recorded.** A request a later endpoint answers produces a `recovered` incident, because a failover that works looks exactly like success and would otherwise be paid for on every turn forever. A request that outlives the whole list ends the turn with `LLM_ALL_ENDPOINTS_EXHAUSTED`, whose `details.attempts` names each endpoint, what it last answered, and how many requests it took to decide.
+
+**Failover is between endpoints of the same shape.** The request body is relayed unchanged, so a list is several Anthropic keys, the same provider twice, or a self-hosted deployment of the same API: only the base URL and the credential differ per endpoint. Translating a conversation into a second provider's shape, and rewriting tool-call IDs with it, is the [LiteLLM sidecar's](#the-model-axis) job and is not what this list does.
 
 Failover is correct but it is not free, and you should order your endpoints knowing why:
 
-- The conversation history is re-serialized into the new provider's shape, and tool-call IDs are rewritten because providers format them differently.
-- The cached prompt prefix at the old provider is gone. The first request to the new endpoint pays full price for the entire history, which on a long thread is a real cost spike rather than a rounding error.
+- The cached prompt prefix at the old endpoint is gone. The first request to the new one pays full price for the entire history, which on a long thread is a real cost spike rather than a rounding error.
+- The turn is still spending its own token ceiling while it waits out a backoff.
 
 It's recommended to put your cheapest and most reliable endpoint first, and treat later entries as genuine fallbacks rather than a load-balancing pool.
 
