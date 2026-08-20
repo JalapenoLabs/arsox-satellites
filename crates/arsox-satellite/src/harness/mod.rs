@@ -15,4 +15,4 @@ mod checkers;
 pub mod runner;
 pub mod spawn;
 
-pub use arsox_harness::{HarnessResult, MappedEvent, Mapping, claude};
+pub use arsox_harness::{HarnessResult, MappedEvent, Mapping, claude, codex};

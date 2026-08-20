@@ -31,7 +31,7 @@
 //! ends the turn with `HARNESS_IDLE_TIMEOUT` instead.
 
 use crate::harness::spawn::{HarnessCommand, ModelAccess, Session, command_for, process_for};
-use crate::harness::{HarnessResult, accounting, checkers, claude};
+use crate::harness::{HarnessResult, Mapping, accounting, checkers, claude, codex};
 use crate::proxy::budget::{Ceilings, Crossing, Meter};
 use crate::redaction::Redactor;
 use crate::store::{AppendEvent, ClaimedTurn, Store};
@@ -162,6 +162,19 @@ struct Consumed {
     /// exhausted is the case this exists for: the harness has been answered with
     /// an error it can read, and there is nothing left for the turn to spend.
     failed: Option<Failure>,
+
+    /// The last thing the agent said, for a harness whose result carries no
+    /// summary of its own.
+    ///
+    /// Codex closes a turn with an ordinary `agent_message` item and reports
+    /// `turn.completed` with token counts and nothing else, so its mapper, which
+    /// is a pure function of one line and holds no state between lines, has no
+    /// summary to give. The session does, and this is where it is kept.
+    ///
+    /// *Last* is load-bearing rather than incidental: a recorded turn opens with
+    /// a preamble announcing what the agent is about to do and closes with the
+    /// answer, so taking the first would report the plan as the result.
+    last_agent_message: Option<String>,
 }
 
 /// The turn's wall clock ceiling, shared by every harness session in it.
@@ -1110,6 +1123,7 @@ impl Runner {
         // between them, so a harness stuck in a shell command would never reach
         // it and would outlive any ceiling it counted.
         let TurnContext {
+            harness,
             clock,
             bounds,
             redactor,
@@ -1117,6 +1131,7 @@ impl Runner {
             incidents,
             ..
         } = context;
+        let harness = *harness;
 
         let at = Attribution {
             thread_id,
@@ -1152,7 +1167,7 @@ impl Runner {
                         continue;
                     }
 
-                    self.absorb(&line, at, &mut consumed).await;
+                    self.absorb(harness, &line, at, &mut consumed).await;
 
                     seen += 1;
                     if seen.is_multiple_of(CANCEL_CHECK_EVERY)
@@ -1232,19 +1247,27 @@ impl Runner {
             }
         }
 
-        // Drained after the loop as well as inside it. A timeout the proxy found
-        // on the request that ended this session arrives while nothing is left
-        // to select on, and an incident recorded nowhere is the silent failure
-        // the whole incident system exists to prevent.
+        self.drain_incidents(incidents, at, &mut consumed).await;
+
+        consumed
+    }
+
+    /// Records whatever the proxy reported after the reading loop let go.
+    ///
+    /// A timeout the proxy found on the request that ended a session arrives
+    /// while nothing is left to select on, and an incident recorded nowhere is
+    /// the silent failure the whole incident system exists to prevent.
+    async fn drain_incidents(
+        &self,
+        incidents: &mut mpsc::UnboundedReceiver<Incident>,
+        at: Attribution<'_>,
+        consumed: &mut Consumed,
+    ) {
         while let Ok(incident) = incidents.try_recv() {
             // The drain keeps going whatever the answer: every incident still
             // in the channel deserves its row, fatal or not.
-            let _turn_over = self
-                .absorb_proxy_incident(incident, at, &mut consumed)
-                .await;
+            let _turn_over = self.absorb_proxy_incident(incident, at, consumed).await;
         }
-
-        consumed
     }
 
     /// Stores a proxy incident and notes a fatal one as the turn's failure.
@@ -1272,8 +1295,14 @@ impl Runner {
     }
 
     /// Turns one line of harness output into log entries and a result.
-    async fn absorb(&self, line: &str, at: Attribution<'_>, consumed: &mut Consumed) {
-        let mapping = claude::map_line(line);
+    async fn absorb(
+        &self,
+        harness: Harness,
+        line: &str,
+        at: Attribution<'_>,
+        consumed: &mut Consumed,
+    ) {
+        let mapping = map_line(harness, line);
 
         if let Some(session_id) = mapping.harness_session_id
             && let Err(error) = self
@@ -1288,6 +1317,10 @@ impl Runner {
         }
 
         for event in mapping.events {
+            if let Payload::AgentMessage(spoken) = &event.payload {
+                consumed.last_agent_message = Some(spoken.text.clone());
+            }
+
             // An incident from the mapper takes the path that records it and
             // streams it in one call, and takes it instead of the append below.
             // Doing both would put two copies of one failure on the stream.
@@ -1301,7 +1334,18 @@ impl Runner {
                 .await;
         }
 
-        if let Some(result) = mapping.result {
+        if let Some(mut result) = mapping.result {
+            // A harness whose closing message is an item rather than part of its
+            // result reports no summary, and a turn that says nothing about
+            // itself is a report with a hole in it. The session saw what the
+            // agent said last, so it fills the gap the mapper structurally
+            // cannot. A harness that reported one keeps it.
+            if result.summary.trim().is_empty()
+                && let Some(spoken) = consumed.last_agent_message.take()
+            {
+                result.summary = spoken;
+            }
+
             consumed.result = Some(result);
         }
     }
@@ -1576,6 +1620,22 @@ impl Runner {
                 "could not record an incident: {error}",
             );
         }
+    }
+}
+
+/// Maps one native line with the mapper the thread's harness speaks.
+///
+/// The whole difference a harness makes to the runner, in one function. Every
+/// other line of this loop is written against the canonical contract, which is
+/// the property the project exists to hold: adding a harness is a mapper and an
+/// arm here, and nothing above it changes.
+///
+/// A thread that named no harness is read as Claude, which is what
+/// `GET /v1/harness` reports as the default.
+fn map_line(harness: Harness, line: &str) -> Mapping {
+    match harness {
+        Harness::Codex => codex::map_line(line),
+        Harness::Unspecified | Harness::Claude => claude::map_line(line),
     }
 }
 
