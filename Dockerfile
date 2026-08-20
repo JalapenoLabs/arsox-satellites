@@ -120,16 +120,25 @@ RUN npm install --global "@anthropic-ai/claude-code@${CLAUDE_VERSION}" \
 
 ENV DISABLE_AUTOUPDATER=1
 
-# Agents run unprivileged. The satellite process runs as the same user for now;
-# when the enforcement layer lands, the pieces an agent must not reach stay
-# owned by root while the agent keeps this account.
+# Agents run unprivileged and the satellite does not. The entrypoint is root,
+# and every process it spawns is handed down to this account before its first
+# instruction runs, which is what makes the enforcement points below something
+# an agent cannot rewrite. See docs/enforcement.md.
+#
+# The split of ownership is the whole model:
+#   /workspace      the agent's own work, so the agent owns it
+#   /var/arsox      threads, queues, and the incident record, so root owns it
+#                   and an agent cannot delete the evidence of what it did
+#   /opt/arsox      the per-thread exec shim directories, root-owned and 0711 so
+#                   one thread cannot enumerate another's
 RUN useradd --create-home --shell /usr/sbin/nologin --uid 10001 arsox \
-    && mkdir -p /var/arsox /workspace \
-    && chown arsox:arsox /var/arsox /workspace
+    && mkdir -p /var/arsox /workspace /opt/arsox/threads \
+    && chown arsox:arsox /workspace \
+    && chmod 700 /var/arsox \
+    && chmod 711 /opt/arsox/threads
 
 COPY --from=builder /build/target/release/arsox-satellite /usr/local/bin/arsox-satellite
 
-USER arsox
 WORKDIR /workspace
 
 # The database and the workspace are the two things that must survive a

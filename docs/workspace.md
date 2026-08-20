@@ -188,7 +188,21 @@ no way to notice.
 
 Every spawned process, git and setup commands alike, goes through
 `harness::spawn::scrubbed_command`, which strips every `ARSOX_*` variable and
-every provider credential. The same scrub a harness gets, for the same reason.
+every provider credential, and hands the child down to the unprivileged `arsox`
+account. The same scrub and the same drop a harness gets, for the same reasons.
+See [the enforcement doc](./enforcement.md).
+
+The drop is why a thread's workspace is created owned by the agent account and
+why an SSH key staged for a clone is handed to it: the clone runs as the agent,
+so a key only root could read would fail every SSH remote. The staging directory
+keeps its `0700`, which narrows who can read the key to the one account that
+needs it rather than widening anything.
+
+Setup commands and checkers are **not** brokered by the exec allowlist. They are
+the operator's own configuration being executed as configured rather than
+anything an agent chose, so they keep the full `PATH`. Brokering them would mean
+an operator's `yarn install` had to appear in an allowlist written for the agent,
+which reads as a bug every single time.
 
 The thread's declared variables are then set back on top of it for setup
 commands, so an install authenticates to a private registry exactly as the agent

@@ -194,10 +194,16 @@ async fn start_prepared(
         .expect("should queue a turn")
         .turn;
 
+    // Under this test's own root rather than the image's. Nothing is installed
+    // into it: a test process is not a root satellite, so the broker declines to
+    // engage and the harness runs with the satellite's own PATH.
+    let broker = arsox_satellite::broker::Broker::at(workspace.path().join("broker"));
+
     let collector = Arc::new(Collector::new(
         store.clone(),
         workspace.path().to_path_buf(),
         EventBus::new(),
+        broker.clone(),
     ));
 
     let runner = Runner::new(
@@ -209,6 +215,7 @@ async fn start_prepared(
         arsox_satellite::proxy::LlmProxy::start()
             .await
             .expect("should start the proxy"),
+        broker,
     );
     tokio::spawn(runner.dispatch());
 
@@ -2025,4 +2032,107 @@ async fn a_codex_thread_resumes_the_session_the_cli_minted_for_it() {
         resumed.iter().any(|argument| argument == CODEX_SESSION_ID),
         "the second turn should carry the id the first one recorded: {resumed:?}"
     );
+}
+
+#[tokio::test]
+async fn a_command_a_shim_refused_becomes_a_blocked_incident_on_the_turn_that_met_it() {
+    // The satellite half of the exec broker, end to end: a record the shim
+    // dropped into the thread's spool becomes a `PERMISSION_COMMAND_DENIED`
+    // incident carrying the argv an operator needs to widen an allowlist.
+    //
+    // The record is written here by hand rather than by a real shim, because a
+    // shim needs a Linux host and a root satellite and this runs on neither.
+    // What a real shim writes is the same `Denial`, through the same `record`,
+    // and its own decision is unit tested in `broker::shim`.
+    let (harness, thread_id, first_turn) = start("do the thing").await;
+    settle(&harness.store, &thread_id, &first_turn).await;
+
+    let spool = arsox_satellite::broker::Broker::at(harness.workspace.path().join("broker"))
+        .spool_directory(&thread_id);
+    std::fs::create_dir_all(&spool).expect("should create the spool");
+    arsox_satellite::broker::spool::record(
+        &spool,
+        &arsox_satellite::broker::spool::Denial::now(
+            &thread_id,
+            "docker",
+            vec!["docker".to_owned(), "build".to_owned(), ".".to_owned()],
+            "is not on this thread's exec allowlist",
+        ),
+    )
+    .expect("should record a refusal");
+
+    // Seeded between turns rather than before the first, because the runner
+    // claims work the moment it exists and a refusal written into that race
+    // would be reported against whichever turn won it.
+    let second_turn = queue_another(&harness.store, &thread_id, "and now this").await;
+    settle(&harness.store, &thread_id, &second_turn).await;
+
+    let recorded = incidents_coded(
+        &harness.store,
+        &thread_id,
+        ErrorCode::PermissionCommandDenied,
+    )
+    .await;
+
+    assert_eq!(recorded.len(), 1, "one refusal, one incident");
+    let incident = &recorded[0];
+
+    assert_eq!(
+        incident.disposition,
+        i32::from(arsox_sdk::proto::incident::v1::Disposition::Blocked),
+        "a permission gate closing as designed is blocked, never degraded"
+    );
+    assert!(
+        !incident.retryable,
+        "the same argv meets the same allowlist next time"
+    );
+    assert_eq!(
+        incident.turn_id.as_deref(),
+        Some(second_turn.as_str()),
+        "a refusal belongs to the turn that was running when it happened"
+    );
+    assert!(incident.message.contains("docker build ."), "{incident:?}");
+
+    let details = incident.details.as_ref().expect("the evidence travels");
+    assert_eq!(text_field(details, "command"), Some("docker"));
+    assert_eq!(
+        argv_field(details),
+        vec!["docker", "build", "."],
+        "details.argv is what the README promises and what widens an allowlist"
+    );
+
+    // Drained rather than re-read, so a third turn does not report the same
+    // refusal again.
+    let third_turn = queue_another(&harness.store, &thread_id, "and again").await;
+    settle(&harness.store, &thread_id, &third_turn).await;
+    assert_eq!(
+        incidents_coded(
+            &harness.store,
+            &thread_id,
+            ErrorCode::PermissionCommandDenied,
+        )
+        .await
+        .len(),
+        1,
+        "the spool was drained, not merely read"
+    );
+}
+
+/// The argv an incident's evidence carries, as a list of words.
+fn argv_field(details: &prost_types::Struct) -> Vec<String> {
+    let Some(prost_types::value::Kind::ListValue(list)) = details
+        .fields
+        .get("argv")
+        .and_then(|argv| argv.kind.as_ref())
+    else {
+        return Vec::new();
+    };
+
+    list.values
+        .iter()
+        .filter_map(|word| match word.kind.as_ref()? {
+            prost_types::value::Kind::StringValue(text) => Some(text.clone()),
+            _other => None,
+        })
+        .collect()
 }

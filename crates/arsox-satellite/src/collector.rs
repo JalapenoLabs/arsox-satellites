@@ -34,15 +34,24 @@ pub struct Collector {
     store: Store,
     workspace_root: PathBuf,
     bus: EventBus,
+
+    /// The exec shim directories, which go with the workspace they gated.
+    broker: crate::broker::Broker,
 }
 
 impl Collector {
     #[must_use]
-    pub fn new(store: Store, workspace_root: PathBuf, bus: EventBus) -> Self {
+    pub fn new(
+        store: Store,
+        workspace_root: PathBuf,
+        bus: EventBus,
+        broker: crate::broker::Broker,
+    ) -> Self {
         Self {
             store,
             workspace_root,
             bus,
+            broker,
         }
     }
 
@@ -121,6 +130,18 @@ impl Collector {
         reason: ThreadEndReason,
     ) -> Result<Thread, CollectError> {
         workspace::remove_thread_directory(&self.workspace_root, thread_id).await?;
+
+        // Reported rather than raised. A shim directory left behind is a few
+        // thousand inodes on a path nothing will look at again, and refusing to
+        // collect the thread over it would leave the workspace it gated in place
+        // too.
+        if let Err(error) = self.broker.remove(thread_id).await {
+            tracing::error!(
+                event.name = "broker.remove.failed",
+                thread.id = thread_id,
+                "could not remove a collected thread's exec shim directory: {error}",
+            );
+        }
 
         let state = match reason {
             ThreadEndReason::Expired => ThreadState::Expired,

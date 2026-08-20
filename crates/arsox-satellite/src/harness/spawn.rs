@@ -15,12 +15,12 @@
 //!
 //! They are **advisory**, exactly as `AGENTS.md` is. The harness applies them to
 //! itself, so they shape what an agent reaches for and never constrain what it
-//! can reach: a shell it is granted can run anything the container can run.
-//! `Permissions` in the contract documents itself as deterministic controls
-//! enforced by infrastructure the agent cannot touch, and none of that
-//! infrastructure exists yet. The exec broker, the egress proxy, and the
-//! root-owned `pre-push` hook are separate future work, and until they land
-//! **the container is the only real boundary**.
+//! can reach. What constrains it is [`crate::broker`], which stands underneath
+//! these flags rather than through them: a thread that declared `exec: NONE` or
+//! `exec: CUSTOM` runs with a root-owned shim directory as its whole `PATH`, and
+//! no flag here can switch that off. The egress proxy and the root-owned
+//! `pre-push` hook are still separate future work, so for `web` and for push
+//! policy the container remains the only boundary.
 //!
 //! This is why `--permission-mode` never reached the contract. It is a Claude
 //! spelling for an advisory gate, and putting it in a message whose whole
@@ -50,7 +50,7 @@
 
 use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::settings::v1::{EnvVar, ExecAccess, Permissions};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Overrides the Claude CLI binary.
 ///
@@ -167,13 +167,17 @@ pub enum Session {
 /// the scrub. `permissions` are the thread's, absent when it declared none, and
 /// decide the posture the harness runs under. See the module docs for what
 /// "posture" buys and what it deliberately does not.
+///
+/// `grants` carries what the satellite lends the turn: its admission to the
+/// model, and the shim directory that becomes its `PATH` when the exec broker
+/// engaged for the thread.
 #[must_use]
 pub fn command_for(
     harness: Harness,
     prompt: &str,
     session: &Session,
     working_dir: PathBuf,
-    model_access: Option<ModelAccess>,
+    grants: &Grants,
     declared: &[EnvVar],
     permissions: Option<&Permissions>,
 ) -> HarnessCommand {
@@ -186,22 +190,12 @@ pub fn command_for(
     match harness {
         // Unspecified means "the documented default", and the documented default
         // is Claude.
-        Harness::Unspecified | Harness::Claude => claude_command(
-            prompt,
-            session,
-            working_dir,
-            model_access,
-            declared,
-            permissions,
-        ),
-        Harness::Codex => codex_command(
-            prompt,
-            session,
-            working_dir,
-            model_access,
-            declared,
-            permissions,
-        ),
+        Harness::Unspecified | Harness::Claude => {
+            claude_command(prompt, session, working_dir, grants, declared, permissions)
+        }
+        Harness::Codex => {
+            codex_command(prompt, session, working_dir, grants, declared, permissions)
+        }
     }
 }
 
@@ -209,7 +203,7 @@ fn claude_command(
     prompt: &str,
     session: &Session,
     working_dir: PathBuf,
-    model_access: Option<ModelAccess>,
+    grants: &Grants,
     declared: &[EnvVar],
     permissions: Option<&Permissions>,
 ) -> HarnessCommand {
@@ -235,7 +229,7 @@ fn claude_command(
 
     args.extend(claude_permission_args(&posture_for(permissions)));
 
-    let proxy = model_access.map(|access| {
+    let proxy = grants.model.clone().map(|access| {
         vec![
             AgentVar {
                 key: "ANTHROPIC_BASE_URL".to_owned(),
@@ -256,7 +250,11 @@ fn claude_command(
         program: claude_binary(),
         args,
         working_dir,
-        env: environment_for(declared, proxy.unwrap_or_default()),
+        env: environment_for(
+            declared,
+            proxy.unwrap_or_default(),
+            grants.exec_broker.as_deref(),
+        ),
     }
 }
 
@@ -298,7 +296,7 @@ fn codex_command(
     prompt: &str,
     session: &Session,
     working_dir: PathBuf,
-    model_access: Option<ModelAccess>,
+    grants: &Grants,
     declared: &[EnvVar],
     permissions: Option<&Permissions>,
 ) -> HarnessCommand {
@@ -318,7 +316,7 @@ fn codex_command(
     // thread declared would otherwise be the one a CLI that does read it obeys,
     // which is a route around every ceiling. The key travels in the environment
     // either way, which is what `env_key` above names.
-    let proxy = match model_access {
+    let proxy = match grants.model.clone() {
         Some(access) => {
             args.extend(codex_provider_args(&access));
 
@@ -350,7 +348,7 @@ fn codex_command(
         program: codex_binary(),
         args,
         working_dir,
-        env: environment_for(declared, proxy),
+        env: environment_for(declared, proxy, grants.exec_broker.as_deref()),
     }
 }
 
@@ -392,15 +390,31 @@ fn proxy_v1(base_url: &str) -> String {
 
 /// Assembles the environment a harness child runs with.
 ///
-/// Three layers, in the one order that is safe: what the satellite hands every
-/// agent, then what the thread declared, then the proxy's own variables. The
-/// proxy goes last because the last value set for a key is the one the child
-/// sees, so a thread cannot repoint its agent away from the satellite's LLM
-/// proxy and out from under the budget ceilings by declaring a base URL.
-fn environment_for(declared: &[EnvVar], proxy: Vec<AgentVar>) -> Vec<AgentVar> {
+/// Four layers, in the one order that is safe: what the satellite hands every
+/// agent, then what the thread declared, then the proxy's own variables, then
+/// the broker's `PATH`. Everything the satellite decides goes after everything
+/// the thread declared, because the last value set for a key is the one the
+/// child sees. A thread that could set `ANTHROPIC_BASE_URL` would route its
+/// agent out from under every budget ceiling, and a thread that could set `PATH`
+/// would step around the exec broker by declaring a variable.
+fn environment_for(
+    declared: &[EnvVar],
+    proxy: Vec<AgentVar>,
+    exec_broker: Option<&Path>,
+) -> Vec<AgentVar> {
     let mut env = agent_environment();
     env.extend(declared_environment(declared));
     env.extend(proxy);
+
+    if let Some(shims) = exec_broker {
+        env.push(AgentVar {
+            key: "PATH".to_owned(),
+            value: shims.display().to_string(),
+            // A directory, not a credential, and the one variable worth reading
+            // in a log when an agent cannot find a command it was allowed.
+            secret: false,
+        });
+    }
 
     env
 }
@@ -443,10 +457,10 @@ enum ShellAccess {
     /// intended and protects nothing.
     ///
     /// So the honest default is the one that matches the boundary that actually
-    /// exists. Today that boundary is the container, and a satellite is a
-    /// container built to be handed to an agent. When the exec broker, the
-    /// egress proxy, and the `pre-push` hook land, they enforce underneath these
-    /// flags rather than through them: no CLI flag can switch any of them off.
+    /// exists. For a thread that declared nothing that boundary is the
+    /// container, and a satellite is a container built to be handed to an agent.
+    /// A thread that declares an exec policy gets the broker underneath these
+    /// flags rather than through them, and no CLI flag switches it off.
     Unrestricted,
 
     /// The thread named which commands it wants, or none at all.
@@ -491,11 +505,12 @@ fn posture_for(permissions: Option<&Permissions>) -> Posture {
         // is the preset. Both land here so leaving the field alone and naming
         // the preset cannot behave differently.
         //
-        // The preset is a curated command list the exec broker will hold, and no
-        // broker exists yet, so there is no list to hand the harness. Granting
-        // the shell overshoots what the preset will eventually mean, and it is
-        // the overshoot the contract already documents as pending rather than a
-        // new one invented here.
+        // The preset is a curated command list, `broker::PRESET_COMMANDS`, and
+        // it is deliberately not brokered: the contract makes unspecified mean
+        // the preset, so brokering it would change the default for every thread
+        // that never asked for a policy. Granting the shell overshoots what the
+        // preset names, and it is the overshoot the contract already documents
+        // as pending rather than a new one invented here.
         ExecAccess::Unspecified | ExecAccess::Preset => ShellAccess::Unrestricted,
         ExecAccess::None | ExecAccess::Custom => ShellAccess::Named,
     };
@@ -598,6 +613,37 @@ fn codex_permission_args(posture: &Posture) -> Vec<String> {
     ]
 }
 
+/// What the satellite lends one turn, and takes back when it ends.
+///
+/// The two travel together because they are the same kind of thing: something
+/// the satellite hands an agent for the length of a turn, and the environment it
+/// arrives in. Taking them as separate parameters is how a signature grows until
+/// nobody can read a call site, and both are `Option` for the same reason: a
+/// turn may run without a model grant, and most threads run without a broker.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Grants {
+    /// The turn's admission to the model.
+    pub model: Option<ModelAccess>,
+
+    /// The thread's shim directory, which becomes the agent's whole `PATH`.
+    ///
+    /// Absent for every thread that keeps the satellite's own, which is the
+    /// default and every thread that declared no exec policy. See
+    /// [`crate::broker`].
+    pub exec_broker: Option<PathBuf>,
+}
+
+impl Grants {
+    /// A turn admitted to the model and brokered by nothing.
+    #[must_use]
+    pub fn model(access: ModelAccess) -> Self {
+        Self {
+            model: Some(access),
+            exec_broker: None,
+        }
+    }
+}
+
 /// One turn's admission to the model, by way of the satellite's proxy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelAccess {
@@ -633,13 +679,21 @@ pub fn process_for(command: &HarnessCommand) -> tokio::process::Command {
     process
 }
 
-/// A process that inherits none of the satellite's own credentials.
+/// A process that inherits none of the satellite's own credentials, and none of
+/// its privilege.
 ///
 /// Shared with workspace provisioning, because `git` and a repo's setup
 /// commands are spawned by the satellite exactly as a harness is and inherit
 /// exactly the same environment unless something takes it away. One scrub, used
 /// by every spawn, is what keeps the rule from holding in one place and lapsing
 /// in the next.
+///
+/// The same reasoning puts the privilege drop here. Inside the image the
+/// satellite is root and every child of it runs as the unprivileged `arsox`
+/// account, which is what makes the enforcement points something an agent cannot
+/// rewrite. A drop applied per spawn site would be a step somebody could forget
+/// on the next one; applied here, a new spawn site inherits it by construction.
+/// See [the enforcement doc](../../../../docs/enforcement.md).
 #[must_use]
 pub fn scrubbed_command(program: &str) -> tokio::process::Command {
     let mut process = tokio::process::Command::new(program);
@@ -649,6 +703,10 @@ pub fn scrubbed_command(program: &str) -> tokio::process::Command {
             process.env_remove(&key);
         }
     }
+
+    // A no-op on a satellite that is not root, which is every bare-metal run and
+    // every test. The posture is stated once at boot rather than per spawn.
+    crate::privilege::hand_down(&mut process);
 
     process
 }
@@ -1006,7 +1064,7 @@ mod tests {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
             PathBuf::from("/workspace/thread"),
-            Some(ModelAccess {
+            &Grants::model(ModelAccess {
                 base_url: "http://127.0.0.1:9/v1".to_owned(),
                 token: "the-turns-proxy-token".to_owned(),
             }),
@@ -1101,7 +1159,7 @@ mod tests {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
             PathBuf::from("/workspace/thread"),
-            Some(ModelAccess {
+            &Grants::model(ModelAccess {
                 base_url: "http://127.0.0.1:9/v1".to_owned(),
                 token: "the-turns-proxy-token".to_owned(),
             }),
@@ -1149,7 +1207,7 @@ mod tests {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
             PathBuf::from("/workspace/thread"),
-            None,
+            &Grants::default(),
             &[],
             None,
         );
@@ -1173,7 +1231,7 @@ mod tests {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
             PathBuf::from("/workspace/thread"),
-            None,
+            &Grants::default(),
             &[],
             None,
         );
@@ -1194,7 +1252,7 @@ mod tests {
                 session_id: "x".to_owned(),
             },
             PathBuf::from("/workspace/thread"),
-            None,
+            &Grants::default(),
             &[],
             None,
         );
@@ -1211,7 +1269,7 @@ mod tests {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
             PathBuf::from("/workspace/thread"),
-            None,
+            &Grants::default(),
             &[],
             permissions,
         )
@@ -1366,7 +1424,7 @@ mod tests {
     /// The Codex command a test builds, with only the varying parts named.
     fn codex_command_with(
         session: &Session,
-        model_access: Option<ModelAccess>,
+        grants: &Grants,
         permissions: Option<&Permissions>,
     ) -> HarnessCommand {
         command_for(
@@ -1374,7 +1432,7 @@ mod tests {
             "do the thing",
             session,
             PathBuf::from("/workspace/thread"),
-            model_access,
+            grants,
             &[],
             permissions,
         )
@@ -1386,7 +1444,7 @@ mod tests {
             &Session::Start {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
-            None,
+            &Grants::default(),
             None,
         )
     }
@@ -1443,7 +1501,7 @@ mod tests {
             &Session::Resume {
                 session_id: "01a01cd2-200b-77f0-b4b8-7421557ff5ed".to_owned(),
             },
-            None,
+            &Grants::default(),
             None,
         );
 
@@ -1476,7 +1534,7 @@ mod tests {
                 session_id: "x".to_owned(),
             },
             PathBuf::from("/workspace/thread"),
-            None,
+            &Grants::default(),
             &[],
             None,
         );
@@ -1505,7 +1563,7 @@ mod tests {
             &Session::Start {
                 session_id: "x".to_owned(),
             },
-            Some(ModelAccess {
+            &Grants::model(ModelAccess {
                 base_url: "http://127.0.0.1:9/t/the-token".to_owned(),
                 token: "the-turns-proxy-token".to_owned(),
             }),
@@ -1555,7 +1613,7 @@ mod tests {
                 session_id: "x".to_owned(),
             },
             PathBuf::from("/workspace/thread"),
-            Some(ModelAccess {
+            &Grants::model(ModelAccess {
                 base_url: "http://127.0.0.1:9/t/the-token".to_owned(),
                 token: "the-turns-proxy-token".to_owned(),
             }),
@@ -1603,7 +1661,7 @@ mod tests {
             &Session::Start {
                 session_id: "x".to_owned(),
             },
-            None,
+            &Grants::default(),
             Some(&named),
         );
 
@@ -1623,6 +1681,79 @@ mod tests {
                 .any(|argument| argument.contains("yarn install")),
             "{:?}",
             restricted.args
+        );
+    }
+
+    #[test]
+    fn a_brokered_thread_runs_with_the_shim_directory_as_its_whole_path() {
+        // The broker is a PATH and nothing else. An agent that kept the
+        // satellite's PATH alongside it would resolve every real binary and
+        // never meet a shim.
+        let command = command_for(
+            Harness::Claude,
+            "do the thing",
+            &Session::Start {
+                session_id: "x".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            &Grants {
+                model: None,
+                exec_broker: Some(PathBuf::from("/opt/arsox/threads/x/bin")),
+            },
+            &[],
+            None,
+        );
+
+        let path = command
+            .env
+            .iter()
+            .rfind(|variable| variable.key == "PATH")
+            .expect("a brokered thread is given a PATH");
+
+        assert_eq!(path.value, "/opt/arsox/threads/x/bin");
+        assert!(!path.secret, "a directory is not a credential");
+    }
+
+    #[test]
+    fn a_thread_cannot_declare_its_way_around_the_exec_broker() {
+        // The last value set for a key is the one the child sees, so the
+        // broker's PATH is applied after everything the thread declared. A
+        // declared PATH that won would be a gate a settings field opens.
+        let command = command_for(
+            Harness::Claude,
+            "do the thing",
+            &Session::Start {
+                session_id: "x".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            &Grants {
+                model: None,
+                exec_broker: Some(PathBuf::from("/opt/arsox/threads/x/bin")),
+            },
+            &[declared("PATH", "/usr/bin:/bin", Some(false))],
+            None,
+        );
+
+        let path = command
+            .env
+            .iter()
+            .rfind(|variable| variable.key == "PATH")
+            .expect("a brokered thread is given a PATH");
+
+        assert_eq!(path.value, "/opt/arsox/threads/x/bin");
+    }
+
+    #[test]
+    fn an_unbrokered_thread_keeps_the_satellites_own_path() {
+        // The opt-in, asserted where it would break: a thread that declared no
+        // exec policy must run exactly as it did before the broker existed,
+        // which means nothing here sets PATH at all.
+        let command = command_with(None);
+
+        assert!(
+            !command.env.iter().any(|variable| variable.key == "PATH"),
+            "{:?}",
+            command.env
         );
     }
 
