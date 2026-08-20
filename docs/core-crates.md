@@ -68,22 +68,38 @@ output shape belongs to a version and to nothing else:
 ```
 crates/arsox-harness/fixtures/
   claude/2.1.221/<scenario>.stdout.jsonl   +   <scenario>.events.json
+  claude/2.1.237/...
   codex/0.147.0/...
   kimi/0.34.0/...
 ```
+
+Two Claude versions sit there on purpose. A newer CLI earns a directory rather
+than an edit to the old one, so the pair is what turns a shape that shifted on
+upgrade into a diff instead of a silent change.
 
 A version bump then becomes: record new fixtures, and let the suite say exactly
 what changed. That turns the worst failure mode, a shape that shifts silently on
 upgrade, into a red test.
 
-Two harnesses are covered today and every fixture is a recording. Each one still
-states its provenance in `fixtures/README.md`, so a fixture ever built from a
-published schema rather than captured has to say so out loud.
+Two harnesses are covered today, across three CLI versions and ten scenarios,
+and every fixture is a recording. Each one still states its provenance in
+`fixtures/README.md`, so a fixture ever built from a published schema rather
+than captured has to say so out loud.
 
 Material already measured against real runs rather than read from documentation:
 
 - **Claude 2.1.226** reports usage per assistant message, with
   `cache_creation_input_tokens` and `cache_read_input_tokens` broken out.
+- **Claude 2.1.237 breaks reasoning out of output** as
+  `usage.output_tokens_details.thinking_tokens`, which 2.1.221 has no field for.
+  The mapper reported absence unconditionally until the newer recording landed,
+  so a real count was reaching consumers as a count nobody took.
+- **A failed Claude run carries no `result`.** The reason arrives in an `errors`
+  array, so a mapper reading only `result` reports the failure explaining
+  nothing.
+- **Codex reports a refused command as `declined`** with `exit_code: -1`, and
+  the turn goes on to complete. A refusal is a failed tool call inside a
+  successful turn, not the end of a run.
 - **Codex 0.147.0** stamps a `client_metadata` object carrying `session_id`,
   `thread_id`, `turn_id`, and a `turn_started_at_unix_ms` millisecond timestamp,
   and keeps session state in versioned SQLite (`state_5.sqlite`), not a rollout
