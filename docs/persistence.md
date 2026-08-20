@@ -64,10 +64,14 @@ activity does not: a timestamp is not unique, and a cursor holding only the
 timestamp would repeat or skip every thread sharing a value with the row at the
 page boundary.
 
-So the cursor is `sort_key|thread_id` and the comparison is a row value,
+So the cursor is `sort_key|row_id` and the comparison is a row value,
 `(last_activity_at, thread_id) > (?, ?)`. The composite is what makes paging
 total: every thread appears exactly once, which is asserted by a test that pages
 a listing to exhaustion and compares the result against the full set.
+
+Incident listings page the same way and share the format, because incidents order
+by when they happened and a timestamp is even less unique there: a turn can record
+several in one nanosecond.
 
 The sort direction and column are chosen from a fixed set of literals. Every
 value is still bound, never interpolated.
@@ -88,7 +92,9 @@ already-removed workspace once a minute forever.
 
 Incidents have no foreign key to `threads` and are never touched by collection.
 They carry their own retention, because "why did last night's run go wrong" is a
-question asked after the workspace is gone.
+question asked after the workspace is gone. No incident query asks whether a
+thread is alive, so filtering on a tombstone returns its evidence rather than
+`THREAD_EXPIRED`. See [incidents](./incidents.md).
 
 ## The workspace goes before the tombstone
 
@@ -182,5 +188,3 @@ the container-side mount paths are rewritten into Windows paths.
 - **Retention for incidents and statistics**, which is separate from the thread
   TTL by design.
 - **Aggregate disk accounting**, so `GetStatusResponse.disk` stops being absent.
-- **A second migration** will be the first real test of the migration path; the
-  initial schema proves only that migrations run.

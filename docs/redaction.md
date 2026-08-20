@@ -107,6 +107,11 @@ told a different story than one that stayed connected. A new place that appends
 an event has to name a redactor, because `AppendEvent.redactor` is a required
 field rather than an optional one.
 
+An incident passes two of those doors rather than one, because `report_incident`
+writes the row and emits the frame in a single call. Both are masked by the same
+automaton, so neither can carry a credential the other hid. See
+[incidents](./incidents.md).
+
 `commands::execute` masks at the moment of capture, so the incident, the checker
 result, the turn report, and the prompt that hands a failure back to the agent
 all carry the same masked text from one scan instead of four places each having

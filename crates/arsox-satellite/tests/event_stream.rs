@@ -370,6 +370,116 @@ async fn an_unauthenticated_stream_is_refused() {
     );
 }
 
+/// The runner's incidents, watched over a real socket.
+///
+/// Gated because it spawns the stand-in harness, which is a `test-util` binary
+/// and deliberately cannot reach a published image.
+#[cfg(feature = "test-util")]
+mod runner_incidents {
+    use super::{connect, next_event, start};
+    use arsox_satellite::store::{NewThread, NewTurn};
+    use arsox_sdk::proto::error::v1::ErrorCode;
+    use arsox_sdk::proto::event::v1::thread_event::Payload;
+    use arsox_sdk::proto::settings::v1::ThreadSettings;
+    use std::collections::BTreeMap;
+
+    /// The recorded transcript the stand-in replays.
+    const TRANSCRIPT: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../arsox-harness/fixtures/claude/2.1.221/tool-call.stdout.jsonl"
+    );
+
+    #[tokio::test]
+    async fn an_incident_the_runner_records_reaches_the_socket() {
+        // Nothing in Arsox fails silently, and a database row nobody is told
+        // about is silence to every consumer watching the thread it happened to.
+        // A turn whose harness stops before reporting a result records exactly
+        // one incident, so the stream has to carry it.
+        static CONFIGURE: std::sync::Once = std::sync::Once::new();
+        CONFIGURE.call_once(|| {
+            // SAFETY: runs once, before any child is spawned, and writes values
+            // that never change for the lifetime of the process.
+            unsafe {
+                std::env::set_var("ARSOX_CLAUDE_BIN", env!("CARGO_BIN_EXE_arsox-fake-harness"));
+                std::env::set_var("ARSOX_FAKE_TRANSCRIPT", TRANSCRIPT);
+            }
+        });
+
+        let running = start().await;
+        let thread_id = running
+            .store
+            .create_thread(NewThread {
+                settings: ThreadSettings::default(),
+                metadata: BTreeMap::new(),
+                idempotency_key: None,
+            })
+            .await
+            .expect("should create")
+            .thread
+            .thread_id;
+
+        // Subscribed before the turn is queued, so the incident is watched for
+        // live rather than found on replay.
+        let mut socket = connect(running.port, &thread_id, None).await;
+
+        running
+            .store
+            .create_turn(NewTurn {
+                thread_id: thread_id.clone(),
+                // The stand-in stops after three lines, which is a harness that
+                // exited without saying what it did: one fatal incident.
+                prompt: "run the probe [[truncate=3]]".to_owned(),
+                metadata: BTreeMap::new(),
+                idempotency_key: None,
+                satellite_initiated: false,
+                triggered_by_turn_id: None,
+            })
+            .await
+            .expect("should queue a turn");
+
+        // A turn emits several events before the one this test is about, so the
+        // incident is looked for rather than assumed to arrive first.
+        let mut seen = Vec::new();
+        let (incident, sequence) = loop {
+            let event = next_event(&mut socket).await;
+            seen.push(event.r#type.clone());
+
+            if let Some(Payload::Incident(incident)) = event.payload {
+                assert_eq!(event.r#type, "incident");
+                break (incident, event.sequence);
+            }
+
+            assert!(
+                seen.len() < 20,
+                "the incident never reached the stream, saw {seen:?}"
+            );
+        };
+
+        assert_eq!(incident.code, i32::from(ErrorCode::HarnessCrashed));
+        assert_eq!(incident.thread_id.as_deref(), Some(thread_id.as_str()));
+
+        // The same incident is in the database, because one call wrote both. The
+        // row carries the sequence its frame landed at, which is what lets a
+        // query result be located in the stream and the frame looked up again.
+        let recorded = running
+            .store
+            .incidents_for_thread(&thread_id)
+            .await
+            .expect("should read incidents");
+        let matching: Vec<_> = recorded
+            .iter()
+            .filter(|stored| stored.incident_id == incident.incident_id)
+            .collect();
+
+        assert_eq!(
+            matching.len(),
+            1,
+            "one failure is one row and one frame, never two of either"
+        );
+        assert_eq!(matching[0].sequence, Some(sequence));
+    }
+}
+
 #[tokio::test]
 async fn a_stream_for_an_unknown_thread_is_refused() {
     let running = start().await;

@@ -20,10 +20,14 @@ mod error;
 
 pub use error::{Error, Result};
 
-use crate::proto::common::v1::PageRequest;
+use crate::proto::common::v1::{PageRequest, Timestamp};
 use crate::proto::error::v1::Error as ContractError;
+use crate::proto::error::v1::ErrorCode;
 use crate::proto::event::v1::ThreadEvent;
 use crate::proto::harness::v1::GetHarnessResponse;
+use crate::proto::incident::v1::{
+    Disposition, Incident, ListIncidentsRequest, ListIncidentsResponse,
+};
 use crate::proto::satellite::v1::{GetStatusResponse, GetVersionResponse};
 use crate::proto::settings::v1::ThreadSettings;
 use crate::proto::thread::v1::{
@@ -141,6 +145,30 @@ impl Satellite {
         self.get("/v1/harness").await
     }
 
+    /// Lists incidents across every thread this satellite has held.
+    ///
+    /// Incidents outlive the threads they describe, so this answers for threads
+    /// that were collected long ago. That is the point: "why did last night's
+    /// run go wrong" is asked after the workspace is gone.
+    ///
+    /// Returns one page, oldest first. Raise [`IncidentQuery::limit`] or page
+    /// with [`IncidentQuery::cursor`] for the rest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the satellite is unreachable or rejects the secret.
+    pub async fn incidents(&self, query: IncidentQuery) -> Result<Vec<Incident>> {
+        let response: ListIncidentsResponse = self
+            .send(
+                reqwest::Method::GET,
+                "/v1/incidents",
+                &query.into_request(None),
+            )
+            .await?;
+
+        Ok(response.incidents)
+    }
+
     /// Threads on this satellite.
     #[must_use]
     pub fn threads(&self) -> Threads {
@@ -228,6 +256,63 @@ impl PipeErr for Error {
 /// consumers that have their own.
 fn tracing_warn(message: &str) {
     eprintln!("arsox: {message}");
+}
+
+/// Which incidents a listing should return.
+///
+/// Every filter is "match any of these", and an empty one does not filter rather
+/// than matching nothing, so [`IncidentQuery::default`] asks for everything.
+///
+/// ```
+/// use arsox_sdk::client::IncidentQuery;
+/// use arsox_sdk::proto::incident::v1::Disposition;
+///
+/// // The two dispositions worth waking somebody for.
+/// let query = IncidentQuery {
+///     dispositions: vec![Disposition::Fatal, Disposition::Degraded],
+///     ..IncidentQuery::default()
+/// };
+/// ```
+#[derive(Debug, Clone, Default)]
+pub struct IncidentQuery {
+    /// Ignored by [`ThreadHandle::incidents`], which is already scoped to one.
+    pub thread_ids: Vec<String>,
+
+    pub turn_ids: Vec<String>,
+    pub member_ids: Vec<String>,
+    pub codes: Vec<ErrorCode>,
+    pub dispositions: Vec<Disposition>,
+
+    /// Half-open window: at or after `occurred_after`, strictly before
+    /// `occurred_before`, so adjacent windows tile rather than overlap.
+    pub occurred_after: Option<Timestamp>,
+    pub occurred_before: Option<Timestamp>,
+
+    /// Zero asks the satellite for its default page size.
+    pub limit: u32,
+
+    /// Cursor from a previous listing's `next_cursor`. Empty starts at the
+    /// beginning.
+    pub cursor: String,
+}
+
+impl IncidentQuery {
+    /// Renders the query as the request the satellite reads.
+    fn into_request(self, scoped_to: Option<&str>) -> ListIncidentsRequest {
+        ListIncidentsRequest {
+            thread_ids: scoped_to.map_or(self.thread_ids, |thread_id| vec![thread_id.to_owned()]),
+            turn_ids: self.turn_ids,
+            member_ids: self.member_ids,
+            codes: self.codes.into_iter().map(Into::into).collect(),
+            dispositions: self.dispositions.into_iter().map(Into::into).collect(),
+            occurred_after: self.occurred_after,
+            occurred_before: self.occurred_before,
+            page: Some(PageRequest {
+                limit: self.limit,
+                cursor: self.cursor,
+            }),
+        }
+    }
 }
 
 /// Thread operations.
@@ -476,6 +561,31 @@ impl ThreadHandle {
             .await?;
 
         Ok(response.turns)
+    }
+
+    /// Lists this thread's incidents, oldest first.
+    ///
+    /// Answers after the thread is expired or destroyed, because incidents carry
+    /// their own retention and the workspace's collection never touches them.
+    /// `thread_ids` on the query is ignored: this listing is already scoped.
+    ///
+    /// Returns one page. Raise [`IncidentQuery::limit`] or page with
+    /// [`IncidentQuery::cursor`] for the rest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the satellite is unreachable or rejects the secret.
+    pub async fn incidents(&self, query: IncidentQuery) -> Result<Vec<Incident>> {
+        let response: ListIncidentsResponse = self
+            .satellite
+            .send(
+                reqwest::Method::GET,
+                &format!("/v1/threads/{}/incidents", self.thread_id),
+                &query.into_request(Some(&self.thread_id)),
+            )
+            .await?;
+
+        Ok(response.incidents)
     }
 
     /// Destroys the thread and everything under it.

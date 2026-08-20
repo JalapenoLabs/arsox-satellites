@@ -2,7 +2,9 @@
 
 //! Thread rows: creation, lookup, listing, and teardown.
 
-use super::{Store, StoreError, from_nanos, to_nanos};
+use super::{
+    DEFAULT_PAGE, MAX_PAGE, Store, StoreError, build_cursor, from_nanos, split_cursor, to_nanos,
+};
 use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::settings::v1::ThreadSettings;
 use arsox_sdk::proto::thread::v1::{Thread, ThreadOrder, ThreadState, ThreadSummary};
@@ -75,22 +77,6 @@ pub struct ThreadFilter {
     pub order_by: ThreadOrder,
     pub descending: bool,
 }
-
-/// Splits a cursor back into its sort key and thread id.
-fn split_cursor(cursor: &str) -> Option<(&str, &str)> {
-    cursor.split_once('|')
-}
-
-/// Builds the cursor a client sends back to continue a listing.
-fn build_cursor(sort_key: &str, thread_id: &str) -> String {
-    format!("{sort_key}|{thread_id}")
-}
-
-/// Page size used when a caller asks for none.
-const DEFAULT_PAGE: u32 = 50;
-
-/// Largest page a caller can ask for.
-const MAX_PAGE: u32 = 500;
 
 impl Store {
     /// Opens a thread, or returns the existing one when the idempotency key

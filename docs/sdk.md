@@ -87,9 +87,22 @@ surfaced.
 README, most of which no satellite serves yet. It does not compile, and it is not
 meant to yet: it is the design target the SDK is being built toward.
 
-Reaching it needs incidents, artifacts, suggestions, plan approval, question
-answering, and the settings those features carry. The SDK grows to match as the
-satellite does.
+Incidents are reachable now, through `incidents(IncidentQuery)` on the satellite
+and on a thread handle. Reaching the rest of the example needs artifacts,
+suggestions, plan approval, question answering, and the settings those features
+carry. The SDK grows to match as the satellite does.
+
+## Listings return one page
+
+`threads().list` and `incidents` return the first page rather than every match,
+because a satellite holding thousands of either should not answer one call with
+all of them. The page size and the cursor are the caller's to set;
+`IncidentQuery` carries both.
+
+Following the cursor automatically is a convenience the SDK does not offer yet,
+and it is deliberate that it does not offer it silently: a call that pages a
+hundred thousand incidents into memory behind a caller's back is worse than one
+that hands back a cursor.
 
 ## Roadmap
 

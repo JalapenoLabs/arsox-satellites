@@ -1181,6 +1181,63 @@ async fn a_checker_that_never_passes_stops_at_the_cap_with_the_failure_recorded(
 }
 
 #[tokio::test]
+async fn a_turn_report_carries_its_own_incident_counts() {
+    // The counts ride along so the common case needs no query at all: a consumer
+    // reacting to `turn.completed` learns that something went wrong without
+    // asking a second question, and queries only to find out what.
+    let (harness, thread_id, turn_id) = start("run the probe [[truncate=3]]").await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Failed,
+        "a harness that stops before reporting a result fails the turn"
+    );
+
+    let result = result_of(&harness.store, &thread_id, &turn_id).await;
+    let counts = result
+        .incident_counts
+        .expect("every turn reports its counts, even when they are all zero");
+
+    // The one fatal incident the runner records for a harness that exited
+    // without saying what it did.
+    assert_eq!(counts.fatal, 1);
+    assert_eq!(counts.degraded, 0);
+    assert_eq!(counts.recovered, 0);
+    assert_eq!(counts.blocked, 0);
+
+    // The counts describe the rows a listing would return rather than a tally
+    // kept beside them that could drift.
+    let recorded = harness
+        .store
+        .incidents_for_thread(&thread_id)
+        .await
+        .expect("should read incidents");
+    assert_eq!(
+        recorded
+            .iter()
+            .filter(|incident| incident.turn_id.as_deref() == Some(turn_id.as_str()))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_clean_turn_reports_counts_of_zero_rather_than_nothing() {
+    // "Not counted" and "nothing went wrong" are different facts, and an absent
+    // message would collapse them into the first.
+    let (harness, thread_id, turn_id) = start("run the probe").await;
+    settle(&harness.store, &thread_id, &turn_id).await;
+
+    let counts = result_of(&harness.store, &thread_id, &turn_id)
+        .await
+        .incident_counts
+        .expect("a clean turn still reports its counts");
+
+    assert_eq!(counts.fatal, 0);
+    assert_eq!(counts.degraded, 0);
+}
+
+#[tokio::test]
 async fn a_thread_with_no_checkers_runs_exactly_as_it_did_before() {
     // The stage costs a thread that declared no checker one filter over its
     // repos, and it is still reported: "not run" must never read as "found
