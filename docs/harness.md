@@ -203,6 +203,23 @@ absorbed in the spawn rather than in the runner:
 Either way the thread's second turn continues the session its first turn opened,
 which is the only part of this the rest of the satellite is written against.
 
+**The id is written down once per session, not once per line naming it.** A
+harness names its session on more lines than one: Claude 2.1.237 repeats it on
+every `thinking_tokens` progress line, and a write per sighting is a database
+write per line, each storing what the one before it stored. The first sighting
+wins, and it is written the moment it arrives rather than at the end, so a
+process that dies mid-turn still leaves the thread able to resume what it opened.
+
+A later sighting carrying a **different** id is warned about rather than obeyed.
+The id a thread is already resuming into is the one its events belong to, and a
+session that renamed itself mid-run is a fact worth seeing rather than a
+correction to apply.
+
+The memory is per session, so a restart records the id its new process
+announces. A turn-scoped one would keep the dead session's id, which for Codex,
+where a restarted CLI mints a fresh one, would leave the thread resuming a
+conversation that no longer exists.
+
 **Cancellation is a database write, not a signal.** It arrives as an ordinary
 HTTP request, so the runner learns about it by asking every so often rather than
 being interrupted. Checking every line would be a query per line of output.
@@ -243,15 +260,31 @@ alike:
 | the process died: a nonzero status, or a signal | `HARNESS_CRASHED` | the turn fails with that code |
 | a clean exit that reported no result | `HARNESS_CRASHED` | the turn fails, as it always did, with the reason it always gave |
 
-**A clean exit that did report a result is none of them**, however badly the
-result reads. The harness made a statement about the work, and a second session
-would reach the same answer by the same route. That line is what a restart is
-for: `is_error` is an answer, and a process that stopped is not.
+**A session that did report a result is none of them**, however badly the result
+reads. The harness made a statement about the work, and a second session would
+reach the same answer by the same route. That line is what a restart is for:
+`is_error` is an answer, and a process that stopped is not.
+
+**A result already reported survives a messy exit.** A harness that reports its
+result and then exits nonzero, or has to be torn down because it never exits at
+all, is honored: the turn keeps the answer, the ending is recorded as a
+`degraded` incident carrying the exit status and the output tail, and no restart
+is spent. Discarding the result would throw away what the satellite was told and
+charge a session to be told it again, and spending the restart on it would leave
+the next session with none for an ending a restart can actually recover.
+
+The boundary is the result rather than the exit status: a process that died
+**before** reporting one is still replaced, exactly as it was.
+
+Such a turn goes on to its checkers like any other completed turn. The harness
+claimed the work was done, which is the claim checkers exist to verify, and a fix
+cycle spawns a fresh session regardless of how the last one ended.
 
 **The evidence is captured because the process cannot be asked afterwards.** A
 crash carries the exit status, the code when a signal did not take its place, and
-the last lines it wrote on either pipe, all in `details` on both the `recovered`
-incident and the `fatal` one. The tail is the only place stderr survives at all,
+the last lines it wrote on either pipe, all in `details` on the `recovered`
+incident, on the `fatal` one, and on the `degraded` one beside a result that
+stood. The tail is the only place stderr survives at all,
 and "killed by SIGKILL after twenty lines of a build" is a diagnosis nobody
 reaches from an event log that simply stops.
 
@@ -340,6 +373,10 @@ stage is still reported, as `SKIPPED` with a reason. "Not run" must never read a
 agent claimed to have completed, and a turn whose harness crashed or reported an
 error made no such claim. Resuming the session that just failed would spend two
 more of them proving it.
+
+A harness that reported a result and *then* exited badly did make the claim, so
+its turn is checked like any other completed one. The claim is what the stage
+answers to, and a fix cycle spawns a fresh session anyway.
 
 `CheckerResult.skipped_by_commander` is always false today. The MCP tool that
 lets a commander accept a failure is separate work, and claiming a skip nobody

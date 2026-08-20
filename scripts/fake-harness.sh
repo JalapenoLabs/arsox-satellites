@@ -13,7 +13,9 @@
 # environment is shared by every spawn. The two stand-ins share the vocabulary
 # they both implement, so a smoke check written against one runs against either:
 #
-# - [[exit=N]] exits with N rather than 0, for the crash path.
+# - [[exit=N]] exits with N rather than 0, after the transcript: a harness that
+#   reported its result and then exited badly, which the runner honors rather
+#   than restarts.
 # - [[unrecognized=N]] emits N lines of an event type nothing maps, before the
 #   transcript, for the degraded incident a later CLI's new event type produces.
 set -eu

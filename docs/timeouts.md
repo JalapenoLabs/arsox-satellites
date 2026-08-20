@@ -137,6 +137,11 @@ whichever ending reaches it first, because what it bounds is process instability
 inside a turn rather than any one shape of it. See
 [the harness doc](./harness.md#three-endings-share-one-restart).
 
+**A session that already reported its result spends none of it.** Whether it then
+exits nonzero or has to be torn down for saying nothing further, the answer
+stands, the ending is recorded as `degraded`, and the restart stays available for
+a session that has nothing to lose.
+
 ## Testing it
 
 Every bound is injectable, and none of it goes through a satellite-wide constant
@@ -156,6 +161,11 @@ a test would have to reach around:
   first process wedges and the restart gets through, which is what makes
   "restarted once, and then the turn completed" a thing a test can assert. Asking
   for a hang and then a death is what proves the two share one budget.
+
+  A death that has to reach the restart is asked for as `[[truncate=N]]`
+  alongside `[[exit=N]]`, so the process stops before the recording's result
+  line. `[[exit=N]]` alone replays the whole transcript first, which is the
+  honored case: a result reported and then a bad exit.
 
 ## Roadmap
 

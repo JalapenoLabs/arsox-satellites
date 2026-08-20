@@ -29,7 +29,10 @@
 //! silently reconfigures another. The prompt is an argument, and arguments
 //! belong to one spawn.
 //!
-//! - `[[exit=N]]` exits with N rather than 0, for the crash path.
+//! - `[[exit=N]]` exits with N rather than 0, **after** the transcript. On its
+//!   own that is a harness that reported its result and then exited badly, which
+//!   the runner honors rather than restarts. Pair it with `[[truncate=N]]` for a
+//!   death the restart has to answer.
 //! - `[[truncate=N]]` stops after N lines, for a harness that dies mid-run
 //!   without reporting a result.
 //! - `[[report_env=NAME]]` writes what the child can see of `NAME` to stderr,

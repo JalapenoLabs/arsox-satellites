@@ -609,6 +609,11 @@ impl Store {
 
     /// Records the harness's own session id for a thread.
     ///
+    /// Called once per harness session rather than once per line carrying the
+    /// id, which is the runner's to decide: a harness repeating its id on every
+    /// progress line would otherwise be a write per line, all storing the same
+    /// value. See [`Self::harness_session_writes`].
+    ///
     /// # Errors
     ///
     /// Returns a database error if the update fails.
@@ -622,6 +627,9 @@ impl Store {
             .bind(thread_id)
             .execute(self.pool())
             .await?;
+
+        #[cfg(feature = "test-util")]
+        self.count_session_write();
 
         Ok(())
     }

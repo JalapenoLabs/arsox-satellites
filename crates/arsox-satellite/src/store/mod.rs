@@ -141,6 +141,19 @@ pub struct Store {
     /// forgotten at one call site is a subscriber that silently misses events.
     /// Absent in tests that only exercise storage.
     bus: Option<crate::stream::EventBus>,
+
+    /// How many harness session ids have been written since this store opened.
+    ///
+    /// The runner records a session id once per session rather than once per
+    /// line repeating it, and "once" is a claim about writes that no row can
+    /// answer: every write leaves the same value behind. The count is the honest
+    /// observable, so it is kept here, behind `test-util` because nothing in the
+    /// satellite reads it.
+    ///
+    /// Shared across clones, since the runner holds one handle and whatever asks
+    /// the question holds another.
+    #[cfg(feature = "test-util")]
+    session_writes: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Store {
@@ -202,7 +215,12 @@ impl Store {
             .await
             .context("failed to migrate the satellite database")?;
 
-        Ok(Self { pool, bus: None })
+        Ok(Self {
+            pool,
+            bus: None,
+            #[cfg(feature = "test-util")]
+            session_writes: std::sync::Arc::default(),
+        })
     }
 
     /// Attaches the bus that appended events are published to.
@@ -218,6 +236,25 @@ impl Store {
 
     pub(crate) fn pool(&self) -> &Pool<Sqlite> {
         &self.pool
+    }
+
+    /// Notes that a harness session id reached the database.
+    #[cfg(feature = "test-util")]
+    pub(crate) fn count_session_write(&self) {
+        self.session_writes
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// How many harness session ids have been written since this store opened.
+    ///
+    /// The observable behind "recorded once per session": a row holds the id
+    /// whether it was written once or forty times, so only the count can tell
+    /// the two apart.
+    #[cfg(feature = "test-util")]
+    #[must_use]
+    pub fn harness_session_writes(&self) -> usize {
+        self.session_writes
+            .load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 

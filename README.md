@@ -620,6 +620,8 @@ Every long-running operation has a bound, and every bound is configurable per th
 
 **The harness crashes.** Arsox captures the exit code and the last output, then restarts it once with the same context. If it dies again, the turn fails with `HARNESS_CRASHED` and everything already committed survives. In team mode only the crashed member restarts, and the commander is told what happened so it can reassign.
 
+**The harness dies after reporting its result.** The result stands. A reported result is a statement about the work, so the turn keeps it and carries on to the checkers, the messy ending is recorded as a `degraded` incident with the exit code and the output tail, and no restart is spent on repeating an answer already given. A process that died *before* reporting a result is restarted as above.
+
 **Every LLM endpoint fails.** The turn ends with `LLM_ALL_ENDPOINTS_EXHAUSTED`, and `details.attempts` records why each endpoint was given up on. The thread and its workspace are preserved, so once you add working credentials a new turn resumes from where the last one stopped.
 
 **The satellite restarts.** Threads and queues restore from the database, and workspaces restore from the volume. A turn that was in flight is marked `INTERRUPTED`. By default the thread waits for you to decide, and you can configure it to resume automatically instead.
