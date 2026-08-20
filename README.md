@@ -2,6 +2,8 @@
 
 Run a fleet of docker based, self-hosted Claude/Codex satellite workers that can ephemerally work through a job queue of given tasks and be managed through a controlled SDK channel.
 
+New here? The [quickstart](./docs/quickstart.md) goes from a clone to a first real turn in five minutes.
+
 **One typed event stream, whichever harness runs underneath.** Claude CLI and Codex CLI emit different events with different shapes. Arsox normalizes both into a single protobuf contract, so your application is written once and never rewritten when you switch harnesses, models, or providers. That normalization is the point of the project. Everything else exists to make it usable.
 
 Using polymorphism we support Claude, Codex, and other LLMs as the workers, and they can work through managed tasks from a controlling application.
