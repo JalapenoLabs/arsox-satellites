@@ -842,23 +842,31 @@ It's recommended to put your cheapest and most reliable endpoint first, and trea
 
 ### Permissions
 
-Permissions are **deterministic**. A permission that is merely written into a prompt is a suggestion, and an agent under pressure will route around a suggestion. Every control below is enforced by infrastructure the agent cannot reach: agents run as an unprivileged `arsox` user, and the enforcement points are owned by root.
+Permissions are designed to be **deterministic**. A permission that is merely written into a prompt is a suggestion, and an agent under pressure will route around a suggestion. The bar for every control in this section is enforcement by infrastructure the agent cannot reach: agents run as an unprivileged `arsox` user, and the enforcement points are owned by root.
+
+Enforced today:
 
 | Control | Default | How it is enforced |
 |---|---|---|
+| Token and cost ceilings | required | The Arsox LLM proxy, which every model request traverses. Usage is metered as it streams and the next request past a ceiling is refused before it reaches the provider. |
+| Credential isolation | always | `ARSOX_SECRET`, provider keys, and every `ARSOX_*` variable are scrubbed from the environment of every spawned process: harness, git, setup commands, and checkers alike. |
+| Timeouts | documented defaults | Exec commands, model requests, and harness idle are bounded per thread by the satellite. See [Timeouts](#timeouts). |
+| Tool permissions | working posture | Thread permission settings reach the harness as launch flags. This layer is advisory: it shapes what the harness will do, and the container is the boundary that constrains it. |
+
+On the roadmap, with the same deterministic bar:
+
+| Control | Default | How it will be enforced |
+|---|---|---|
 | Network egress | preset allowlist | The container has no default route. All traffic goes through the Arsox egress proxy, which enforces the domain list. Options: all, none, preset, custom list. |
-| Exec allowlist | preset allowlist | Harness shell calls are brokered by Arsox. Commands outside the list are rejected by exact argv match, and their binaries are not on the agent's `PATH`. |
+| Exec allowlist | preset allowlist | Harness shell calls are brokered by Arsox. Commands outside the list are rejected by exact argv match, and their binaries are not on the agent's `PATH`. Until the broker lands, the exec setting maps to advisory harness flags. |
 | Push at all | allowed | A root-owned `pre-push` hook, installed through `core.hooksPath` outside every worktree, plus a git credential helper that refuses to release credentials for a denied push. |
 | Protected branches | none | Same hook and credential helper. Blacklist `main` and no refspec, config edit, or clever remote gets around it. |
 | Secrets in pushed content | blocked | The same `pre-push` hook scans the outgoing diff. See [Secret redaction](#secret-redaction). |
 | Redaction override | available | The `override_redaction` MCP tool. Setting `allowRedactionOverride: false` unregisters the tool entirely, so no agent in the thread can reach it. |
 | PR merging | disallowed | `gh` is brokered by Arsox, which rejects merge calls that policy forbids. |
 | Filesystem writes | member scope | Unix ownership. A team member can write its own directory and the shared artifacts directory, nothing else. |
-| Token and cost ceilings | required | The Arsox LLM proxy, which every model request traverses. |
 
 Instructions written into `AGENTS.md` are **advisory**, and always will be. They shape behavior, they do not constrain it. Never rely on an `AGENTS.md` line for anything that matters if it is violated.
-
-<!-- TODO: Add more here once added! -->
 
 ### Prompt
 
