@@ -316,6 +316,13 @@ impl TempKey {
 
         write_private_file(&key.identity(), material.as_bytes())?;
 
+        // The clone runs as the agent account, so the key has to be readable by
+        // it and ssh has to be able to write its `known_hosts` beside it. The
+        // directory keeps its `0700`: handing it over narrows who can read the
+        // key to the one account that needs it rather than widening anything.
+        crate::privilege::give_to_agent(&key.directory)?;
+        crate::privilege::give_to_agent(&key.identity())?;
+
         Ok(key)
     }
 

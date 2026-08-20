@@ -900,8 +900,10 @@ impl Runner {
             ));
         }
 
+        // Handed to the agent account, because the harness that works in it runs
+        // as that account and a root-owned workspace is one it cannot write to.
         let working_dir = self.workspace_root.join(thread_id);
-        tokio::fs::create_dir_all(&working_dir)
+        crate::privilege::create_dir_for_agent(&working_dir)
             .await
             .map_err(|error| {
                 Failure::new(

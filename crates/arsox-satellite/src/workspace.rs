@@ -341,9 +341,13 @@ async fn collect_setup_failures(
     }
 }
 
-/// Creates a directory, saying which one when it cannot.
+/// Creates a directory the agent can work in, saying which one when it cannot.
+///
+/// Handed to the agent account rather than left as the satellite created it. A
+/// root satellite creating a workspace and keeping it would be handing an agent
+/// a directory it cannot write a file into.
 async fn create_directory(path: &Path) -> Result<(), WorkspaceError> {
-    tokio::fs::create_dir_all(path)
+    crate::privilege::create_dir_for_agent(path)
         .await
         .map_err(|error| WorkspaceError::Create {
             path: path.to_owned(),

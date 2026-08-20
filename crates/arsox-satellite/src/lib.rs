@@ -20,6 +20,7 @@ pub mod collector;
 pub mod commands;
 pub mod disk;
 pub mod harness;
+pub mod privilege;
 pub mod proxy;
 pub mod redaction;
 pub mod store;
@@ -550,6 +551,12 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
              requests and must not be reachable from an untrusted network."
         );
     }
+
+    // Ahead of everything the satellite goes on to do, because it decides
+    // whether any of the deterministic controls hold at all. An operator who
+    // believes they are enforcing, on a satellite where they cannot, is worse
+    // off than one running with none.
+    privilege::announce();
 
     let bus = stream::EventBus::new();
 

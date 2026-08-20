@@ -633,13 +633,21 @@ pub fn process_for(command: &HarnessCommand) -> tokio::process::Command {
     process
 }
 
-/// A process that inherits none of the satellite's own credentials.
+/// A process that inherits none of the satellite's own credentials, and none of
+/// its privilege.
 ///
 /// Shared with workspace provisioning, because `git` and a repo's setup
 /// commands are spawned by the satellite exactly as a harness is and inherit
 /// exactly the same environment unless something takes it away. One scrub, used
 /// by every spawn, is what keeps the rule from holding in one place and lapsing
 /// in the next.
+///
+/// The same reasoning puts the privilege drop here. Inside the image the
+/// satellite is root and every child of it runs as the unprivileged `arsox`
+/// account, which is what makes the enforcement points something an agent cannot
+/// rewrite. A drop applied per spawn site would be a step somebody could forget
+/// on the next one; applied here, a new spawn site inherits it by construction.
+/// See [the enforcement doc](../../../../docs/enforcement.md).
 #[must_use]
 pub fn scrubbed_command(program: &str) -> tokio::process::Command {
     let mut process = tokio::process::Command::new(program);
@@ -649,6 +657,10 @@ pub fn scrubbed_command(program: &str) -> tokio::process::Command {
             process.env_remove(&key);
         }
     }
+
+    // A no-op on a satellite that is not root, which is every bare-metal run and
+    // every test. The posture is stated once at boot rather than per spawn.
+    crate::privilege::hand_down(&mut process);
 
     process
 }
