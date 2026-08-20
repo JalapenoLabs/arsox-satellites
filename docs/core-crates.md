@@ -146,11 +146,6 @@ translation layer whose only job is to undo the choice of protobuf.
 
 ## Order
 
-`arsox-harness` exists, carries both mappers, and holds the versioned fixtures.
-What is left:
-
-1. **A spawn path for Codex**, so a satellite can drive the harness its mapper
-   already reads.
-2. **`arsox-runner`**, if and when a second consumer wants the supervision.
-
-A consumer can stop after any of them.
+`arsox-harness` exists, carries both mappers, and holds the versioned fixtures,
+and the satellite drives both harnesses. What is left is **`arsox-runner`**, if
+and when a second consumer wants the supervision.

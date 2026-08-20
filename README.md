@@ -411,9 +411,9 @@ A mapping layer that silently drops a field looks correct until somebody reconci
 
 Each supported harness carries a captured native transcript and the canonical output it must produce. Adding a harness means writing a mapper and passing the existing suite. A harness that cannot produce a valid canonical `TokenUsage` fails at build time rather than in production.
 
-**Claude is the harness a satellite spawns today.** The suite covers two: Claude and Codex, one directory per harness per pinned CLI version. Codex has a mapper and fixtures and no spawn path yet, so `GET /v1/harness` still reports Claude alone. It reports what a given satellite actually supports rather than what this repo contains, so a consumer never has to infer it.
+**The suite covers two harnesses, Claude and Codex**, one directory per harness per pinned CLI version. A satellite spawns either. `GET /v1/harness` reports what a given satellite actually supports rather than what this repo contains, so a consumer never has to infer it, and it lists a harness only when that satellite can actually run one.
 
-The canonical shapes are nonetheless designed against more than one vocabulary, because a contract derived from a single harness is that harness wearing different field names. Reading a second harness's published schema is what surfaced `reasoning_output_tokens`, confirmed that `cache_write_tokens` must be genuinely absent rather than zero for a harness with no cache-write concept, and turned rate limits from one CLI's quirk into a shape the contract carries. None of those would have been found from one transcript.
+The canonical shapes are designed against more than one vocabulary, because a contract derived from a single harness is that harness wearing different field names. The second harness is what surfaced `reasoning_output_tokens`, confirmed that `cache_write_tokens` must be genuinely absent rather than zero for a harness with no cache-write concept, and turned rate limits from one CLI's quirk into a shape the contract carries. None of those would have been found from one transcript.
 
 This suite is the normalization claim expressed as tests. It is what makes "swap the harness, keep your code" a guarantee instead of an intention, and it is worth writing alongside the proto rather than after it.
 
@@ -852,15 +852,15 @@ They compose freely, which is the interesting part. You can run an Anthropic mod
 
 #### The harness axis
 
-The Claude CLI harness is implemented and is the default. Codex is next on this axis: its mapper and its conformance fixtures are written, and what remains is the spawn path that lets a satellite drive it.
+Claude and Codex are both implemented, and Claude is the default a thread gets when it names none. A satellite spawns whichever the thread asked for, and offers Codex only when the image it is running actually has the CLI installed.
 
-Adding a harness is a satellite-side change: write the mapper from its native events into the canonical shapes and pass the [conformance suite](#conformance-tests). Nothing in your application changes, and no SDK release is required to make an existing consumer work with a new harness. That is the property worth protecting, and it is why the axis exists even while one harness occupies it. Gemini CLI, Grok CLI, and Kimi CLI are all plausible additions, because each has behavior that makes it worth choosing for a given job.
+Adding a harness is a satellite-side change: write the mapper from its native events into the canonical shapes and pass the [conformance suite](#conformance-tests). Nothing in your application changes, and no SDK release is required to make an existing consumer work with a new harness. That is the property worth protecting. Gemini CLI, Grok CLI, and Kimi CLI are all plausible additions, because each has behavior that makes it worth choosing for a given job.
 
 #### Harness capabilities
 
 Shapes are not the whole contract. A harness might have no plan mode, or no sub-agents, and a consumer that swapped harnesses would otherwise discover that by absence, three turns into a run.
 
-`GET /v1/harness` reports what the active harness actually supports, so the SDK can check up front instead of inferring from silence. It is also the honest place to say "this harness cannot do that," rather than accepting a setting and quietly emitting nothing.
+`GET /v1/harness` reports what each harness this satellite offers actually supports, so the SDK can check up front instead of inferring from silence. It is also the honest place to say "this harness cannot do that," rather than accepting a setting and quietly emitting nothing. The two differ today: Codex has no native plan mode, no sub-agents, and no context fork, and the endpoint says so per harness rather than leaving a consumer to find out mid-run. The [harness doc](./docs/harness.md) carries the table and the reasoning behind each row.
 
 #### The model axis
 
