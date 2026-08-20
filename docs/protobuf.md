@@ -28,7 +28,7 @@ proto/
     harness/v1/    harness             Harness, HarnessCapabilities
     settings/v1/   settings            ThreadSettings, the index into the rest
                    budget              Budget
-                   model               ModelEndpoint, LlmAuth, RetryPolicy
+                   model               ModelEndpoint, LlmAuth, CredentialPresentation, RetryPolicy
                    repo                GitAuth, AgentsRepo, Repo
                    service             Service, ReadinessProbe, ServiceIsolation
                    team                TeamMode
