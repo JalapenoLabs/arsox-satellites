@@ -188,5 +188,3 @@ wrappers `protobuf.md` already plans rather than in one SDK on its own.
   satellite is handled rather than surfaced.
 - **`arsox-testkit`**, a fake satellite so a consumer can test their integration
   without running a container.
-- **Node CI**, building and testing `sdks/node` on a runner with 8080 free.
-  Nothing runs it automatically yet.

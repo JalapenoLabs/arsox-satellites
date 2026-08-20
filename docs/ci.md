@@ -25,6 +25,7 @@ checksum-verified each run.
 |---|---|---|
 | Proto | `.github/workflows/proto.yml` | pushes and PRs touching `proto/` or either generated output root |
 | Rust | `.github/workflows/rust.yml` | pushes and PRs touching `crates/`, the workspace manifest, or the toolchain pin |
+| Node | `.github/workflows/node.yml` | pushes and PRs touching `sdks/node/`, `gen/ts/`, `crates/`, the workspace manifest, or the toolchain pin |
 | Docker | `.github/workflows/docker.yml` | pushes and PRs touching the `Dockerfile`, `crates/`, the workspace manifest, or the toolchain pin |
 
 Each workflow is path-filtered, so editing a README never queues a proto build.
@@ -105,6 +106,31 @@ Three checks then cover what a plain `cargo test` misses:
   outside the package directory, missing metadata, a path dependency with no
   version. It caught a declared-but-absent README the first time it ran.
 
+## Node
+
+The Node workflow proves the published package builds and that it still drives a
+satellite. Those are two claims, and the second is the one worth paying for: the
+integration tests spawn the real satellite binary with its `test-util` fake
+harness and exercise the SDK from a consumer's seat, so anything the SDK needs
+and cannot reach shows up here rather than in somebody's application.
+
+That is why the job builds `arsox-satellite` with `--features test-util` before
+it installs a package, and why its path filter watches `crates/` as well as
+`sdks/node/` and `gen/ts/`. A satellite change can break the SDK without touching
+a line of TypeScript. The build is a debug build, because debug is the path the
+suite spawns; a release build would be a second compile of a binary nothing here
+runs.
+
+`corepack prepare` pins yarn to the exact version in `packageManager`, and the
+step asserts it, so a runner carrying a different yarn fails loudly rather than
+resolving the lockfile with a different resolver. `yarn install --immutable`
+then fails on a lockfile the install would have changed.
+
+Each satellite the suite starts takes its own port through `ARSOX_PORT`, picked
+by binding port 0 and releasing it. Two jobs on one runner cannot collide, and
+the suite never skips itself for a busy port, so a green run means the tests ran
+rather than stood aside.
+
 ## Docker
 
 The image workflow builds the Ubuntu satellite image and then boots it. The two
@@ -123,8 +149,8 @@ not a CI step, and lands with the release automation.
 
 ## Roadmap
 
-- **SDK builds** for TypeScript and Python, each consuming `gen/` rather than
-  regenerating it.
+- **The Python SDK build**, consuming `gen/` rather than regenerating it, the
+  way the Node job does.
 - **Conformance suite** once harness mappers exist. That is the job that proves
   the normalization claim, so it belongs in CI from the day the first mapper
   lands.
