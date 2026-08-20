@@ -1,0 +1,117 @@
+# Copyright © 2026 Jalapeno Labs
+
+# The Python SDK. Its integration tests drive a real satellite rather than a mock
+# of the HTTP layer, so this job builds the binary they spawn before it installs
+# a single package. That is also why it watches `crates/`: a satellite change can
+# break the SDK without touching a line of Python.
+name: Python
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'sdks/python/**'
+      - 'gen/python/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/python.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'sdks/python/**'
+      - 'gen/python/**'
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'rust-toolchain.toml'
+      - '.github/workflows/python.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    name: Lint, typecheck, and test the Python SDK
+    runs-on: [ linux, rocky9, flagship, earthly, docker ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      # rustup reads rust-toolchain.toml and installs the exact pinned version,
+      # so the toolchain is pinned in one place rather than here and there.
+      - name: Install the pinned toolchain
+        run: |
+          set -euo pipefail
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
+
+      # The integration suite spawns `target/debug/arsox-satellite` with the
+      # `test-util` fake harness. Debug rather than release, because debug is the
+      # path the suite looks for, and a release build would be a second compile
+      # of a binary nothing here runs. Lints are the Rust workflow's job.
+      - name: Build the satellite the integration tests spawn
+        run: cargo build -p arsox-satellite --features test-util
+
+      # The interpreter is named by minor version rather than as plain `python3`.
+      # This pool runs Rocky 9, whose `python3` is 3.9, and the package requires
+      # 3.10 or newer, so `python3` would fail somewhere inside pip rather than
+      # here with a reason. The check ahead of the venv is what supplies the
+      # reason when the interpreter is missing entirely.
+      #
+      # Nothing below activates the environment. Each step is its own shell, so
+      # an activation would not survive to the next one, and every command that
+      # follows names `.venv/bin/python` instead.
+      - name: Create the virtual environment
+        working-directory: sdks/python
+        run: |
+          set -euo pipefail
+          # Run it rather than only resolve the name, so a shim pointing at an
+          # interpreter that is no longer there fails here with a sentence
+          # instead of two steps later with a traceback. It also puts the exact
+          # patch version in the log.
+          if ! python3.12 --version; then
+            echo 'python3.12 did not run on this runner.' >&2
+            echo 'arsox-sdk requires Python 3.10 or newer and this pool ships 3.9 as python3, so the workflow names python3.12 explicitly. Install it on the runner.' >&2
+            exit 1
+          fi
+          python3.12 -m venv .venv
+          .venv/bin/python --version
+
+      # Every version installed here, dev tools included, is pinned exactly in
+      # pyproject.toml, so ruff and mypy report the same findings on a runner
+      # that they report on a laptop.
+      - name: Install the package and its pinned dev tools
+        working-directory: sdks/python
+        run: .venv/bin/python -m pip install -e ".[dev]"
+
+      # `gen/python` is the one committed copy of the contract, and the package's
+      # own copy is git ignored and rebuilt here. So it cannot be stale, and
+      # nothing below can import without it.
+      - name: Sync the generated contract
+        working-directory: sdks/python
+        run: .venv/bin/python scripts/sync_proto.py
+
+      - name: Lint
+        working-directory: sdks/python
+        run: .venv/bin/python -m ruff check .
+
+      - name: Typecheck
+        working-directory: sdks/python
+        run: .venv/bin/python -m mypy
+
+      # The unit tests need nothing. The integration tests spawn the satellite
+      # built above, each on a port of its own through `ARSOX_PORT`, so this job
+      # collides with nothing else on the runner and never skips itself for a
+      # busy port.
+      - name: Test
+        working-directory: sdks/python
+        run: .venv/bin/python -m pytest
