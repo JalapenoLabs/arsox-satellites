@@ -41,6 +41,15 @@
 //! **A thread with no secrets costs one branch.** The automaton is absent
 //! rather than empty, and every entry point returns before it looks at the text.
 //!
+//! # Credentials are also a field, not only text
+//!
+//! Everything above masks text a secret might appear in. [`scrub_settings`] is
+//! the other half: it masks the credentials a thread's settings carry as typed
+//! `Secret` fields, on their way back out through an API response. Same masking,
+//! different door, and it is called at the response boundary rather than where
+//! settings are decoded, because the provisioner and the spawn read the same
+//! stored settings to do real work with a live credential.
+//!
 //! # What this module is not
 //!
 //! It is the scanning and masking engine and its wiring into the paths that
