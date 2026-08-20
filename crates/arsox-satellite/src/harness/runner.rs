@@ -1104,7 +1104,7 @@ impl Runner {
             // than on a timer is what attributes each of them to this turn: a
             // refusal carries no turn id of its own, and this is the one place
             // that knows which turn was running when it happened.
-            self.report_denials(claimed, context).await;
+            self.report_denials(claimed).await;
 
             let consumed = consumed?;
 
@@ -2056,13 +2056,12 @@ impl Runner {
     ///
     /// Not retryable. The same argv meets the same allowlist next time, and a
     /// caller told to retry would be told to retry forever.
-    async fn report_denials(&self, claimed: &ClaimedTurn, context: &TurnContext) {
-        // A thread with no shim directory has no spool, so this costs it one
-        // absent-path read that the drain already answers with nothing.
-        if context.shims.is_none() {
-            return;
-        }
-
+    /// Drained for every thread rather than only for a brokered one. A thread
+    /// with no shim directory has no spool, which costs one absent-path read
+    /// that the drain already answers with nothing, and skipping it would be a
+    /// special case whose only effect is to make the reporting path unreachable
+    /// from a test.
+    async fn report_denials(&self, claimed: &ClaimedTurn) {
         for denial in self.broker.drain_denials(&claimed.turn.thread_id).await {
             let mut fields = std::collections::BTreeMap::new();
             fields.insert(

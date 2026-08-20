@@ -62,6 +62,29 @@ const POLICY_FILE: &str = "policy.json";
 /// file, so what a thread actually runs under is readable rather than inferred.
 const HARNESS_RUNTIME: [&str; 2] = ["node", "env"];
 
+/// The harness CLIs themselves, resolved as this satellite would launch them.
+///
+/// The satellite spawns the harness by name, so a policy that refused it would
+/// refuse the turn rather than restrict it. Taken from the same resolution the
+/// spawner uses, so a satellite pointed at a stand-in through `ARSOX_CLAUDE_BIN`
+/// puts that stand-in's name on the floor: an override naming an absolute path
+/// bypasses `PATH` entirely, and one naming a bare command needs a shim like any
+/// other name.
+fn harness_names() -> Vec<String> {
+    [
+        crate::harness::spawn::claude_binary(),
+        crate::harness::spawn::codex_binary(),
+    ]
+    .iter()
+    .filter_map(|program| {
+        Path::new(program)
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .map(str::to_owned)
+    })
+    .collect()
+}
+
 /// Shells added to the floor for a thread that named its commands.
 ///
 /// A harness runs an allowed command *through* a shell, so a policy that took
@@ -224,16 +247,11 @@ impl Policy {
 
             // No commands at all, so no shell on the floor either. What the
             // harness needs to run is all that resolves.
-            ExecAccess::None => HARNESS_RUNTIME.iter().copied().map(str::to_owned).collect(),
+            ExecAccess::None => floor(&[]),
 
             // The allowed commands run through a shell, so the shell is part of
             // being able to run them.
-            ExecAccess::Custom => HARNESS_RUNTIME
-                .iter()
-                .chain(SHELLS.iter())
-                .copied()
-                .map(str::to_owned)
-                .collect(),
+            ExecAccess::Custom => floor(&SHELLS),
         };
 
         // `allowed_commands` is additive on top of whatever base `exec` set,
@@ -293,6 +311,22 @@ impl Policy {
 
         names
     }
+}
+
+/// The names that resolve whatever a policy says, plus `also`.
+///
+/// One list rather than a set, and it may hold a name twice if a satellite is
+/// pointed at a stand-in harness called `node`. A duplicate on the floor costs
+/// one redundant comparison and is not worth a set's ordering surprise in a file
+/// a human reads.
+fn floor(also: &[&str]) -> Vec<String> {
+    HARNESS_RUNTIME
+        .iter()
+        .chain(also.iter())
+        .copied()
+        .map(str::to_owned)
+        .chain(harness_names())
+        .collect()
 }
 
 /// Whether one allowlist entry permits an invocation.
@@ -628,11 +662,16 @@ mod tests {
     #[test]
     fn a_thread_with_no_commands_still_gets_what_the_harness_needs_to_start() {
         // A policy that took `node` away from a Node CLI would not be a
-        // restricted agent, it would be a satellite that cannot run a turn.
+        // restricted agent, it would be a satellite that cannot run a turn. The
+        // harness itself is on the floor for the same reason: the satellite
+        // spawns it by name.
         let policy = policy(ExecAccess::None, &[]).expect("brokered");
 
         assert!(policy.permits("node", &arguments(&["--version"])));
         assert!(policy.permits("env", &arguments(&["node"])));
+        assert!(policy.permits("claude", &arguments(&["--print"])));
+        assert!(policy.permits("codex", &arguments(&["exec"])));
+
         assert!(!policy.permits("git", &arguments(&["push"])));
     }
 

@@ -37,11 +37,15 @@ fn main() -> Result<()> {
         arsox_satellite::broker::shim::run(&invocation);
     }
 
-    serve()
+    satellite()
 }
 
+/// Boots the runtime and runs the satellite.
+///
+/// Named apart from the library's `serve` it eventually calls, so the two are
+/// not one word meaning two things one line apart.
 #[tokio::main]
-async fn serve() -> Result<()> {
+async fn satellite() -> Result<()> {
     // The container healthcheck runs this same binary rather than curl, so the
     // runtime image carries no HTTP client it would otherwise only need in order
     // to ask itself whether it is alive.

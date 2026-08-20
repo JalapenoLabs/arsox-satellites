@@ -150,6 +150,7 @@ is not a restricted agent:
 |---|---|---|
 | `node` | every brokered thread | the Claude CLI is a Node program; without it no turn runs at all |
 | `env` | every brokered thread | its `#!/usr/bin/env node` shebang resolves `node` through `PATH` |
+| `claude`, `codex` | every brokered thread | the satellite launches the harness by name, and a policy that refused it would refuse the turn |
 | `sh`, `bash` | `CUSTOM` only | the harness runs an allowed command *through* a shell, so a policy that took the shell away would refuse every command it had just permitted |
 
 Under `NONE` the shell is deliberately not on the floor. It is a deny shim like
@@ -160,6 +161,38 @@ silence.
 
 The floor is written into the policy file, so what a thread is actually running
 under is readable rather than inferred.
+
+### When the directory is built
+
+**At the start of every turn**, in the runner, and nowhere else.
+
+Building it once at thread creation would be cheaper and is wrong in a way that
+fails quietly. The shim directories live under `/opt/arsox/threads`, which is
+deliberately not a volume, so a container replacement leaves nothing there. A
+thread resumed on the new container would come up unbrokered, look perfectly
+healthy, and run with the full `PATH` its policy said it should not have. Every
+turn re-asserting the policy closes that, and it means a thread runs under the
+allowlist it has now rather than the one it was created with.
+
+The rebuild is skipped when the policy already written matches the policy the
+settings resolve to, so an unchanged thread pays for one directory read per turn
+rather than a file per command name in the image. The deny spool survives a
+rebuild either way: a refusal recorded a moment ago is evidence, not stale state.
+
+`ARSOX_BROKER_ROOT` moves the root, which is what a bare-metal run or a test
+does. It defaults to `/opt/arsox/threads`.
+
+### Exit codes a shim uses
+
+| Code | Meaning |
+|---|---|
+| 126 | the policy refused it, which is the shell's own "found and could not be run" |
+| 127 | it was allowed and this image does not carry it |
+| 125 | the shim could not read its own policy, which is a satellite fault rather than a permission decision |
+
+Distinct on purpose: an agent reading its own tool output can tell a refusal from
+a missing command without parsing a message, and an operator seeing 125 should
+look at the shim directory rather than at the allowlist.
 
 ### Denial is reported, not silent
 
@@ -300,13 +333,22 @@ on Windows. So the layers are split deliberately:
   whom given a uid and an `/etc/passwd`, which threads engage the broker, what
   the shim set computes to for a policy, whether an argv is permitted, what the
   preset contains, and the spool record round trip.
-- **Installation and draining are integration-tested on Unix**, against a
-  temporary directory, without root. Ownership is a parameter rather than a
-  hard-coded call, so the same code path runs in the test with no account to
-  chown to and in production with one.
-- **The drop itself and the shebang exec need Linux and root**, so they are
-  proven by the container: the Docker workflow boots the image and asserts the
-  satellite runs as root while a spawned probe lands as `arsox`.
+- **Installation and draining are tested on Unix**, against a temporary
+  directory, without root. Installation sets no ownership at all: every path in a
+  shim directory is owned by whoever built it, which in the image is the
+  satellite and therefore root. What it sets is the three modes, and those are
+  the same three whether a test builds the directory or a satellite does, so the
+  whole mechanism runs on an ordinary Linux CI runner.
+- **The drop itself and the shebang exec need Linux and root.** The Docker
+  workflow boots the image and asserts that PID 1 runs as uid 0 and that the
+  satellite reported `satellite.boot.enforcement_ready`, which is the posture
+  every spawn then applies.
+
+  **Not asserted in CI**, and worth saying rather than implying: the uid a
+  spawned child actually lands on, and a real command going through a real shim.
+  Observing either means driving a turn inside the container, which is a longer
+  smoke than the build workflow is. A turn-driving container smoke is the test
+  that would close it.
 
 ## Roadmap
 

@@ -46,9 +46,19 @@ jobs:
         run: docker build --tag arsox-satellite:ci-${{ github.sha }} .
 
       # A compile proves the builder stage. Booting proves the runtime stage:
-      # the binary starts as the unprivileged user, finds every library it
-      # links, and serves liveness. A missing shared object or a broken
-      # entrypoint passes the build and fails only here.
+      # the binary starts, finds every library it links, and serves liveness. A
+      # missing shared object or a broken entrypoint passes the build and fails
+      # only here.
+      #
+      # It also proves the part of the enforcement layer that needs Linux and
+      # root, and therefore cannot be proven by the Rust suite: the satellite
+      # boots as root and resolves the agent account it hands children down to.
+      # Both have to hold, and a satellite that is not root enforces nothing.
+      #
+      # The uid a spawned child actually lands on is not asserted here, because
+      # observing one means driving a turn, which is a longer smoke than this
+      # step is. It is covered by the unit tests on the decision plus the boot
+      # line below, and a turn-driving smoke is worth adding on its own.
       - name: Boot the image and check liveness
         run: |
           set -euo pipefail
@@ -59,17 +69,42 @@ jobs:
             arsox-satellite:ci-${{ github.sha }})
           trap 'docker stop "$container" > /dev/null' EXIT
 
+          live=""
           for _ in $(seq 1 30); do
             if curl --silent --fail http://127.0.0.1:18080/healthz > /dev/null; then
-              echo "satellite is live"
-              exit 0
+              live="yes"
+              break
             fi
             sleep 1
           done
 
-          echo "satellite never became live" >&2
-          docker logs "$container" >&2
-          exit 1
+          if [ -z "$live" ]; then
+            echo "satellite never became live" >&2
+            docker logs "$container" >&2
+            exit 1
+          fi
+          echo "satellite is live"
+
+          # Read off PID 1 rather than off `docker exec`, which reports the
+          # image's configured user rather than the identity the satellite
+          # actually booted under. Through /proc rather than `ps`, which the
+          # runtime image has no reason to carry.
+          entrypoint_uid=$(docker exec "$container" sh -c "grep '^Uid:' /proc/1/status | cut -f2")
+          if [ "$entrypoint_uid" != "0" ]; then
+            echo "the satellite booted as uid $entrypoint_uid, so nothing it owns is beyond an agent's reach" >&2
+            exit 1
+          fi
+
+          # The boot log states the posture it resolved. Root without the agent
+          # account enforces nothing either, and says so rather than dropping
+          # decoratively.
+          if ! docker logs "$container" 2>&1 | grep -q "satellite.boot.enforcement_ready"; then
+            echo "the satellite did not report a working enforcement posture" >&2
+            docker logs "$container" >&2
+            exit 1
+          fi
+
+          echo "satellite runs as root and reports enforcement ready"
 
       # The image is rebuilt from scratch next run either way; leaving CI tags
       # behind on a persistent runner just accumulates disk.

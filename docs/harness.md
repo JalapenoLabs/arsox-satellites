@@ -391,14 +391,22 @@ thread's permissions onto flags to close that.
 
 **These flags are advisory.** The harness applies them to itself, exactly as
 `AGENTS.md` shapes behavior without constraining it. An agent granted a shell
-reaches everything the container reaches, whatever else the flags say.
+reaches everything its `PATH` reaches, whatever else the flags say.
 
-The deterministic layer the README describes is separate, unbuilt work: the exec
-broker that rejects a command by exact argv, the egress proxy the container has
-no route around, the root-owned `pre-push` hook. **Until those land the container
-is the only real boundary**, and none of them is something `--permission-mode`
-can switch off, so they will enforce underneath these flags rather than through
-them.
+**What its `PATH` reaches is the deterministic half, and half of it is now
+real.** A thread that declares `exec: NONE` or `exec: CUSTOM` runs with a
+root-owned shim directory as its whole `PATH`: a command outside the allowlist
+is refused with `PERMISSION_COMMAND_DENIED` and a `blocked` incident carrying
+its argv, and no flag here switches that off. Agents run as an unprivileged
+account and the shim directory is owned by root, so it enforces underneath these
+flags rather than through them. It shapes name resolution and not much more, and
+[the enforcement doc](./enforcement.md) states exactly what that does and does
+not stop.
+
+The other two deterministic controls are still unbuilt: the egress proxy the
+container has no route around, and the root-owned `pre-push` hook. **For `web`
+and for push policy the container remains the only boundary**, and both will
+enforce underneath these flags for the same reason the broker does.
 
 **The decision is derived once and rendered twice.** `Posture` in `spawn.rs`
 holds what the thread asked for, and each harness arm says what its own CLI
@@ -415,6 +423,13 @@ one setting, and two of anything is one more thing that can disagree.
 | always | | `-c approval_policy=never` |
 | `web`, `additional_domains` | none | none |
 | `allow_git_push`, `protected_branches` | none | none |
+
+`NONE` and `CUSTOM` also engage the exec broker, which is what makes the row
+above them more than a suggestion. `PRESET` and an undeclared `exec` do not: the
+contract makes the two the same thing, so brokering them would change the default
+for every thread that never asked for a policy. The curated preset list is
+defined in `broker::PRESET_COMMANDS` regardless, so that change has one
+definition to reach for rather than one invented at the time.
 
 Three decisions in that table are worth their reasoning.
 
@@ -640,9 +655,9 @@ advertised one it cannot run would have a caller learn the truth as
   `skipped_by_commander`, so a check the agents deliberately accept is reported
   as accepted rather than as unfixed. A skip applies to one turn and never
   carries into the next.
-- **Deterministic permission enforcement.** The exec broker, the egress proxy,
-  and the root-owned `pre-push` hook. The flags above are advisory until these
-  exist, and they remain advisory afterward: these enforce underneath them.
+- **The rest of deterministic permission enforcement.** The exec broker is
+  built; the egress proxy and the root-owned `pre-push` hook are not. The flags
+  above stay advisory either way: these enforce underneath them.
 - **Codex over its app-server protocol.** It exposes command, patch, and network
   approvals as first-class requests, which is a better fit for the permission
   model than a one-way event stream, and is what would let `allowed_commands`

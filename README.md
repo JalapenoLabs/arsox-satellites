@@ -918,20 +918,23 @@ Enforced today:
 | Token and cost ceilings | required | The Arsox LLM proxy, which every model request traverses. Usage is metered as it streams and the next request past a ceiling is refused before it reaches the provider. |
 | Credential isolation | always | `ARSOX_SECRET`, provider keys, and every `ARSOX_*` variable are scrubbed from the environment of every spawned process: harness, git, setup commands, and checkers alike. |
 | Timeouts | documented defaults | Exec commands, model requests, and harness idle are bounded per thread by the satellite. See [Timeouts](#timeouts). |
-| Tool permissions | working posture | Thread permission settings reach the harness as launch flags. This layer is advisory: it shapes what the harness will do, and the container is the boundary that constrains it. |
+| Tool permissions | working posture | Thread permission settings reach the harness as launch flags. This layer is advisory: it shapes what the harness will do, and the exec broker below is what constrains it. |
+| Exec allowlist | preset, unbrokered | A thread that declares `exec: NONE` or `exec: CUSTOM` runs with a root-owned shim directory as its whole `PATH`. Commands outside the allowlist are refused by exact argv match, reported as `PERMISSION_COMMAND_DENIED`, and recorded as `blocked` incidents. Agents are unprivileged and the shims are root-owned, so no flag or prompt reaches them. **Scope, stated plainly**: this shapes name resolution, so an absolute path still runs and an allowed interpreter still executes anything. `PRESET` and an undeclared `exec` keep the full `PATH`. See [Deterministic enforcement](./docs/enforcement.md). |
+| Privilege separation | always, in the image | The satellite runs as root and every process it spawns drops to the unprivileged `arsox` account: harness, `git`, setup commands, and checkers. Off root, the deterministic layer does not engage and boot says so. |
 
 On the roadmap, with the same deterministic bar:
 
 | Control | Default | How it will be enforced |
 |---|---|---|
 | Network egress | preset allowlist | The container has no default route. All traffic goes through the Arsox egress proxy, which enforces the domain list. Options: all, none, preset, custom list. |
-| Exec allowlist | preset allowlist | Harness shell calls are brokered by Arsox. Commands outside the list are rejected by exact argv match, and their binaries are not on the agent's `PATH`. Until the broker lands, the exec setting maps to advisory harness flags. |
 | Push at all | allowed | A root-owned `pre-push` hook, installed through `core.hooksPath` outside every worktree, plus a git credential helper that refuses to release credentials for a denied push. |
 | Protected branches | none | Same hook and credential helper. Blacklist `main` and no refspec, config edit, or clever remote gets around it. |
 | Secrets in pushed content | blocked | The same `pre-push` hook scans the outgoing diff. See [Secret redaction](#secret-redaction). |
 | Redaction override | available | The `override_redaction` MCP tool. Setting `allowRedactionOverride: false` unregisters the tool entirely, so no agent in the thread can reach it. |
 | PR merging | disallowed | `gh` is brokered by Arsox, which rejects merge calls that policy forbids. |
 | Filesystem writes | member scope | Unix ownership. A team member can write its own directory and the shared artifacts directory, nothing else. |
+| Exec allowlist under `PRESET` | preset allowlist | The curated list is defined; bringing it under the broker changes the default for every thread that declared nothing, so it gets its own change. |
+| Exec beyond `PATH` | shim directory | A mount namespace per thread, which is what would stop an absolute path rather than documenting it. |
 
 Instructions written into `AGENTS.md` are **advisory**, and always will be. They shape behavior, they do not constrain it. Never rely on an `AGENTS.md` line for anything that matters if it is violated.
 
