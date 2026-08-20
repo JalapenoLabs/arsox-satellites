@@ -361,6 +361,10 @@ carries the flag to the spawn boundary and writes its own `Debug`, so the turn's
 proxy token and every declared credential are masked in any log line that
 formats a command, while a value the caller marked public reads plainly.
 
+The same rule decides what the thread's redactor indexes, so a secret an agent
+prints back is masked out of every event, result, and incident the turn produces.
+See [the redaction doc](./redaction.md).
+
 The same list reaches a repo's setup commands, because `yarn install` needs the
 registry token for exactly the reason the agent that runs it later does.
 

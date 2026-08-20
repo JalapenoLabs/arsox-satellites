@@ -195,9 +195,14 @@ commands, so an install authenticates to a private registry exactly as the agent
 working in that checkout afterwards does. They are the same list, refused by the
 same rule, and `docs/harness.md` carries it.
 
-Anything reaching tracing or an incident is redacted twice over: a credential
-somebody wrote into a URL themselves is masked by pattern, and a token Arsox was
-given is masked by value.
+Anything reaching tracing or an incident is redacted three times over: the
+thread's own secrets are masked by the shared engine, a credential somebody wrote
+into a URL themselves is masked by pattern, and the token this clone was lent is
+masked by the code that staged it. See [the redaction doc](./redaction.md#two-maskings-that-are-not-the-engine-and-stay)
+for why the last of those stays once the first exists.
+
+A setup command's captured output is masked as it is captured, in
+`commands::execute`, so the incident carrying it was never holding anything else.
 
 ## Roadmap
 
