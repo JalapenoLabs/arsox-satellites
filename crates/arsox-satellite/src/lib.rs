@@ -16,6 +16,7 @@
 //! explicitly with `ARSOX_ALLOW_INSECURE=true`, which warns loudly on every boot.
 
 mod api;
+pub mod broker;
 pub mod collector;
 pub mod commands;
 pub mod disk;

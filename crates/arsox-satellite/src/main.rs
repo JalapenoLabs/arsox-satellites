@@ -5,6 +5,15 @@
 //! Deliberately thin. It installs an allocator, starts tracing, and hands off to
 //! the library beside it, which is where everything the satellite actually does
 //! lives and where it can be exercised without a running process.
+//!
+//! # It is also every exec shim
+//!
+//! A brokered thread's `PATH` is a directory of shebang scripts naming this
+//! binary as their interpreter, so a command an agent types arrives here. That
+//! branch is taken before the runtime is built and before anything is
+//! configured: a shim reads one file, decides, and `exec`s, and paying for a
+//! multi-threaded runtime on the way would put that cost on every command an
+//! agent runs. See [the enforcement doc](../../../docs/enforcement.md).
 
 use anyhow::{Result, bail};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -18,8 +27,21 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 /// How long the container healthcheck waits before calling the process dead.
 const HEALTH_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
+fn main() -> Result<()> {
+    // Ahead of the runtime, because this process may not be a satellite at all:
+    // a brokered thread's PATH is full of shebang scripts naming this binary,
+    // so an agent's `git status` lands here. A shim reads one file, decides,
+    // and execs, and it never returns.
+    let arguments: Vec<String> = std::env::args().collect();
+    if let Some(invocation) = arsox_satellite::broker::shim::invoked_as(&arguments) {
+        arsox_satellite::broker::shim::run(&invocation);
+    }
+
+    serve()
+}
+
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn serve() -> Result<()> {
     // The container healthcheck runs this same binary rather than curl, so the
     // runtime image carries no HTTP client it would otherwise only need in order
     // to ask itself whether it is alive.
