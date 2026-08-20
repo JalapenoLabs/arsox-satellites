@@ -308,8 +308,9 @@ fn map_model_usage(event: &Value) -> Vec<ModelStatistics> {
                 cache_write_tokens: stats
                     .get("cacheCreationInputTokens")
                     .and_then(Value::as_u64),
-                // This harness folds reasoning into output rather than reporting
-                // it separately, so the field is absent rather than zero.
+                // The per-model object carries no reasoning breakdown even in a
+                // version whose run total does, so this is absent rather than
+                // zero: nobody counted it per model.
                 reasoning_output_tokens: None,
             }),
             cost: Some(CostEstimate {
@@ -346,7 +347,16 @@ fn token_usage(usage: &Value) -> TokenUsage {
         cache_write_tokens: usage
             .get("cache_creation_input_tokens")
             .and_then(Value::as_u64),
-        reasoning_output_tokens: None,
+
+        // Broken out of output rather than folded into it, which is the
+        // distinction a consumer reconciling a bill needs. A reported zero is
+        // kept: the CLI has the concept and nothing is what the turn measured.
+        // Absence stays absence, because 2.1.221 has no such field at all and a
+        // zero there would claim the run did no reasoning rather than that
+        // nobody counted it.
+        reasoning_output_tokens: usage
+            .pointer("/output_tokens_details/thinking_tokens")
+            .and_then(Value::as_u64),
     }
 }
 
@@ -549,6 +559,17 @@ mod tests {
         }
 
         #[test]
+        fn reasoning_tokens_are_absent_because_this_version_reports_none() {
+            // 2.1.221 has no `output_tokens_details` at all, so absence here is
+            // "nobody counted it" rather than "the run did no reasoning". The
+            // 2.1.237 recording reports the same turn shape with a count, which
+            // is the difference keeping both versions is for.
+            let result = result_of(TOOL_CALL_TRANSCRIPT);
+
+            assert_eq!(result.tokens.reasoning_output_tokens, None);
+        }
+
+        #[test]
         fn cache_tokens_are_reported_beside_input_rather_than_inside_it() {
             let result = result_of(TOOL_CALL_TRANSCRIPT);
 
@@ -689,6 +710,33 @@ mod tests {
             };
 
             assert_eq!(thinking.text, "");
+        }
+
+        #[test]
+        fn thinking_tokens_are_reported_rather_than_folded_into_output() {
+            // The recording is what corrected this. The mapper reported absence
+            // unconditionally, saying in a comment that the harness folds
+            // reasoning into output, and that stopped being true: 2.1.237 breaks
+            // it out under `output_tokens_details`. Reporting absence anyway
+            // loses a count in a billing-adjacent number, since reasoning is
+            // usually billed at the output rate.
+            assert_eq!(
+                result_of(MULTI_MESSAGE_TRANSCRIPT)
+                    .tokens
+                    .reasoning_output_tokens,
+                Some(22)
+            );
+
+            // A turn that reasoned nothing reports a zero, and the zero is kept:
+            // the CLI has the concept and nothing is what it measured. That is a
+            // different fact from the older version having no field at all, and
+            // the contract distinguishes them.
+            assert_eq!(
+                result_of(PLAIN_TEXT_TRANSCRIPT)
+                    .tokens
+                    .reasoning_output_tokens,
+                Some(0)
+            );
         }
 
         #[test]

@@ -204,7 +204,7 @@
       "cache_write_tokens": 9034,
       "input_tokens": 4,
       "output_tokens": 109,
-      "reasoning_output_tokens": null,
+      "reasoning_output_tokens": 22,
       "total_tokens": 113
     }
   }

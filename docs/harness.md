@@ -53,6 +53,18 @@ member id in the native stream, so one is derived from `parent_tool_use_id`.
 Deriving is what keeps that field out of the contract: a consumer sees a stable
 member id and never learns which harness produced its stream.
 
+Two more are worth knowing, and both were found by recording a second version:
+
+**Reasoning tokens are broken out, in newer versions only.** 2.1.237 reports
+`usage.output_tokens_details.thinking_tokens`; 2.1.221 has no such field.
+`reasoning_output_tokens` therefore carries a count wherever the CLI reports one,
+a genuine zero included, and stays absent where the CLI reports nothing. Absent
+and zero say different things and the contract keeps them apart.
+
+**A failed run carries no `result`.** The reason arrives in an `errors` array
+instead. Reading only `result` reports a failed turn with an empty summary, which
+is the turn's own explanation of itself lost.
+
 ## Where the Codex shape disagrees
 
 Codex models a run as a thread holding turns, and a turn as a list of *items*.

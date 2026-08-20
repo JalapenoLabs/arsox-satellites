@@ -32,7 +32,7 @@
       "cache_write_tokens": 0,
       "input_tokens": 0,
       "output_tokens": 0,
-      "reasoning_output_tokens": null,
+      "reasoning_output_tokens": 0,
       "total_tokens": 0
     }
   }

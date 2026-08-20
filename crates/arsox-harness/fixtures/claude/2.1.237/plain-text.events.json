@@ -123,7 +123,7 @@
       "cache_write_tokens": 33850,
       "input_tokens": 2,
       "output_tokens": 10,
-      "reasoning_output_tokens": null,
+      "reasoning_output_tokens": 0,
       "total_tokens": 12
     }
   }
