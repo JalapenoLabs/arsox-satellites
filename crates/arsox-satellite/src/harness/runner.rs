@@ -398,6 +398,12 @@ impl Runner {
             }
         };
 
+        // Counted once, here, rather than inside `assemble`. This is the one
+        // point every ending passes through, and it is past the last incident
+        // any of them records, so a spent ceiling and a harness that never
+        // launched are counted too rather than only the tidy endings.
+        result.incident_counts = Some(self.counted_incidents(&turn_id).await);
+
         // Masked once, here, rather than at each of the two places the result
         // goes. The durable copy and the streamed one are then the same masked
         // text, and a summary quoting a credential cannot reach one of them
@@ -1469,6 +1475,31 @@ impl Runner {
         .await;
     }
 
+    /// Counts a turn's incidents by disposition, for its report.
+    ///
+    /// A query rather than a tally kept in the runner, because incidents reach
+    /// the database from three places: this loop, the mappers, and the proxy.
+    /// A counter here would count the ones it happened to see, and a report that
+    /// says "one degraded" when three were recorded is worse than one that says
+    /// nothing.
+    ///
+    /// A count that cannot be read reports zeroes rather than failing the turn.
+    /// The incidents themselves are recorded and queryable; this field is the
+    /// convenience that saves the common case a round trip.
+    async fn counted_incidents(&self, turn_id: &str) -> IncidentCounts {
+        match self.store.incident_counts(turn_id).await {
+            Ok(counts) => counts,
+            Err(error) => {
+                tracing::error!(
+                    event.name = "incident.count.failed",
+                    turn.id = turn_id,
+                    "could not count a turn's incidents for its report: {error}",
+                );
+                IncidentCounts::default()
+            }
+        }
+    }
+
     /// Records an already assembled incident and puts it on the thread's stream.
     ///
     /// Separate from [`Self::record_incident`] because an incident the proxy or
@@ -1630,7 +1661,9 @@ fn assemble(
         cost: Some(harness.cost),
         by_model: harness.by_model,
         error: None,
-        incident_counts: Some(IncidentCounts::default()),
+        // Filled in by `run` once the turn is over, because an incident this
+        // assembly cannot see yet is one it would report as not having happened.
+        incident_counts: None,
         members: Vec::new(),
         changed_files: Vec::new(),
         integrations: Vec::new(),
