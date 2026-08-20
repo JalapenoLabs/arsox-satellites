@@ -11,6 +11,17 @@ __pycache__/
 # Node
 node_modules/
 
+# Python. The SDK syncs the checked-in contract from gen/python into its own
+# source tree before every build, typecheck, and test run, so the copy is never
+# committed and can never go stale. See sdks/python/scripts/sync_proto.py.
+/sdks/python/src/arsox_sdk/proto/
+.venv/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+/sdks/python/dist/
+*.egg-info/
+
 # Local artifact downloads from the SDK examples
 /out/
 .mcp.json
