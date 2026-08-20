@@ -43,6 +43,12 @@ const TRANSCRIPT: &str = concat!(
     "/../arsox-harness/fixtures/claude/2.1.221/tool-call.stdout.jsonl"
 );
 
+/// The same, in the Codex vocabulary.
+const CODEX_TRANSCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../arsox-harness/fixtures/codex/0.147.0/tool-call.stdout.jsonl"
+);
+
 /// Starts a satellite and returns the URL a client would be given.
 async fn start() -> String {
     static CONFIGURE: std::sync::Once = std::sync::Once::new();
@@ -52,6 +58,13 @@ async fn start() -> String {
         unsafe {
             std::env::set_var("ARSOX_CLAUDE_BIN", env!("CARGO_BIN_EXE_arsox-fake-harness"));
             std::env::set_var("ARSOX_FAKE_TRANSCRIPT", TRANSCRIPT);
+            // Pointed somewhere deliberate rather than left to whatever `codex`
+            // resolves to on the machine running this. The capabilities endpoint
+            // lists Codex only when its binary answered, so leaving this unset
+            // would make the assertion below depend on what the developer
+            // happens to have installed.
+            std::env::set_var("ARSOX_CODEX_BIN", env!("CARGO_BIN_EXE_arsox-fake-harness"));
+            std::env::set_var("ARSOX_FAKE_CODEX_TRANSCRIPT", CODEX_TRANSCRIPT);
         }
     });
 
@@ -125,10 +138,10 @@ async fn the_harness_endpoint_reports_what_this_satellite_offers() {
 
     let harness = client.harness().await.expect("should report harnesses");
 
-    // Claude is the harness implemented today, and the endpoint says so plainly
-    // rather than implying a suite that spans several.
+    // Both binaries answered on this satellite, so both are offered, and the
+    // endpoint says which one a thread that names none gets.
     assert_eq!(harness.default_harness, i32::from(Harness::Claude));
-    assert_eq!(harness.harnesses.len(), 1);
+    assert_eq!(harness.harnesses.len(), 2);
 
     let claude = &harness.harnesses[0];
     assert_eq!(claude.harness, i32::from(Harness::Claude));
@@ -137,6 +150,16 @@ async fn the_harness_endpoint_reports_what_this_satellite_offers() {
     // The stand-in harness replays a transcript when asked for its version,
     // and that JSON must not have been mistaken for one.
     assert!(!claude.cli_version.starts_with('{'));
+
+    // The point of the endpoint: the two harnesses differ, and a consumer is
+    // told up front rather than discovering it by absence three turns into a
+    // run.
+    let codex = &harness.harnesses[1];
+    assert_eq!(codex.harness, i32::from(Harness::Codex));
+    assert!(codex.supports_thinking_events);
+    assert!(!codex.supports_subagents);
+    assert!(!codex.supports_native_plan_mode);
+    assert!(!codex.cli_version.starts_with('{'));
 }
 
 #[tokio::test]
