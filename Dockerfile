@@ -136,6 +136,9 @@ WORKDIR /workspace
 # container replacement. Losing either silently breaks thread resumption.
 VOLUME [ "/var/arsox", "/workspace" ]
 
+# Where a container serves, and the only port worth exposing. `ARSOX_PORT` exists
+# for runs with no port mapping in front of them; `docker run -p` is how a
+# container's reachable address is decided.
 EXPOSE 8080
 
 # Liveness only, and deliberately unauthenticated: an orchestrator needs to know

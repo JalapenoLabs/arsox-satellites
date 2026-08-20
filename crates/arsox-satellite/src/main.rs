@@ -48,8 +48,13 @@ async fn main() -> Result<()> {
 /// Returns an error when the port refuses a connection, the request times out,
 /// or the response is anything other than a success.
 async fn health_check() -> Result<()> {
+    // Resolved the way the server resolves it, so a satellite told to listen
+    // elsewhere with `ARSOX_PORT` is probed where it actually is rather than
+    // reported dead on the default port.
+    let port = arsox_satellite::ServeOptions::from_environment().port;
+
     let probe = async {
-        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", 8080)).await?;
+        let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port)).await?;
 
         stream
             .write_all(b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")

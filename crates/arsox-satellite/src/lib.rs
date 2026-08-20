@@ -56,13 +56,20 @@ pub const PROTO_MAJOR: u32 = 1;
 /// fields it does not know about.
 pub const PROTO_MINOR: u32 = 0;
 
-/// Address the API listens on inside the container.
+/// Interface the API listens on.
 ///
-/// Fixed rather than configurable: the container's port mapping is the place to
-/// change where the satellite is reachable, and a second knob for the same thing
-/// only creates a way for the two to disagree.
-const LISTEN_ADDR: SocketAddr =
-    SocketAddr::new(std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED), 8080);
+/// Every address the container has. Which one actually reaches the satellite is
+/// the host's decision rather than the satellite's.
+const LISTEN_INTERFACE: std::net::IpAddr = std::net::IpAddr::V4(std::net::Ipv4Addr::UNSPECIFIED);
+
+/// Port the API listens on when `ARSOX_PORT` is unset.
+///
+/// This number is the whole container story: the image exposes it, and
+/// `docker run -p` decides where a container is reachable from outside. The
+/// override exists for the runs with no port mapping in front of them, a test
+/// suite starting two satellites at once and a bare-metal process sharing a
+/// host, and it is deliberately not a second way to configure a container.
+const DEFAULT_LISTEN_PORT: u16 = 8080;
 
 /// Concurrent threads allowed when `ARSOX_MAX_CONCURRENT_THREADS` is unset.
 ///
@@ -431,6 +438,32 @@ fn env_u32(key: &str, fallback: u32) -> u32 {
     parse_positive_u32(key, std::env::var(key).ok().as_deref(), fallback)
 }
 
+/// Interprets an optional configuration value as a TCP port.
+///
+/// Layered on [`parse_positive_u32`] so a typo behaves here exactly as it does
+/// for every other optional knob, with the one bound ports have that counts do
+/// not: they stop at 65535, and a larger number must fall back rather than be
+/// truncated into a port nobody asked for.
+fn parse_port(key: &str, raw: Option<&str>, fallback: u16) -> u16 {
+    let parsed = parse_positive_u32(key, raw, u32::from(fallback));
+
+    u16::try_from(parsed).unwrap_or_else(|_out_of_range| {
+        tracing::warn!(
+            event.name = "satellite.config.invalid",
+            config.key = key,
+            config.value = parsed,
+            config.fallback = fallback,
+            "{{config.key}} is not a port between 1 and 65535, using {{config.fallback}}",
+        );
+        fallback
+    })
+}
+
+/// Reads a TCP port from the environment.
+fn env_port(key: &str, fallback: u16) -> u16 {
+    parse_port(key, std::env::var(key).ok().as_deref(), fallback)
+}
+
 /// Everything a satellite needs to boot, with nothing read from the
 /// environment.
 ///
@@ -444,6 +477,13 @@ pub struct ServeOptions {
     pub database_path: String,
     pub workspace_root: String,
     pub max_concurrent_threads: u32,
+
+    /// TCP port to listen on, defaulting to 8080.
+    ///
+    /// Read by [`serve`] and by nothing else: [`assemble`] binds no port, so a
+    /// caller that serves the router itself decides the address on its own and
+    /// this field is inert for them.
+    pub port: u16,
 
     /// How often to sweep for expired threads.
     pub collect_interval: std::time::Duration,
@@ -465,6 +505,7 @@ impl ServeOptions {
                 "ARSOX_MAX_CONCURRENT_THREADS",
                 DEFAULT_MAX_CONCURRENT_THREADS,
             ),
+            port: env_port("ARSOX_PORT", DEFAULT_LISTEN_PORT),
             collect_interval: std::time::Duration::from_secs(u64::from(env_u32(
                 "ARSOX_COLLECT_INTERVAL",
                 DEFAULT_COLLECT_INTERVAL_SECONDS,
@@ -618,15 +659,18 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
 /// opt in, when the listen address cannot be bound, or when the server itself
 /// fails.
 pub async fn serve() -> Result<()> {
-    let assembled = assemble(ServeOptions::from_environment()).await?;
+    let options = ServeOptions::from_environment();
+    let address = SocketAddr::new(LISTEN_INTERFACE, options.port);
 
-    let listener = tokio::net::TcpListener::bind(LISTEN_ADDR)
+    let assembled = assemble(options).await?;
+
+    let listener = tokio::net::TcpListener::bind(address)
         .await
-        .with_context(|| format!("failed to bind {LISTEN_ADDR}"))?;
+        .with_context(|| format!("failed to bind {address}"))?;
 
     tracing::info!(
         event.name = "satellite.boot.listening",
-        server.address = %LISTEN_ADDR,
+        server.address = %address,
         satellite.version = env!("CARGO_PKG_VERSION"),
         proto.major = PROTO_MAJOR,
         proto.minor = PROTO_MINOR,
@@ -758,5 +802,39 @@ mod tests {
         // never runs it, which is worse than the documented default.
         assert_eq!(parse_positive_u32("ARSOX_TEST_CAP", Some("0"), 4), 4);
         assert_eq!(parse_positive_u32("ARSOX_TEST_CAP", Some("12"), 4), 12);
+    }
+
+    #[test]
+    fn an_absent_port_override_leaves_the_documented_default() {
+        // The container story depends on this: an image with no ARSOX_PORT set
+        // listens on the port it exposes.
+        assert_eq!(parse_port("ARSOX_PORT", None, DEFAULT_LISTEN_PORT), 8080);
+    }
+
+    #[test]
+    fn a_port_override_is_taken_when_it_names_a_real_port() {
+        assert_eq!(parse_port("ARSOX_PORT", Some("9090"), 8080), 9090);
+        assert_eq!(parse_port("ARSOX_PORT", Some("1"), 8080), 1);
+        assert_eq!(parse_port("ARSOX_PORT", Some("65535"), 8080), 65535);
+    }
+
+    #[test]
+    fn a_port_outside_the_range_falls_back_rather_than_truncating() {
+        // 65536 truncates to 0 in a u16, and 65537 to 1. Either would bind a
+        // port nobody asked for, which is worse than ignoring the value.
+        assert_eq!(parse_port("ARSOX_PORT", Some("65536"), 8080), 8080);
+        assert_eq!(parse_port("ARSOX_PORT", Some("65537"), 8080), 8080);
+        assert_eq!(parse_port("ARSOX_PORT", Some("4294967296"), 8080), 8080);
+    }
+
+    #[test]
+    fn an_invalid_port_falls_back_rather_than_refusing_to_boot() {
+        // Same warn-and-continue semantics as the thread cap: a typo in an
+        // optional knob is loud, not fatal.
+        assert_eq!(parse_port("ARSOX_PORT", Some("not-a-number"), 8080), 8080);
+        // Port 0 asks the kernel for an ephemeral port, which is never what a
+        // configured satellite means and leaves nothing able to find it.
+        assert_eq!(parse_port("ARSOX_PORT", Some("0"), 8080), 8080);
+        assert_eq!(parse_port("ARSOX_PORT", Some("-1"), 8080), 8080);
     }
 }

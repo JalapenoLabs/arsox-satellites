@@ -44,6 +44,8 @@ Serve the API over TLS whenever it is reachable outside a trusted network. The s
 
 **`ARSOX_SECRET` is never placed in an agent's environment.** It is read by the satellite process at boot and withheld from every harness, member, and brokered command. An agent that could read it could command its own satellite: destroy threads, read other threads' artifacts, rewrite permissions. The secret authenticates your application to the satellite, never the satellite to itself.
 
+**The satellite listens on 8080, and the image exposes it.** `docker run -p` is how a container's reachable address is decided, so nothing about running one changes. `ARSOX_PORT` overrides the listen port for the runs with no port mapping in front of them: a test suite starting two satellites at once, or a bare-metal process sharing a host. Use it there, and use the port mapping for containers. A value outside 1 to 65535, or one that is not a number at all, warns and falls back to 8080 rather than stopping the boot.
+
 **Neither is your LLM provider key.** An agent's environment carries no `ARSOX_*` variable and no provider credential. Model requests go through the satellite's own [LLM proxy](#the-model-axis), which attaches the real credential on the way out, so an agent holds a token that is worth nothing anywhere else and stops working when its turn ends. A key an agent can read is a key it can print into a log, commit to a repo, or spend outside every ceiling you set.
 
 <!-- TODO: Enter code details about how to configure it -->
