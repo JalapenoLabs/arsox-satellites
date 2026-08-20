@@ -34,6 +34,37 @@ enum Presentation {
     None,
 }
 
+/// Whether this destination takes an API key as a bearer token.
+///
+/// The proxy relays the harness's request body opaquely and swaps the
+/// credential, so a Codex thread reaches an OpenAI endpoint on the same path the
+/// body already names. What does not carry across is the header: Anthropic reads
+/// an API key from `x-api-key` and OpenAI reads one from `Authorization: Bearer`.
+/// Sending an OpenAI key in `x-api-key` is refused in a way that reads as a bad
+/// credential rather than as a mis-shaped request, which is the most expensive
+/// possible way to be wrong about a header.
+///
+/// Decided from the destination rather than from the key, because a key is a
+/// string of characters and guessing a vendor from its prefix is the kind of
+/// rule that breaks the first time a vendor changes one.
+///
+/// A self-hosted OpenAI-compatible endpoint is not matched here and should
+/// declare its credential as a subscription token, which already presents a
+/// bearer. Carrying the presentation in the contract is the real fix and is a
+/// proto change; see the roadmap in `docs/llm-proxy.md`.
+fn api_key_is_a_bearer(base_url: &str) -> bool {
+    let Some(host) = reqwest::Url::parse(base_url)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_owned))
+    else {
+        return false;
+    };
+
+    // Suffix matched on a label boundary rather than by `contains`, so
+    // `openai.com.example.invalid` is not read as OpenAI's.
+    host == "openai.com" || host.ends_with(".openai.com")
+}
+
 /// One resolved destination for a turn's model requests.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Upstream {
@@ -50,15 +81,27 @@ impl Upstream {
     /// [`Route`]: crate::proxy::failover::Route
     #[must_use]
     pub fn declared(endpoint: &ModelEndpoint) -> Self {
+        let base_url = endpoint
+            .base_url
+            .clone()
+            .unwrap_or_else(|| DEFAULT_BASE_URL.to_owned());
+
+        // An API key is the one credential whose header depends on where it is
+        // going. See [`api_key_header`].
+        let as_key = if api_key_is_a_bearer(&base_url) {
+            Presentation::Bearer
+        } else {
+            Presentation::ApiKey
+        };
+
         let presentation = match endpoint
             .auth
             .as_ref()
             .and_then(|auth| auth.credential.as_ref())
         {
-            Some(Credential::ApiKey(secret)) => secret
-                .value
-                .clone()
-                .map_or(Presentation::None, Presentation::ApiKey),
+            Some(Credential::ApiKey(secret)) => {
+                secret.value.clone().map_or(Presentation::None, as_key)
+            }
             Some(Credential::SubscriptionToken(secret)) => secret
                 .value
                 .clone()
@@ -72,10 +115,7 @@ impl Upstream {
         };
 
         Self {
-            base_url: endpoint
-                .base_url
-                .clone()
-                .unwrap_or_else(|| DEFAULT_BASE_URL.to_owned()),
+            base_url,
             presentation,
         }
     }
@@ -188,6 +228,34 @@ mod tests {
             vec![("authorization", "Bearer access-1".to_owned())],
             "the refresh token is never presented to the provider"
         );
+    }
+
+    #[test]
+    fn an_api_key_for_openai_is_presented_the_way_openai_reads_one() {
+        // The proxy relays the body opaquely, so an OpenAI-shaped request from a
+        // Codex thread reaches an OpenAI endpoint unchanged. The header does not
+        // carry across: this key in `x-api-key` is refused in a way that reads
+        // as a bad credential rather than as a mis-shaped request.
+        let mut endpoint = endpoint_with(Credential::ApiKey(secret("sk-proj-123")));
+        endpoint.base_url = Some("https://api.openai.com".to_owned());
+
+        assert_eq!(
+            Upstream::declared(&endpoint).credential_headers(),
+            vec![("authorization", "Bearer sk-proj-123".to_owned())]
+        );
+    }
+
+    #[test]
+    fn the_destination_decides_the_header_rather_than_the_key() {
+        // Guessing a vendor from a key's prefix is the kind of rule that breaks
+        // the first time a vendor changes one, and a host that merely contains
+        // the string is not the host.
+        assert!(api_key_is_a_bearer("https://api.openai.com/"));
+        assert!(api_key_is_a_bearer("https://eu.api.openai.com/v1"));
+
+        assert!(!api_key_is_a_bearer("https://api.anthropic.com"));
+        assert!(!api_key_is_a_bearer("https://openai.com.example.invalid"));
+        assert!(!api_key_is_a_bearer("not a url at all"));
     }
 
     #[test]

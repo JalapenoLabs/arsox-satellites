@@ -7,10 +7,21 @@
 //! model, a network, or a token budget: the satellite spawns this exactly as it
 //! would spawn a real CLI and cannot tell the difference.
 //!
+//! # Which harness it is standing in for
+//!
+//! The satellite spawns it under whichever command line the thread's harness
+//! calls for, and this reads that command line back to decide which harness it
+//! is being: `codex exec …` or `claude --print …`. Nothing else could decide it,
+//! since the satellite hands both forms to the same binary and the two speak
+//! different event vocabularies.
+//!
 //! # Configuration
 //!
-//! The transcript comes from `ARSOX_FAKE_TRANSCRIPT`, which is the same for
-//! every caller and so is safe to set once for a process.
+//! The transcript comes from `ARSOX_FAKE_TRANSCRIPT` for Claude and
+//! `ARSOX_FAKE_CODEX_TRANSCRIPT` for Codex. One per harness, because a
+//! transcript belongs to a vocabulary and replaying the wrong one produces a
+//! turn made entirely of unrecognized events. Each is the same for every caller
+//! and so is safe to set once for a process.
 //!
 //! Per-run behaviour rides on the **prompt** instead, as `[[key=value]]`
 //! directives. That is deliberate: process environment is global, and tests run
@@ -24,6 +35,12 @@
 //! - `[[report_env=NAME]]` writes what the child can see of `NAME` to stderr,
 //!   so a test can assert on the environment an agent actually receives rather
 //!   than on the environment the satellite intended to give it.
+//! - `[[record_argv=FILE]]` writes the command line this replay was launched
+//!   with, one argument per line, to `FILE` in the working directory. Same
+//!   reasoning as `report_env` and the same vantage point: whether a turn
+//!   resumed a session is a fact about what the CLI was asked to do, and the CLI
+//!   is the only thing that can report it. A test names a different file per
+//!   turn so a later spawn does not overwrite the evidence from an earlier one.
 //! - `[[complete=N]]` sends N completion requests through the satellite's own
 //!   proxy before the transcript, exactly as a CLI would. Nothing else in a test
 //!   can make the proxy route a request, so this is the only way to exercise
@@ -52,10 +69,69 @@ use std::io::Write as _;
 /// threads hanging at once cannot see each other's marker.
 const HUNG_ALREADY: &str = "arsox-fake-harness-hung";
 
+/// Which harness's command line this replay was invoked with.
+///
+/// Read from argv rather than from the environment, because the satellite hands
+/// both forms to this one binary and an environment variable saying which is
+/// which would be a global that two threads in one test process could disagree
+/// about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Invocation {
+    Claude,
+    Codex,
+}
+
+impl Invocation {
+    /// The form these arguments were built in.
+    ///
+    /// `codex exec` always leads with its subcommand. Everything else is read as
+    /// Claude, which is what the satellite's own default harness is and what a
+    /// bare `--version` probe arrives as.
+    fn of(arguments: &[String]) -> Self {
+        if arguments.get(1).map(String::as_str) == Some("exec") {
+            Self::Codex
+        } else {
+            Self::Claude
+        }
+    }
+
+    /// Where this invocation's transcript path is read from.
+    const fn transcript_env(self) -> &'static str {
+        match self {
+            Self::Claude => "ARSOX_FAKE_TRANSCRIPT",
+            Self::Codex => "ARSOX_FAKE_CODEX_TRANSCRIPT",
+        }
+    }
+
+    /// The prompt, wherever this CLI's command line carries it.
+    ///
+    /// Claude takes it as the value of `--print`. Codex takes it as the last
+    /// positional behind `--`, after the session id when the form is `resume`.
+    fn prompt(self, arguments: &[String]) -> String {
+        let found = match self {
+            Self::Claude => arguments
+                .iter()
+                .position(|argument| argument == "--print")
+                .and_then(|index| arguments.get(index + 1)),
+            Self::Codex => arguments
+                .iter()
+                .position(|argument| argument == "--")
+                .and_then(|index| arguments.get(index + 1..))
+                .and_then(<[String]>::last),
+        };
+
+        found.cloned().unwrap_or_default()
+    }
+}
+
 #[tokio::main]
 async fn main() {
-    let Ok(path) = std::env::var("ARSOX_FAKE_TRANSCRIPT") else {
-        eprintln!("ARSOX_FAKE_TRANSCRIPT is not set");
+    let arguments: Vec<String> = std::env::args().collect();
+    let invocation = Invocation::of(&arguments);
+    let variable = invocation.transcript_env();
+
+    let Ok(path) = std::env::var(variable) else {
+        eprintln!("{variable} is not set");
         std::process::exit(64);
     };
 
@@ -67,15 +143,9 @@ async fn main() {
         }
     };
 
-    // The satellite passes the prompt as the argument after `--print`, so the
-    // directives arrive with it.
-    let arguments: Vec<String> = std::env::args().collect();
-    let prompt = arguments
-        .iter()
-        .position(|argument| argument == "--print")
-        .and_then(|index| arguments.get(index + 1))
-        .cloned()
-        .unwrap_or_default();
+    // The directives arrive with the prompt, which is an argument and so belongs
+    // to one spawn.
+    let prompt = invocation.prompt(&arguments);
 
     let truncate_after = directive(&prompt, "truncate").unwrap_or(usize::MAX);
     let exit_code = directive(&prompt, "exit").unwrap_or(0);
@@ -88,11 +158,20 @@ async fn main() {
         eprintln!("report_env {name}={seen}");
     }
 
+    // Written to a file rather than to stderr, which the runner reads for
+    // liveness and then discards. A test that has to know what the CLI was asked
+    // to do needs it to survive the turn.
+    if let Some(file) = text_directive(&prompt, "record_argv")
+        && let Err(error) = std::fs::write(&file, arguments.join("\n"))
+    {
+        eprintln!("could not record the command line to {file}: {error}");
+    }
+
     // Before the replay, because a turn that failed to reach a model has nothing
     // to say afterwards and the runner should not have to read a transcript to
     // find that out.
     if let Some(requests) = directive(&prompt, "complete") {
-        complete(requests).await;
+        complete(invocation, requests).await;
     }
 
     // Before the replay rather than after it. A harness that hung before it said
@@ -145,28 +224,52 @@ async fn main() {
     std::process::exit(exit_code as i32);
 }
 
-/// Asks for a completion the way a CLI does, through the satellite's proxy.
+/// Asks for a completion the way this CLI does, through the satellite's proxy.
 ///
 /// The environment carries where to ask and what to present, and neither is a
-/// provider credential: `ANTHROPIC_BASE_URL` is the satellite's own listener and
-/// `ANTHROPIC_API_KEY` is the turn's token, which is worth nothing anywhere
-/// else.
+/// provider credential: the base URL is the satellite's own listener and the key
+/// is the turn's token, which is worth nothing anywhere else.
+///
+/// Each form asks the way its real CLI asks, path and credential header
+/// included, because a stand-in that all asked one way would prove nothing about
+/// the other's route through the proxy.
 ///
 /// Whatever comes back is reported on stderr and otherwise ignored. This exists
 /// to make the request happen, not to act on the answer.
-async fn complete(requests: usize) {
-    let Ok(base_url) = std::env::var("ANTHROPIC_BASE_URL") else {
-        eprintln!("ANTHROPIC_BASE_URL is not set, so there is no proxy to ask");
+async fn complete(invocation: Invocation, requests: usize) {
+    let (base, key, path, header) = match invocation {
+        Invocation::Claude => (
+            "ANTHROPIC_BASE_URL",
+            "ANTHROPIC_API_KEY",
+            "v1/messages",
+            "x-api-key",
+        ),
+        // Codex is pointed at a base URL that already ends in `/v1`, and
+        // presents its key as a bearer.
+        Invocation::Codex => (
+            "OPENAI_BASE_URL",
+            "OPENAI_API_KEY",
+            "responses",
+            "authorization",
+        ),
+    };
+
+    let Ok(base_url) = std::env::var(base) else {
+        eprintln!("{base} is not set, so there is no proxy to ask");
         return;
     };
-    let token = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+
+    let presented = match (invocation, std::env::var(key).unwrap_or_default()) {
+        (Invocation::Claude, token) => token,
+        (Invocation::Codex, token) => format!("Bearer {token}"),
+    };
 
     for _request in 0..requests {
         let answered = reqwest::Client::new()
-            .post(format!("{base_url}/v1/messages"))
-            .header("x-api-key", &token)
+            .post(format!("{}/{path}", base_url.trim_end_matches('/')))
+            .header(header, &presented)
             .header("content-type", "application/json")
-            .body(r#"{"model":"claude-opus-5","messages":[]}"#)
+            .body(r#"{"model":"a-model","messages":[]}"#)
             .send()
             .await;
 

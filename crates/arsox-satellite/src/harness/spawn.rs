@@ -29,6 +29,13 @@
 //! here from what the contract already states instead, and `docs/harness.md`
 //! carries the setting-to-flag table.
 //!
+//! [`Posture`] is what keeps that derivation single. It holds the decision, and
+//! each harness arm renders it in its own vocabulary: Claude reads
+//! `--permission-mode` and tool rules, Codex reads a sandbox width and an
+//! approval policy. The two are not equally expressive, and where Codex cannot
+//! carry something the answer is to say so in the docs rather than to emit a
+//! flag that would not hold it.
+//!
 //! # The environment is built, and only ever added to
 //!
 //! Every spawn starts from [`scrubbed_command`], which takes away every
@@ -52,6 +59,9 @@ use std::path::PathBuf;
 /// difference, which is the point: the same code path is exercised either way.
 const CLAUDE_BINARY_ENV: &str = "ARSOX_CLAUDE_BIN";
 
+/// Overrides the Codex CLI binary, mirroring [`CLAUDE_BINARY_ENV`].
+const CODEX_BINARY_ENV: &str = "ARSOX_CODEX_BIN";
+
 /// Resolves the Claude CLI binary this satellite launches.
 ///
 /// One resolution shared by the spawner and the boot-time version probe, so the
@@ -59,6 +69,12 @@ const CLAUDE_BINARY_ENV: &str = "ARSOX_CLAUDE_BIN";
 #[must_use]
 pub fn claude_binary() -> String {
     std::env::var(CLAUDE_BINARY_ENV).unwrap_or_else(|_ignored| "claude".to_owned())
+}
+
+/// Resolves the Codex CLI binary this satellite launches.
+#[must_use]
+pub fn codex_binary() -> String {
+    std::env::var(CODEX_BINARY_ENV).unwrap_or_else(|_ignored| "codex".to_owned())
 }
 
 /// The mask a credential renders as, six stars as the contract's own default.
@@ -120,12 +136,21 @@ pub struct HarnessCommand {
 }
 
 /// How a turn attaches to the harness's own session.
+///
+/// The two harnesses disagree about who names a session, and the disagreement
+/// is absorbed here rather than in the runner. Claude accepts an id and opens a
+/// session under it; Codex mints its own and announces it on `thread.started`,
+/// so the Codex arm ignores the id in [`Session::Start`] and the mapper records
+/// what the CLI chose. Either way the thread's second turn resumes the session
+/// its first turn opened, which is the only property above this layer cares
+/// about.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Session {
     /// Open a new session under an id the satellite chooses.
     ///
     /// Choosing it rather than discovering it is what ties one Arsox thread to
-    /// exactly one harness session for its whole life.
+    /// exactly one harness session for its whole life, where the harness lets
+    /// the caller choose at all. Codex does not, and ignores this id.
     Start { session_id: String },
 
     /// Continue the session a previous turn on this thread opened.
@@ -152,17 +177,24 @@ pub fn command_for(
     declared: &[EnvVar],
     permissions: Option<&Permissions>,
 ) -> HarnessCommand {
+    // Flags are rendered inside each arm rather than above the match, because
+    // every one of them is a spelling rather than a decision. `--permission-mode`
+    // is Claude's and would fail a `codex exec` launch rather than restrict it,
+    // and `-c sandbox_mode=` is Codex's and means nothing to Claude. What the
+    // thread asked for is decided once, in [`posture_for`], and each arm renders
+    // it in its own vocabulary.
     match harness {
-        // Claude is the default and the only harness implemented today, so
-        // every arm lands in the same place. Codex gets its own the moment its
-        // mapper exists, and this match is where it will appear.
-        //
-        // Permission flags are built inside the Claude arm rather than out here
-        // for that reason: `--permission-mode` is a Claude spelling, and handing
-        // it to `codex exec` would fail the launch rather than restrict it.
-        // Codex expresses approvals through its own flags, and mapping the same
-        // posture onto them is part of writing that arm.
-        Harness::Unspecified | Harness::Claude | Harness::Codex => claude_command(
+        // Unspecified means "the documented default", and the documented default
+        // is Claude.
+        Harness::Unspecified | Harness::Claude => claude_command(
+            prompt,
+            session,
+            working_dir,
+            model_access,
+            declared,
+            permissions,
+        ),
+        Harness::Codex => codex_command(
             prompt,
             session,
             working_dir,
@@ -203,94 +235,209 @@ fn claude_command(
 
     args.extend(claude_permission_args(&posture_for(permissions)));
 
-    let mut env = agent_environment();
-    env.extend(declared_environment(declared));
-
-    // Pointed at the satellite's own proxy rather than the provider. The token
-    // is worth nothing anywhere else and stops working when the turn ends,
-    // which is the whole reason the agent gets one instead of a real key.
-    //
-    // Applied after the declared variables rather than before them, because the
-    // last value set for a key is the one the child sees. A thread cannot
-    // repoint its agent away from the proxy by declaring `ANTHROPIC_BASE_URL`,
-    // and the budget ceilings stay on the only route to a model.
-    if let Some(access) = model_access {
-        env.push(AgentVar {
-            key: "ANTHROPIC_BASE_URL".to_owned(),
-            value: access.base_url,
-            // An address, not a credential, and worth reading in a log when a
-            // turn cannot reach its proxy.
-            secret: false,
-        });
-        env.push(AgentVar {
-            key: "ANTHROPIC_API_KEY".to_owned(),
-            value: access.token,
-            secret: true,
-        });
-    }
+    let proxy = model_access.map(|access| {
+        vec![
+            AgentVar {
+                key: "ANTHROPIC_BASE_URL".to_owned(),
+                value: access.base_url,
+                // An address, not a credential, and worth reading in a log when
+                // a turn cannot reach its proxy.
+                secret: false,
+            },
+            AgentVar {
+                key: "ANTHROPIC_API_KEY".to_owned(),
+                value: access.token,
+                secret: true,
+            },
+        ]
+    });
 
     HarnessCommand {
         program: claude_binary(),
         args,
         working_dir,
-        env,
+        env: environment_for(declared, proxy.unwrap_or_default()),
     }
 }
 
-/// A Claude CLI permission mode, spelled the way the CLI spells it.
+/// The Codex config profile the satellite declares for its own proxy.
 ///
-/// The CLI offers `acceptEdits`, `auto`, `bypassPermissions`, `manual`,
-/// `dontAsk`, and `plan`. Only the two the satellite derives are named here: a
-/// variant nothing constructs is a spelling nobody checked against the CLI, and
-/// a wrong one fails the launch rather than the permission.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PermissionMode {
-    /// File edits are approved without asking. Every other tool still gates,
-    /// which under `--print` means it is refused.
-    AcceptEdits,
+/// Named rather than reusing `openai`, so an operator's own `config.toml` entry
+/// for the provider they normally use is left intact and the turn still runs
+/// through the satellite: `model_provider` is overridden per invocation, and a
+/// `-c` override outranks anything on disk.
+const CODEX_PROVIDER: &str = "arsox";
 
-    /// Every tool call is approved without asking.
-    BypassPermissions,
-}
+/// Builds the `codex exec` command for one turn.
+///
+/// # Why the session handling is inverted
+///
+/// Claude takes `--session-id` and opens a session under it. Codex mints its own
+/// and reports it on `thread.started`, so [`Session::Start`] carries an id this
+/// arm has nowhere to put and deliberately drops. The mapper records what the
+/// CLI announced, and the next turn arrives here as [`Session::Resume`] holding
+/// that id, which is what `codex exec resume` takes.
+///
+/// # Why every flag below is load-bearing
+///
+/// - `--json`. Without it `codex exec` writes a human report, and the mapper
+///   pointed at that parses prose as protocol.
+/// - `--skip-git-repo-check`. A thread's workspace is a directory the satellite
+///   created, and it is frequently not a git repository. Without this the CLI
+///   refuses to start and writes one line of plain English to stdout, which the
+///   runner correctly reports as a harness that exited without saying what it
+///   did. Measured against 0.147.0.
+/// - `--`. The prompt is untrusted text and it is a positional argument here
+///   rather than the value of a flag, so a prompt beginning with a dash would
+///   otherwise be parsed as one.
+///
+/// The working directory is the process's rather than `-C`, because
+/// `codex exec resume` accepts no `-C` and the two forms must not diverge in
+/// where they run.
+fn codex_command(
+    prompt: &str,
+    session: &Session,
+    working_dir: PathBuf,
+    model_access: Option<ModelAccess>,
+    declared: &[EnvVar],
+    permissions: Option<&Permissions>,
+) -> HarnessCommand {
+    let mut args = vec!["exec".to_owned()];
 
-impl PermissionMode {
-    /// The exact value `--permission-mode` accepts.
-    const fn as_flag(self) -> &'static str {
-        match self {
-            Self::AcceptEdits => "acceptEdits",
-            Self::BypassPermissions => "bypassPermissions",
+    if matches!(session, Session::Resume { .. }) {
+        args.push("resume".to_owned());
+    }
+
+    args.push("--json".to_owned());
+    args.push("--skip-git-repo-check".to_owned());
+    args.extend(codex_permission_args(&posture_for(permissions)));
+
+    // Codex 0.147.0 does not read `OPENAI_BASE_URL`, so the address reaches it
+    // as a declared provider rather than as an environment variable. The
+    // variable is set anyway, and set last: a value the satellite inherited or a
+    // thread declared would otherwise be the one a CLI that does read it obeys,
+    // which is a route around every ceiling. The key travels in the environment
+    // either way, which is what `env_key` above names.
+    let proxy = match model_access {
+        Some(access) => {
+            args.extend(codex_provider_args(&access));
+
+            vec![
+                AgentVar {
+                    key: "OPENAI_BASE_URL".to_owned(),
+                    value: proxy_v1(&access.base_url),
+                    secret: false,
+                },
+                AgentVar {
+                    key: "OPENAI_API_KEY".to_owned(),
+                    value: access.token,
+                    secret: true,
+                },
+            ]
         }
+        None => Vec::new(),
+    };
+
+    // Positionals last, behind the separator. `resume` takes the session id
+    // first and the prompt second.
+    args.push("--".to_owned());
+    if let Session::Resume { session_id } = session {
+        args.push(session_id.clone());
+    }
+    args.push(prompt.to_owned());
+
+    HarnessCommand {
+        program: codex_binary(),
+        args,
+        working_dir,
+        env: environment_for(declared, proxy),
     }
 }
 
-/// The advisory posture one turn's harness runs under.
+/// Points Codex at the satellite's proxy through a declared model provider.
 ///
-/// Held as a value rather than assembled inline so the decision ("what did the
-/// thread ask for") is separable from the spelling ("what does this CLI call
-/// it"), which is what lets a second harness map the same posture onto its own
-/// flags without re-deriving it.
+/// `wire_api = "responses"` is what makes this an ordinary HTTPS POST to
+/// `{base_url}/responses`. Left to its built-in provider the CLI opens a
+/// WebSocket to the provider instead, which the proxy does not speak and which
+/// would take every model request straight past the ceilings. Measured against
+/// 0.147.0 rather than read from a schema.
+fn codex_provider_args(access: &ModelAccess) -> Vec<String> {
+    // Each value is passed unquoted. The CLI parses it as TOML and falls back to
+    // the literal string when that fails, which is what a bare URL or a hyphen
+    // separated word takes.
+    [
+        format!("model_provider={CODEX_PROVIDER}"),
+        format!("model_providers.{CODEX_PROVIDER}.name=Arsox"),
+        format!(
+            "model_providers.{CODEX_PROVIDER}.base_url={}",
+            proxy_v1(&access.base_url)
+        ),
+        format!("model_providers.{CODEX_PROVIDER}.env_key=OPENAI_API_KEY"),
+        format!("model_providers.{CODEX_PROVIDER}.wire_api=responses"),
+    ]
+    .into_iter()
+    .flat_map(|setting| ["-c".to_owned(), setting])
+    .collect()
+}
+
+/// The versioned prefix a Codex provider base URL carries.
+///
+/// The grant address is an origin, and Claude appends `/v1` itself when it posts
+/// `/v1/messages`. Codex appends only `/responses`, so the `/v1` is added here
+/// and both harnesses reach the proxy on the same shape of path. Without it the
+/// proxy would forward to the upstream's root and every request would 404.
+fn proxy_v1(base_url: &str) -> String {
+    format!("{}/v1", base_url.trim_end_matches('/'))
+}
+
+/// Assembles the environment a harness child runs with.
+///
+/// Three layers, in the one order that is safe: what the satellite hands every
+/// agent, then what the thread declared, then the proxy's own variables. The
+/// proxy goes last because the last value set for a key is the one the child
+/// sees, so a thread cannot repoint its agent away from the satellite's LLM
+/// proxy and out from under the budget ceilings by declaring a base URL.
+fn environment_for(declared: &[EnvVar], proxy: Vec<AgentVar>) -> Vec<AgentVar> {
+    let mut env = agent_environment();
+    env.extend(declared_environment(declared));
+    env.extend(proxy);
+
+    env
+}
+
+/// What a thread asked for, before any CLI has a word for it.
+///
+/// Held as a decision rather than as a rendering so the question "what did the
+/// thread ask for" is answered once and each harness arm answers "what does my
+/// CLI call that" separately. Two harnesses re-deriving the posture from
+/// `Permissions` would be two automata over one setting, and two of anything is
+/// one more thing that can disagree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Posture {
-    mode: PermissionMode,
+    shell: ShellAccess,
 
-    /// Tool rules approved without asking, on top of the mode.
-    allowed: Vec<String>,
-
-    /// Tool rules refused outright.
-    disallowed: Vec<String>,
+    /// The commands the thread named, exactly as the contract carries them.
+    ///
+    /// Rendered into tool rules by the harness that has them. Codex has no such
+    /// concept, and dropping the list there is stated in `docs/harness.md`
+    /// rather than papered over with a flag that would not hold it.
+    allowed_commands: Vec<String>,
 }
 
-impl Posture {
-    /// The posture a thread that declared no exec policy runs under.
+/// How much of the shell a thread asked its agent to be given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShellAccess {
+    /// The thread declared no exec policy, or named the preset.
     ///
-    /// `bypassPermissions`, and the reasoning is worth stating because the flag
-    /// reads alarming out of context.
+    /// The agent runs with the container as its boundary, and the reasoning is
+    /// worth stating because the flags this renders into read alarming out of
+    /// context.
     ///
     /// The alternative is a gate that grants the shell and withholds everything
     /// else. That buys nothing: an agent holding a shell already reaches every
     /// byte and every socket the container reaches, so refusing it `WebFetch` is
     /// a formality it can route around with `curl`. What the narrower posture
-    /// does buy is failure. Under `--print` a gate cannot be answered, so the
+    /// does buy is failure. A non-interactive turn cannot answer a gate, so the
     /// first tool nobody thought to list is refused mid-turn, and the agent
     /// spends the rest of the turn working around a restriction that was never
     /// intended and protects nothing.
@@ -298,37 +445,16 @@ impl Posture {
     /// So the honest default is the one that matches the boundary that actually
     /// exists. Today that boundary is the container, and a satellite is a
     /// container built to be handed to an agent. When the exec broker, the
-    /// egress proxy, and the `pre-push` hook land, they enforce underneath this
-    /// flag rather than through it: none of them is something `--permission-mode`
-    /// can switch off.
-    fn unrestricted() -> Self {
-        Self {
-            mode: PermissionMode::BypassPermissions,
-            allowed: Vec::new(),
-            disallowed: Vec::new(),
-        }
-    }
+    /// egress proxy, and the `pre-push` hook land, they enforce underneath these
+    /// flags rather than through them: no CLI flag can switch any of them off.
+    Unrestricted,
 
-    /// The posture for a thread that named which commands it wants.
+    /// The thread named which commands it wants, or none at all.
     ///
-    /// Edits stay approved, because the exec policy is about the shell and a
-    /// thread that restricted its commands did not ask to stop editing files.
-    /// With no command named, the shell is refused by name rather than left to
-    /// be refused by silence, so the harness reports a denial an operator can
-    /// read instead of an unexplained tool failure.
-    fn named(allowed: Vec<String>) -> Self {
-        let disallowed = if allowed.is_empty() {
-            vec!["Bash".to_owned()]
-        } else {
-            Vec::new()
-        };
-
-        Self {
-            mode: PermissionMode::AcceptEdits,
-            allowed,
-            disallowed,
-        }
-    }
+    /// Edits stay approved either way, because the exec policy is about the
+    /// shell and a thread that restricted its commands did not ask to stop
+    /// editing files.
+    Named,
 }
 
 /// Derives the posture from what the thread declared.
@@ -341,7 +467,10 @@ impl Posture {
 /// tool rule would advertise an enforcement that a rename defeats.
 fn posture_for(permissions: Option<&Permissions>) -> Posture {
     let Some(permissions) = permissions else {
-        return Posture::unrestricted();
+        return Posture {
+            shell: ShellAccess::Unrestricted,
+            allowed_commands: Vec::new(),
+        };
     };
 
     let exec = ExecAccess::try_from(permissions.exec).unwrap_or(ExecAccess::Unspecified);
@@ -349,15 +478,15 @@ fn posture_for(permissions: Option<&Permissions>) -> Posture {
     // `allowed_commands` is additive on top of whatever base `exec` sets, which
     // is the contract's own rule. Under the preset the base is already
     // everything, so the additions are covered rather than dropped.
-    let allowed = permissions
+    let allowed_commands = permissions
         .allowed_commands
         .iter()
         .map(|command| command.trim())
         .filter(|command| !command.is_empty())
-        .flat_map(bash_rules)
+        .map(str::to_owned)
         .collect();
 
-    match exec {
+    let shell = match exec {
         // Unspecified means "the documented default", and the documented default
         // is the preset. Both land here so leaving the field alone and naming
         // the preset cannot behave differently.
@@ -367,8 +496,13 @@ fn posture_for(permissions: Option<&Permissions>) -> Posture {
         // the shell overshoots what the preset will eventually mean, and it is
         // the overshoot the contract already documents as pending rather than a
         // new one invented here.
-        ExecAccess::Unspecified | ExecAccess::Preset => Posture::unrestricted(),
-        ExecAccess::None | ExecAccess::Custom => Posture::named(allowed),
+        ExecAccess::Unspecified | ExecAccess::Preset => ShellAccess::Unrestricted,
+        ExecAccess::None | ExecAccess::Custom => ShellAccess::Named,
+    };
+
+    Posture {
+        shell,
+        allowed_commands,
     }
 }
 
@@ -388,26 +522,80 @@ fn bash_rules(command: &str) -> [String; 2] {
 
 /// Renders a posture as Claude CLI arguments.
 ///
-/// Each list is one argument rather than several. The CLI accepts a comma or
-/// space separated list and the option is variadic, so a rule per argument is a
-/// parser question nobody should have to answer while reading a bug report.
+/// The CLI offers `acceptEdits`, `auto`, `bypassPermissions`, `manual`,
+/// `dontAsk`, and `plan`. Only the two the satellite derives are ever emitted: a
+/// spelling nothing constructs is one nobody checked against the CLI, and a
+/// wrong one fails the launch rather than the permission.
+///
+/// Each rule list is one argument rather than several. The CLI accepts a comma
+/// or space separated list and the option is variadic, so a rule per argument is
+/// a parser question nobody should have to answer while reading a bug report.
+///
+/// With no command named, the shell is refused by name rather than left to be
+/// refused by silence, so the harness reports a denial an operator can read
+/// instead of an unexplained tool failure.
 fn claude_permission_args(posture: &Posture) -> Vec<String> {
-    let mut args = vec![
-        "--permission-mode".to_owned(),
-        posture.mode.as_flag().to_owned(),
-    ];
+    let mode = match posture.shell {
+        ShellAccess::Unrestricted => "bypassPermissions",
+        ShellAccess::Named => "acceptEdits",
+    };
 
-    if !posture.allowed.is_empty() {
+    let mut args = vec!["--permission-mode".to_owned(), mode.to_owned()];
+
+    let allowed: Vec<String> = posture
+        .allowed_commands
+        .iter()
+        .flat_map(|command| bash_rules(command))
+        .collect();
+
+    if !allowed.is_empty() {
         args.push("--allowedTools".to_owned());
-        args.push(posture.allowed.join(","));
+        args.push(allowed.join(","));
     }
 
-    if !posture.disallowed.is_empty() {
+    if posture.shell == ShellAccess::Named && allowed.is_empty() {
         args.push("--disallowedTools".to_owned());
-        args.push(posture.disallowed.join(","));
+        args.push("Bash".to_owned());
     }
 
     args
+}
+
+/// Renders the same posture as Codex CLI arguments.
+///
+/// Codex expresses permission through a coarse sandbox and an approval policy
+/// rather than through per-tool rules, so this is a narrower map than the Claude
+/// one and says so.
+///
+/// **Approvals are always `never`.** `codex exec` emits a one-way event stream,
+/// so an approval request reaches nobody and a turn that raised one would hang
+/// until the idle bound tore it down. That is the same reasoning that makes
+/// Claude's `--print` posture what it is: a gate nothing can answer is a stall,
+/// not a control.
+///
+/// **`allowed_commands` is not expressible.** Codex has no per-command rule on
+/// `exec`; its only lever is how wide the sandbox is. A thread that named its
+/// commands gets `workspace-write`, which is the narrowest sandbox that still
+/// lets an agent edit the files it was asked to edit, and the command list
+/// reaches the Claude arm only. Rendering it as something Codex would ignore
+/// would advertise an enforcement that does not exist. Per-command approval is
+/// what the app-server protocol on the roadmap carries.
+///
+/// Both settings are written as `-c` overrides rather than as `-s`, because
+/// `codex exec resume` accepts no `-s` and the first turn and every turn after
+/// it must run under the same posture.
+fn codex_permission_args(posture: &Posture) -> Vec<String> {
+    let sandbox = match posture.shell {
+        ShellAccess::Unrestricted => "danger-full-access",
+        ShellAccess::Named => "workspace-write",
+    };
+
+    vec![
+        "-c".to_owned(),
+        format!("sandbox_mode={sandbox}"),
+        "-c".to_owned(),
+        "approval_policy=never".to_owned(),
+    ]
 }
 
 /// One turn's admission to the model, by way of the satellite's proxy.
@@ -594,20 +782,26 @@ pub fn declared_key_refusal(key: &str) -> Option<&'static str> {
 /// and that variable is stripped with every other `ARSOX_*` before the child
 /// starts, so it has to be handed back deliberately. Compiled out entirely
 /// without `test-util`, which is what keeps this from becoming a hole.
+///
+/// One variable per harness, because the stand-in replays a native transcript
+/// and the two vocabularies are not interchangeable. Both are set once for a
+/// test process and never change, so neither is a knob one test can turn under
+/// another.
 fn agent_environment() -> Vec<AgentVar> {
     #[cfg(feature = "test-util")]
     {
-        std::env::var("ARSOX_FAKE_TRANSCRIPT")
-            .map(|path| {
-                vec![AgentVar {
-                    key: "ARSOX_FAKE_TRANSCRIPT".to_owned(),
+        ["ARSOX_FAKE_TRANSCRIPT", "ARSOX_FAKE_CODEX_TRANSCRIPT"]
+            .into_iter()
+            .filter_map(|key| {
+                std::env::var(key).ok().map(|path| AgentVar {
+                    key: key.to_owned(),
                     value: path,
                     // A fixture path. Masking it would hide the one fact worth
                     // reading when a stand-in harness replays the wrong file.
                     secret: false,
-                }]
+                })
             })
-            .unwrap_or_default()
+            .collect()
     }
 
     #[cfg(not(feature = "test-util"))]
@@ -1155,15 +1349,280 @@ mod tests {
     fn the_permission_flags_are_a_claude_spelling_rather_than_a_shared_one() {
         // `--permission-mode` is Claude's. Handing it to `codex exec` would fail
         // the launch rather than restrict it, so the flags are appended inside
-        // the Claude arm and nowhere above the match. Codex lands in that arm
-        // today only because it has no spawn path of its own; writing one means
-        // mapping this same posture onto Codex's approval flags.
+        // the Claude arm and nowhere above the match.
         let command = command_with(None);
         let flags = claude_permission_args(&posture_for(None));
 
         assert!(
             command.args.ends_with(&flags),
             "the Claude command should carry exactly the Claude permission flags"
+        );
+        assert!(
+            !command.args.iter().any(|argument| argument == "-c"),
+            "a Codex config override has no meaning to Claude"
+        );
+    }
+
+    /// The Codex command a test builds, with only the varying parts named.
+    fn codex_command_with(
+        session: &Session,
+        model_access: Option<ModelAccess>,
+        permissions: Option<&Permissions>,
+    ) -> HarnessCommand {
+        command_for(
+            Harness::Codex,
+            "do the thing",
+            session,
+            PathBuf::from("/workspace/thread"),
+            model_access,
+            &[],
+            permissions,
+        )
+    }
+
+    /// A first turn's Codex command, with nothing else declared.
+    fn first_codex_turn() -> HarnessCommand {
+        codex_command_with(
+            &Session::Start {
+                session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
+            },
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn a_codex_turn_runs_exec_with_the_json_stream() {
+        // Without `--json` the CLI writes a human report, and the mapper pointed
+        // at that parses prose as protocol.
+        let command = first_codex_turn();
+
+        assert_eq!(command.program, codex_binary());
+        assert_eq!(command.args[0], "exec");
+        assert!(command.args.contains(&"--json".to_owned()));
+        assert!(!command.args.contains(&"resume".to_owned()));
+    }
+
+    #[test]
+    fn a_codex_turn_is_allowed_to_run_outside_a_git_repository() {
+        // Measured against 0.147.0: without this the CLI refuses to start and
+        // writes one line of plain English, which the runner reports as a
+        // harness that exited without saying what it did. A thread's workspace
+        // is a directory the satellite created and frequently has no repository
+        // in it at all.
+        assert!(
+            first_codex_turn()
+                .args
+                .contains(&"--skip-git-repo-check".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_first_codex_turn_lets_the_cli_name_its_own_session() {
+        // Codex mints the session id and announces it on `thread.started`, so
+        // the id the satellite chose has nowhere to go. Passing one anyway would
+        // mean inventing a flag the CLI does not have.
+        let command = first_codex_turn();
+
+        assert!(
+            !command
+                .args
+                .iter()
+                .any(|argument| argument.contains("0199c0de")),
+            "{:?}",
+            command.args
+        );
+    }
+
+    #[test]
+    fn a_later_codex_turn_resumes_the_session_the_cli_minted() {
+        // This is what makes a thread a conversation. The id is the one the
+        // mapper recorded from `thread.started`, which is exactly what
+        // `codex exec resume` takes.
+        let command = codex_command_with(
+            &Session::Resume {
+                session_id: "01a01cd2-200b-77f0-b4b8-7421557ff5ed".to_owned(),
+            },
+            None,
+            None,
+        );
+
+        assert_eq!(command.args[0], "exec");
+        assert_eq!(command.args[1], "resume");
+
+        let positionals = command
+            .args
+            .iter()
+            .position(|argument| argument == "--")
+            .map(|index| &command.args[index + 1..])
+            .expect("positionals travel behind the separator");
+
+        assert_eq!(
+            positionals,
+            ["01a01cd2-200b-77f0-b4b8-7421557ff5ed", "do the thing"],
+            "resume takes the session id first and the prompt second"
+        );
+    }
+
+    #[test]
+    fn a_codex_prompt_travels_behind_the_separator() {
+        // A prompt is untrusted text and it is a positional argument here rather
+        // than the value of a flag, so one beginning with a dash would otherwise
+        // be parsed as one.
+        let command = command_for(
+            Harness::Codex,
+            "--dangerously-bypass-approvals-and-sandbox",
+            &Session::Start {
+                session_id: "x".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            None,
+            &[],
+            None,
+        );
+
+        let separator = command
+            .args
+            .iter()
+            .position(|argument| argument == "--")
+            .expect("the separator should be emitted");
+
+        assert_eq!(
+            command.args[separator + 1],
+            "--dangerously-bypass-approvals-and-sandbox"
+        );
+        assert_eq!(command.args.len(), separator + 2);
+    }
+
+    #[test]
+    fn codex_reaches_the_model_through_the_proxy_rather_than_the_provider() {
+        // 0.147.0 does not read `OPENAI_BASE_URL`, so the address has to arrive
+        // as a declared provider. `wire_api=responses` is what keeps this an
+        // ordinary POST: left to its built-in provider the CLI opens a WebSocket
+        // the proxy does not speak, and every model request would go straight
+        // past the ceilings.
+        let command = codex_command_with(
+            &Session::Start {
+                session_id: "x".to_owned(),
+            },
+            Some(ModelAccess {
+                base_url: "http://127.0.0.1:9/t/the-token".to_owned(),
+                token: "the-turns-proxy-token".to_owned(),
+            }),
+            None,
+        );
+
+        let overrides: Vec<&String> = command
+            .args
+            .iter()
+            .enumerate()
+            .filter(|(index, _setting)| {
+                index
+                    .checked_sub(1)
+                    .and_then(|before| command.args.get(before))
+                    == Some(&"-c".to_owned())
+            })
+            .map(|(_index, setting)| setting)
+            .collect();
+
+        assert!(overrides.contains(&&"model_provider=arsox".to_owned()));
+        assert!(overrides.contains(
+            &&"model_providers.arsox.base_url=http://127.0.0.1:9/t/the-token/v1".to_owned()
+        ));
+        assert!(overrides.contains(&&"model_providers.arsox.env_key=OPENAI_API_KEY".to_owned()));
+        assert!(overrides.contains(&&"model_providers.arsox.wire_api=responses".to_owned()));
+
+        // The key travels in the environment, which is what `env_key` names, and
+        // it is the turn's token rather than a provider credential.
+        let key = command
+            .env
+            .iter()
+            .rfind(|variable| variable.key == "OPENAI_API_KEY")
+            .expect("the turn's token should be set");
+        assert_eq!(key.value, "the-turns-proxy-token");
+        assert!(key.secret, "a turn token is never rendered in a log");
+    }
+
+    #[test]
+    fn a_codex_thread_cannot_declare_its_way_around_the_proxy() {
+        // The variable this version ignores is still set, and set last. A CLI
+        // that grew a reading of it must not find an inherited or declared value
+        // there, because that value is a route around every ceiling.
+        let command = command_for(
+            Harness::Codex,
+            "do the thing",
+            &Session::Start {
+                session_id: "x".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            Some(ModelAccess {
+                base_url: "http://127.0.0.1:9/t/the-token".to_owned(),
+                token: "the-turns-proxy-token".to_owned(),
+            }),
+            &[declared(
+                "OPENAI_BASE_URL",
+                "https://elsewhere.invalid",
+                None,
+            )],
+            None,
+        );
+
+        let applied = command
+            .env
+            .iter()
+            .rfind(|variable| variable.key == "OPENAI_BASE_URL")
+            .expect("the proxy address should be set");
+
+        assert_eq!(applied.value, "http://127.0.0.1:9/t/the-token/v1");
+    }
+
+    #[test]
+    fn a_codex_posture_is_a_sandbox_width_rather_than_a_tool_rule() {
+        let unrestricted = first_codex_turn();
+
+        assert!(
+            unrestricted
+                .args
+                .contains(&"sandbox_mode=danger-full-access".to_owned()),
+            "the default posture matches the boundary that actually exists"
+        );
+        // A one-way event stream has nobody to answer an approval, so a turn
+        // that raised one would hang until the idle bound tore it down.
+        assert!(
+            unrestricted
+                .args
+                .contains(&"approval_policy=never".to_owned())
+        );
+
+        let named = Permissions {
+            exec: ExecAccess::Custom.into(),
+            allowed_commands: vec!["yarn install".to_owned()],
+            ..Permissions::default()
+        };
+        let restricted = codex_command_with(
+            &Session::Start {
+                session_id: "x".to_owned(),
+            },
+            None,
+            Some(&named),
+        );
+
+        assert!(
+            restricted
+                .args
+                .contains(&"sandbox_mode=workspace-write".to_owned()),
+            "a thread that named its commands did not ask for a blanket bypass"
+        );
+        // Codex has no per-command rule on `exec`. Emitting the list anyway
+        // would advertise an enforcement the CLI would ignore. See
+        // docs/harness.md.
+        assert!(
+            !restricted
+                .args
+                .iter()
+                .any(|argument| argument.contains("yarn install")),
+            "{:?}",
+            restricted.args
         );
     }
 

@@ -32,6 +32,23 @@ const TRANSCRIPT: &str = concat!(
     "/../arsox-harness/fixtures/claude/2.1.221/tool-call.stdout.jsonl"
 );
 
+/// The same, in the Codex vocabulary.
+///
+/// A live `codex exec --json` run that wrote a file and read it back, so it
+/// carries the two lifecycle lines, a patch, a shell command, and the two agent
+/// messages that bracket them. It is the recording the Codex mapper's own
+/// conformance test asserts against, for the same one-copy reason.
+const CODEX_TRANSCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../arsox-harness/fixtures/codex/0.147.0/tool-call.stdout.jsonl"
+);
+
+/// The session id that recording's `thread.started` announces.
+///
+/// Minted by the CLI rather than chosen by the satellite, which is the whole
+/// difference between the two harnesses' session handling.
+const CODEX_SESSION_ID: &str = "01a01cd2-200b-77f0-b4b8-7421557ff5ed";
+
 struct Harness {
     store: Store,
     workspace: tempdir::TempDir,
@@ -109,6 +126,11 @@ async fn start_prepared(
         unsafe {
             std::env::set_var("ARSOX_CLAUDE_BIN", env!("CARGO_BIN_EXE_arsox-fake-harness"));
             std::env::set_var("ARSOX_FAKE_TRANSCRIPT", TRANSCRIPT);
+            // One stand-in binary and one transcript per harness. The binary
+            // reads its own command line to tell which of the two it is being
+            // asked to be, so both can be pointed at the same executable.
+            std::env::set_var("ARSOX_CODEX_BIN", env!("CARGO_BIN_EXE_arsox-fake-harness"));
+            std::env::set_var("ARSOX_FAKE_CODEX_TRANSCRIPT", CODEX_TRANSCRIPT);
         }
     });
 
@@ -1345,5 +1367,166 @@ async fn a_turn_whose_every_endpoint_failed_ends_on_the_aggregate_error() {
     assert_eq!(
         recorded[0].disposition,
         i32::from(arsox_sdk::proto::incident::v1::Disposition::Fatal)
+    );
+}
+
+/// A thread that names Codex as its harness.
+///
+/// The one setting that changes, so anything these tests find is about the
+/// harness rather than about a differently configured thread.
+fn codex_thread() -> ThreadSettings {
+    ThreadSettings {
+        harness: arsox_sdk::proto::harness::v1::Harness::Codex.into(),
+        ..Default::default()
+    }
+}
+
+/// What a turn's stand-in harness was asked to run, as it saw it.
+///
+/// Read from the file the child wrote rather than rebuilt from the settings,
+/// because "did this turn resume a session" is a fact about the command line and
+/// the child is the only thing that can report one.
+///
+/// The program's own path leads the list, exactly as `argv` does, and is dropped
+/// here so a caller reads the arguments the satellite chose.
+fn recorded_argv(workspace: &std::path::Path, thread_id: &str, file: &str) -> Vec<String> {
+    let recorded = std::fs::read_to_string(workspace.join(thread_id).join(file))
+        .expect("the stand-in should have recorded its command line");
+
+    recorded.lines().skip(1).map(str::to_owned).collect()
+}
+
+#[tokio::test]
+async fn a_codex_thread_runs_a_turn_and_lands_its_mapped_events_in_the_log() {
+    // The normalization claim closing end to end: a different CLI, a different
+    // native vocabulary, and the same canonical events in the same log. Nothing
+    // below this line knows which harness produced them.
+    let (harness, thread_id, turn_id) = start_with("run the probe", codex_thread()).await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Completed
+    );
+
+    let names: Vec<String> = harness
+        .store
+        .events_after(&thread_id, 0, 100)
+        .await
+        .expect("should replay")
+        .into_iter()
+        .map(|event| event.r#type)
+        .collect();
+
+    assert_eq!(
+        names,
+        vec![
+            "turn.started",
+            // The preamble, the patch, the command, and the answer. Codex
+            // delivers a patch as an item rather than as a tool call, and the
+            // contract has one shape for a tool call either way.
+            "agent.message",
+            "tool.started",
+            "tool.completed",
+            "tool.started",
+            "tool.completed",
+            "agent.message",
+            "turn.completed",
+        ]
+    );
+
+    let result = result_of(&harness.store, &thread_id, &turn_id).await;
+
+    // Codex closes with an `agent_message` item and reports `turn.completed`
+    // with counts and nothing else, so the summary comes from the last thing the
+    // agent said. The first message is the preamble, which is what makes *last*
+    // load-bearing.
+    assert!(
+        result.summary.contains("Created `hello.txt`"),
+        "the turn should report the answer rather than the plan: {:?}",
+        result.summary
+    );
+}
+
+#[tokio::test]
+async fn a_codex_turn_reports_usage_with_the_cached_tokens_taken_out() {
+    // Codex counts cached tokens inside `input_tokens` and Anthropic counts them
+    // beside it, so the mapper subtracts. This asserts the corrected number
+    // survives the whole path into the turn's stored result, which is where a
+    // cost reconciliation reads it.
+    let (harness, thread_id, turn_id) = start_with("run the probe", codex_thread()).await;
+    settle(&harness.store, &thread_id, &turn_id).await;
+
+    let result = result_of(&harness.store, &thread_id, &turn_id).await;
+    let tokens = result.tokens.expect("usage should be recorded");
+
+    assert_eq!(tokens.cache_read_tokens, Some(17_920));
+    assert_eq!(
+        tokens.input_tokens, 11_117,
+        "29,037 reported minus 17,920 cached"
+    );
+    assert_eq!(
+        tokens.total_tokens,
+        tokens.input_tokens + tokens.output_tokens,
+        "cache reads are reported beside input and must not be added back"
+    );
+
+    // Absent rather than zero. The provider behind this harness has no
+    // cache-write concept, so the zero it reports is a placeholder and claiming
+    // "this run wrote nothing to cache" would be a different and false statement.
+    assert_eq!(tokens.cache_write_tokens, None);
+
+    // The usage event names no model, so the mapper splits by none. Inventing
+    // one here would be the harness leaking into a number a consumer groups by.
+    assert!(result.by_model.is_empty());
+}
+
+#[tokio::test]
+async fn a_codex_thread_resumes_the_session_the_cli_minted_for_it() {
+    // The session handling is inverted from Claude's. The satellite has no say
+    // in the id, so the first turn asks for nothing and the mapper records what
+    // `thread.started` announced. Without this a thread would be a series of
+    // unrelated turns rather than a conversation.
+    let (harness, thread_id, first) =
+        start_with("run the probe [[record_argv=first.argv]]", codex_thread()).await;
+
+    settle(&harness.store, &thread_id, &first).await;
+
+    let thread = harness.store.thread(&thread_id).await.expect("should read");
+    assert_eq!(
+        thread.harness_session_id.as_deref(),
+        Some(CODEX_SESSION_ID),
+        "the id belongs to the CLI, not to the satellite"
+    );
+    assert_ne!(
+        thread.harness_session_id.as_deref(),
+        Some(thread_id.as_str()),
+        "reusing the thread id here would hide the CLI ignoring it"
+    );
+
+    let opened = recorded_argv(harness.workspace.path(), &thread_id, "first.argv");
+    assert!(!opened.contains(&"resume".to_owned()), "{opened:?}");
+    assert!(
+        !opened.iter().any(|argument| argument == CODEX_SESSION_ID),
+        "a first turn cannot know an id the CLI has not minted yet: {opened:?}"
+    );
+
+    let second = queue_another(
+        &harness.store,
+        &thread_id,
+        "and now this [[record_argv=second.argv]]",
+    )
+    .await;
+    settle(&harness.store, &thread_id, &second).await;
+
+    let resumed = recorded_argv(harness.workspace.path(), &thread_id, "second.argv");
+
+    assert_eq!(
+        resumed.get(..2).map(<[String]>::to_vec),
+        Some(vec!["exec".to_owned(), "resume".to_owned()]),
+        "{resumed:?}"
+    );
+    assert!(
+        resumed.iter().any(|argument| argument == CODEX_SESSION_ID),
+        "the second turn should carry the id the first one recorded: {resumed:?}"
     );
 }

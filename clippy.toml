@@ -1,0 +1,10 @@
+# Copyright © 2026 Jalapeno Labs
+
+# Words that are spelled with an internal capital and are not code.
+#
+# `clippy::doc_markdown` reads a camel-cased word in prose as an identifier
+# somebody forgot to put in backticks, which is usually right. It is wrong for a
+# vendor's name: backticking `OpenAI` would render a company as a type. The `..`
+# entry extends clippy's own list rather than replacing it, so `OpenGL` and
+# every other default stays exempt.
+doc-valid-idents = [ "OpenAI", ".." ]

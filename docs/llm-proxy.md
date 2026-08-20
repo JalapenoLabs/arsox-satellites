@@ -49,11 +49,22 @@ The proxy strips whatever the caller presented and attaches the real credential
 itself. Stripped rather than overwritten, so a request cannot arrive carrying
 two and have the upstream pick the agent's.
 
-An API key is sent as `x-api-key` and a subscription or OAuth token as
-`Authorization: Bearer`. They are not interchangeable: sending a subscription
-token in `x-api-key` is rejected in a way that looks like a bad credential
-rather than a mis-shaped request. An OAuth credential presents its access token
-only; the refresh token never leaves the satellite.
+A subscription or OAuth token is sent as `Authorization: Bearer`. An API key is
+sent as `x-api-key`, except to OpenAI, which reads one from `Authorization:
+Bearer` like everything else. The header is decided from the endpoint's own base
+URL rather than from the shape of the key, because guessing a vendor from a
+key's prefix breaks the first time a vendor changes one.
+
+None of these is interchangeable: a credential in the wrong header is rejected
+in a way that looks like a bad credential rather than a mis-shaped request,
+which is the most expensive possible way to be wrong about a header. An OAuth
+credential presents its access token only; the refresh token never leaves the
+satellite.
+
+A self-hosted OpenAI-compatible endpoint is not matched by host and should
+declare its credential as a subscription token, which already presents a bearer.
+Carrying the presentation in the contract is the real fix and is a proto change,
+so it is on the roadmap below.
 
 A `Secret` carrying a `display` and no `value` presents nothing. Settings that
 round-tripped through a response have the redacted rendering and no plaintext,
@@ -132,6 +143,19 @@ listing an OpenAI endpoint behind an Anthropic one works today, and it does not.
 The cost that does apply to same-shape failover is the cache: the prompt prefix
 cached at the endpoint that failed is gone, so the request that lands on the next
 one pays full price for the entire conversation.
+
+**Same shape is also what carries a Codex thread.** The proxy relays the body
+opaquely and swaps the credential, so a Codex turn's OpenAI-shaped request
+reaches a declared OpenAI endpoint intact and no translation is involved. Two
+things have to line up for it, and both are the caller's:
+
+- **Declare the origin, not the versioned prefix.** The proxy forwards the path
+  the harness asked for, so an endpoint declared as `https://api.openai.com/v1`
+  receives `/v1/v1/responses`. Anthropic's default is spelled the same way, for
+  the same reason.
+- **Every endpoint in one list still has to accept one shape.** A Codex thread's
+  list is OpenAI endpoints and an Anthropic thread's list is Anthropic ones.
+  Mixing them is the cross-shape failover above, which the sidecar owns.
 
 ### What each endpoint's policy decides
 
@@ -351,6 +375,8 @@ wait in a published image would be a retry loop with no wait in it.
 ## Roadmap
 
 - Cost per request, once the contract carries model pricing.
+- Credential presentation in the contract, so a self-hosted OpenAI-compatible
+  endpoint says how its key is sent rather than being inferred from its host.
 - `LLM_ENDPOINT_UNAVAILABLE`, so an endpoint that could not be reached and a
   status the taxonomy cannot name stop borrowing codes that mean something else.
 - OAuth refresh, so an endpoint whose access token expires mid-thread recovers

@@ -4,9 +4,13 @@ A harness is the CLI that drives an agent. Each speaks its own event vocabulary,
 and a mapper turns that vocabulary into the one canonical contract, so an
 application is written once and never rewritten when the harness changes.
 
-Two mappers exist: Claude and Codex. A satellite spawns Claude only, so the
-Codex mapper is knowledge the runner cannot reach yet, and the spawn path is
-what remains.
+Two harnesses exist: Claude and Codex. A satellite spawns either, and a thread
+picks one at creation. Claude is the default, which is what `GET /v1/harness`
+reports and what a thread that names none gets.
+
+The difference a harness makes to the satellite is one function in the runner
+that picks a mapper. Everything else in the turn loop is written against the
+canonical contract, which is the property the whole project exists to hold.
 
 ## Lenient in, strict out
 
@@ -103,6 +107,14 @@ Codex also stamps `client_metadata` on its API requests, carrying `session_id`,
 which is why the harness session id comes from `thread.started`, the same id
 `codex exec resume` takes.
 
+**A Codex turn reports no summary of its own.** Its closing message is an
+`agent_message` item and `turn.completed` carries token counts and nothing else,
+so the mapper, which is a pure function of one line and holds no state between
+lines, has none to give. The runner keeps the last `agent.message` it saw and
+fills a summary the result left empty. *Last* rather than first: a turn opens
+with a preamble announcing what the agent is about to do, so the first message
+is the plan and not the answer.
+
 ## Names that had to change
 
 `num_turns` becomes `TurnTiming.model_round_trips`. A harness counts one request
@@ -176,9 +188,20 @@ subquery excludes any thread that already has something running, so two runners
 racing produce one winner and one `None` rather than two processes driving one
 conversation.
 
-**A thread resumes its harness session.** The first turn opens a session under an
-id the satellite chooses; later turns pass `--resume`. Without that a thread
-would be a series of unrelated turns rather than a conversation.
+**A thread resumes its harness session.** Without that a thread would be a
+series of unrelated turns rather than a conversation.
+
+The two harnesses disagree about who names the session, and the disagreement is
+absorbed in the spawn rather than in the runner:
+
+| | Claude | Codex |
+|---|---|---|
+| first turn | `--session-id <thread-id>`, an id the satellite chooses | nothing; the CLI mints its own |
+| the id is learned from | the satellite already knows it | `thread.started`, recorded by the mapper |
+| later turns | `--resume <id>` | `codex exec resume <id>` |
+
+Either way the thread's second turn continues the session its first turn opened,
+which is the only part of this the rest of the satellite is written against.
 
 **Cancellation is a database write, not a signal.** It arrives as an ordinary
 HTTP request, so the runner learns about it by asking every so often rather than
@@ -290,7 +313,7 @@ asked for would misreport why a check is red.
 
 ### Permissions reach the harness as flags
 
-A harness launched with `--print` cannot answer a permission prompt. Without
+A harness driven non-interactively cannot answer a permission prompt. Without
 permission flags every file edit and every shell command it tries is refused, so
 a non-interactive turn can talk about work but never do any. The spawn maps the
 thread's permissions onto flags to close that.
@@ -306,15 +329,21 @@ is the only real boundary**, and none of them is something `--permission-mode`
 can switch off, so they will enforce underneath these flags rather than through
 them.
 
-| Setting | Flag | Note |
+**The decision is derived once and rendered twice.** `Posture` in `spawn.rs`
+holds what the thread asked for, and each harness arm says what its own CLI
+calls that. Two arms re-deriving it from `Permissions` would be two automata over
+one setting, and two of anything is one more thing that can disagree.
+
+| Setting | Claude | Codex |
 |---|---|---|
-| nothing declared | `--permission-mode bypassPermissions` | the documented default is the preset, so this is where both land |
-| `exec: PRESET` | `--permission-mode bypassPermissions` | the curated list belongs to the broker, which does not exist yet |
-| `exec: NONE` | `--permission-mode acceptEdits --disallowedTools Bash` | the shell goes, edits stay |
-| `exec: CUSTOM` | `--permission-mode acceptEdits --allowedTools Bash(cmd),Bash(cmd *)` | one pair of rules per command |
-| `allowed_commands` | the same pair of rules, added to whatever `exec` set | additive, which is the contract's own rule |
-| `web`, `additional_domains` | none | the egress proxy's, not a tool rule |
-| `allow_git_push`, `protected_branches` | none | the `pre-push` hook's, not a tool rule |
+| nothing declared | `--permission-mode bypassPermissions` | `-c sandbox_mode=danger-full-access` |
+| `exec: PRESET` | `--permission-mode bypassPermissions` | `-c sandbox_mode=danger-full-access` |
+| `exec: NONE` | `--permission-mode acceptEdits --disallowedTools Bash` | `-c sandbox_mode=workspace-write` |
+| `exec: CUSTOM` | `--permission-mode acceptEdits --allowedTools Bash(cmd),Bash(cmd *)` | `-c sandbox_mode=workspace-write`, and the list is dropped |
+| `allowed_commands` | the same pair of rules, added to whatever `exec` set | not expressible |
+| always | | `-c approval_policy=never` |
+| `web`, `additional_domains` | none | none |
+| `allow_git_push`, `protected_branches` | none | none |
 
 Three decisions in that table are worth their reasoning.
 
@@ -343,10 +372,78 @@ defeats. Those two stay with the infrastructure that can actually hold them.
 Claude spelling for an advisory gate, and `Permissions` documents itself as
 deterministic controls; putting one in the other would leak a harness into the
 wire format and promise an enforcement the satellite does not perform. The
-posture is derived from what the contract already states, and it is derived
-inside the Claude arm of the spawn, because handing `--permission-mode` to
-`codex exec` would fail the launch rather than restrict it. Writing the Codex
-spawn path means mapping the same posture onto Codex's own approval flags.
+posture is derived from what the contract already states, and each arm renders
+it: handing `--permission-mode` to `codex exec` would fail the launch rather
+than restrict it, and `-c sandbox_mode=` means nothing to Claude.
+
+#### What Codex cannot express
+
+**No per-command rule.** `codex exec` has no equivalent of `--allowedTools
+Bash(...)`; its only lever is how wide the sandbox is. So a thread that named its
+commands gets `workspace-write`, the narrowest sandbox that still lets an agent
+edit the files it was asked to edit, and `allowed_commands` reaches the Claude
+arm only. Rendering the list as a flag the CLI would ignore would advertise an
+enforcement that is not there. The CLI does carry an `execpolicy` `.rules`
+format, and its app-server protocol exposes per-command approvals as first-class
+requests; the roadmap below is where that lands.
+
+**Approvals are always `never`.** `codex exec` emits a one-way event stream, so
+an approval request reaches nobody and a turn that raised one would hang until
+the idle bound tore it down. Same reasoning as the Claude default: a gate nothing
+can answer is a stall rather than a control.
+
+**Both settings are written as `-c` overrides rather than as `-s`.** `codex exec`
+accepts `-s`, and `codex exec resume` does not. A first turn and every turn after
+it have to run under the same posture, so the spelling that works for both is the
+one the satellite emits.
+
+### Launching Codex
+
+Every flag in the Codex spawn is load-bearing, and each was measured against
+0.147.0 rather than read from a schema.
+
+| Flag | Why |
+|---|---|
+| `--json` | without it `codex exec` writes a human report, and a mapper pointed at prose parses prose |
+| `--skip-git-repo-check` | a thread's workspace is a directory the satellite created and frequently has no repository in it. Without this the CLI writes one line of plain English and exits, which the runner correctly reports as a harness that said nothing about what it did |
+| `--` | the prompt is a positional argument here rather than the value of a flag, and it is untrusted text, so one beginning with a dash would otherwise be parsed as one |
+
+The working directory is the process's rather than `-C`, because `codex exec
+resume` accepts no `-C` and the two forms must not diverge in where they run.
+
+#### Reaching the model
+
+Claude takes `ANTHROPIC_BASE_URL` and the turn's grant reaches it as an ordinary
+environment variable. Codex does not: **0.147.0 does not read `OPENAI_BASE_URL`
+at all**, and left alone it opens a WebSocket to its built-in provider, which the
+proxy does not speak and which would take every model request straight past the
+ceilings.
+
+So the address arrives as a declared provider instead:
+
+```
+-c model_provider=arsox
+-c model_providers.arsox.base_url=<grant>/v1
+-c model_providers.arsox.env_key=OPENAI_API_KEY
+-c model_providers.arsox.wire_api=responses
+```
+
+`wire_api=responses` is what makes a model request an ordinary POST to
+`{base_url}/responses`. A `-c` override outranks anything in a `config.toml`, so
+an operator's own provider entry is left intact and the turn still runs through
+the satellite. The provider is named `arsox` rather than overriding `openai` for
+the same reason.
+
+The `/v1` is added by the spawn. The grant address is an origin, Claude appends
+`/v1` itself when it posts `/v1/messages`, and Codex appends only `/responses`,
+so both harnesses reach the proxy on the same shape of path. The endpoint a
+caller declares is an origin too; see
+[the proxy doc](./llm-proxy.md#same-shape-only).
+
+`OPENAI_BASE_URL` is still set, and set last. The variable this version ignores
+is one a later version might read, and a value the satellite inherited or a
+thread declared would then be the one it obeys. That is a route around every
+ceiling, closed the same way `ANTHROPIC_BASE_URL` is.
 
 ### The agent's environment is built, not inherited
 
@@ -412,6 +509,57 @@ is a race in which one test silently reconfigures another. It was one, until two
 tests started failing for reasons that had nothing to do with the code under
 test.
 
+**One binary stands in for both harnesses**, and reads its own command line to
+tell which it is being asked to be: `codex exec …` or `claude --print …`. Nothing
+else could decide it, since the satellite hands both forms to whatever
+`ARSOX_CLAUDE_BIN` and `ARSOX_CODEX_BIN` point at, and an environment variable
+saying which is which would be exactly the race above.
+
+The transcript comes from `ARSOX_FAKE_TRANSCRIPT` or
+`ARSOX_FAKE_CODEX_TRANSCRIPT`, one per harness, because a transcript belongs to a
+vocabulary. Replaying a Claude recording through the Codex mapper produces a turn
+made entirely of unrecognized events rather than an obvious failure. Both are set
+once for a process and never change, so neither is a knob.
+
+Two directives report from the child's own seat, which is the only vantage point
+that can answer what the CLI actually got: `[[report_env=NAME]]` for the
+environment, and `[[record_argv=FILE]]` for the command line. Asserting on the
+satellite's side would be asserting on intent, and "did this turn resume a
+session" is precisely the kind of question that has to be answered by the thing
+that was asked to do it.
+
+## What `GET /v1/harness` reports
+
+Capability facts are stated per harness, in code, because they are facts about a
+CLI rather than about a satellite. The two that are not static, whether a CLI is
+installed at all and which version it is, are probed once at boot.
+
+| | Claude | Codex |
+|---|---|---|
+| `supports_native_plan_mode` | yes | no; `codex exec` has none, which is what the skill fallback is for |
+| `supports_subagents` | yes | no; the exec stream carries no member id to derive one from |
+| `supports_thinking_events` | yes | yes; a `reasoning` item maps to `agent.thinking` |
+| `supports_context_fork` | yes | no; `codex fork` forks an interactive session and a turn runs under `exec` |
+| `supports_mcp` | yes | yes |
+| `reports_cache_tokens` | yes | yes, with one asymmetry below |
+
+Every Codex row is checked against what its mapper produces from the recorded
+fixtures rather than against a feature list, because a capability a consumer
+plans around and then never sees is worse than one it was told about.
+
+**`reports_cache_tokens` is one bool over two counts, and Codex splits them.**
+Cache reads are measured and `cache_read_tokens` carries them; `cache_write_tokens`
+is always absent, because the provider behind it has no cache-write concept.
+Reporting false would tell a consumer to ignore a read count that is real, which
+is the more expensive of the two mistakes.
+
+**Claude is listed whether or not its probe answered, and Codex is listed only
+when its binary ran.** The asymmetry is deliberate: the image installs Claude and
+the satellite defaults to it, so a failed probe says something about the probe.
+Codex is what an operator may or may not have added on top, and a satellite that
+advertised one it cannot run would have a caller learn the truth as
+`HARNESS_LAUNCH_FAILED` on its first turn.
+
 ## Roadmap
 
 - **Crash restart-once.** A harness that died is recovered the same way a hung
@@ -420,10 +568,6 @@ test.
 - **Bidirectional mode.** Both CLIs accept streaming input as well as emitting
   streaming output, which suits a long-lived process per thread better than a
   spawn per turn. It is also what makes cancellation and mid-turn input possible.
-- **Spawning Codex.** The mapper reads `codex exec --json` today; the runner
-  cannot start one. That spawn path also has to take the turn summary from the
-  last `agent.message`, since Codex's closing message is an item rather than
-  part of `turn.completed` and a per-line mapper holds no state to fold it in.
 - **A commander that can accept a failing checker.** The MCP tool that sets
   `skipped_by_commander`, so a check the agents deliberately accept is reported
   as accepted rather than as unfixed. A skip applies to one turn and never
@@ -433,6 +577,7 @@ test.
   exist, and they remain advisory afterward: these enforce underneath them.
 - **Codex over its app-server protocol.** It exposes command, patch, and network
   approvals as first-class requests, which is a better fit for the permission
-  model than a one-way event stream.
+  model than a one-way event stream, and is what would let `allowed_commands`
+  mean something to Codex rather than being dropped.
 - **Pairing `tool.completed` back to `tool.started`** for the elapsed duration
   and the tool name, neither of which the native result event carries.
