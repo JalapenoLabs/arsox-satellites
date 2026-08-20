@@ -480,9 +480,9 @@ pub struct ServeOptions {
 
     /// TCP port to listen on, defaulting to 8080.
     ///
-    /// Read by [`serve`] and by nothing else: [`assemble`] binds no port, so a
-    /// caller that serves the router itself decides the address on its own and
-    /// this field is inert for them.
+    /// [`serve`] binds it, and the container healthcheck reads it to know where
+    /// to probe. [`assemble`] binds nothing, so a caller serving the router
+    /// itself picks its own address and leaves this field inert.
     pub port: u16,
 
     /// How often to sweep for expired threads.
