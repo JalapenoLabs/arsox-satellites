@@ -10,7 +10,12 @@
 #
 # Behaviour rides on the prompt as [[key=value]] directives, for the same reason
 # it does in the Rust stand-in: the prompt belongs to one spawn, and process
-# environment is shared by every spawn.
+# environment is shared by every spawn. The two stand-ins share the vocabulary
+# they both implement, so a smoke check written against one runs against either:
+#
+# - [[exit=N]] exits with N rather than 0, for the crash path.
+# - [[unrecognized=N]] emits N lines of an event type nothing maps, before the
+#   transcript, for the degraded incident a later CLI's new event type produces.
 set -eu
 
 TRANSCRIPT="${ARSOX_FAKE_TRANSCRIPT:-/fixtures/tool-call.stdout.jsonl}"
@@ -34,6 +39,25 @@ case "$prompt" in
     code=0
     ;;
 esac
+
+case "$prompt" in
+  *"[[unrecognized="*)
+    unrecognized="${prompt#*[[unrecognized=}"
+    unrecognized="${unrecognized%%]]*}"
+    ;;
+  *)
+    unrecognized=0
+    ;;
+esac
+
+# An event type nothing maps, which is what a CLI release adding one looks like
+# from here. The mapper records a degraded incident and drops the line, so the
+# turn still finishes and the smoke test has an incident to read back.
+emitted=0
+while [ "$emitted" -lt "$unrecognized" ]; do
+  printf '{"type":"an_event_type_from_a_later_cli"}\n'
+  emitted=$((emitted + 1))
+done
 
 # Line at a time, so the satellite reads this as the stream it is rather than one
 # buffered blob.
