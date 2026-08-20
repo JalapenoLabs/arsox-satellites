@@ -10,6 +10,7 @@
 use crate::{Satellite, contract_error, protobuf};
 use arsox_sdk::proto::common::v1::{PageRequest, PageResponse};
 use arsox_sdk::proto::error::v1::ErrorCode;
+use arsox_sdk::proto::incident::v1::{ListIncidentsRequest, ListIncidentsResponse};
 use arsox_sdk::proto::thread::v1::{
     CreateThreadRequest, CreateThreadResponse, DestroyThreadResponse, DrainThreadResponse,
     GetThreadResponse, ListThreadsResponse, PauseThreadResponse, ResumeThreadResponse, ThreadOrder,
@@ -26,7 +27,7 @@ use axum::routing::{delete, get, post};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use crate::store::{NewThread, NewTurn, StoreError, ThreadFilter};
+use crate::store::{IncidentFilter, NewThread, NewTurn, StoreError, ThreadFilter};
 use arsox_sdk::proto::event::v1::control_event::Payload;
 use arsox_sdk::proto::event::v1::{ThreadCreated, ThreadEndReason};
 
@@ -410,6 +411,71 @@ async fn list_turns(
     }
 }
 
+/// Reads every incident on the satellite, filtered and paged.
+///
+/// Deliberately not scoped to a live thread. An incident from a collected thread
+/// is exactly the incident an operator came looking for, so a filter naming a
+/// tombstone answers with its evidence rather than with `THREAD_EXPIRED`.
+async fn list_incidents(
+    State(satellite): State<Arc<Satellite>>,
+    Protobuf(request): Protobuf<ListIncidentsRequest>,
+) -> Response {
+    incidents(&satellite, request, None).await
+}
+
+/// The same listing, scoped to one thread.
+///
+/// The path wins over any `thread_ids` in the body, so the URL says what it
+/// looks like it says. A caller wanting several threads at once has the
+/// satellite-wide endpoint.
+async fn list_thread_incidents(
+    State(satellite): State<Arc<Satellite>>,
+    Path(thread_id): Path<String>,
+    Protobuf(request): Protobuf<ListIncidentsRequest>,
+) -> Response {
+    incidents(&satellite, request, Some(thread_id)).await
+}
+
+/// Serves an incident listing, optionally pinned to one thread.
+async fn incidents(
+    satellite: &Satellite,
+    request: ListIncidentsRequest,
+    scoped_to: Option<String>,
+) -> Response {
+    let page = request.page.unwrap_or_default();
+
+    let filter = IncidentFilter {
+        thread_ids: scoped_to.map_or(request.thread_ids, |thread_id| vec![thread_id]),
+        turn_ids: request.turn_ids,
+        member_ids: request.member_ids,
+        codes: request.codes,
+        dispositions: request.dispositions,
+        occurred_after: request.occurred_after.as_ref().map(crate::store::to_nanos),
+        occurred_before: request.occurred_before.as_ref().map(crate::store::to_nanos),
+        after: if page.cursor.is_empty() {
+            None
+        } else {
+            Some(page.cursor)
+        },
+        limit: page.limit,
+    };
+
+    match satellite.store.list_incidents(&filter).await {
+        Ok(listing) => protobuf(&ListIncidentsResponse {
+            incidents: listing.incidents,
+            page: Some(PageResponse {
+                // Carries the sort key alongside the id, because incidents sort
+                // by a timestamp and a timestamp is not unique.
+                next_cursor: listing.next_cursor,
+                // Counting every match would mean a second scan on every page.
+                // Absent says "not computed" rather than claiming zero.
+                total: None,
+            }),
+        }),
+        Err(error) => store_failure(&error),
+    }
+}
+
 async fn get_turn(
     State(satellite): State<Arc<Satellite>>,
     Path((thread_id, turn_id)): Path<(String, String)>,
@@ -442,6 +508,11 @@ pub fn routes() -> Router<Arc<Satellite>> {
         .route("/v1/threads/{thread_id}/pause", post(pause_thread))
         .route("/v1/threads/{thread_id}/resume", post(resume_thread))
         .route("/v1/threads/{thread_id}/drain", post(drain_thread))
+        .route("/v1/incidents", get(list_incidents))
+        .route(
+            "/v1/threads/{thread_id}/incidents",
+            get(list_thread_incidents),
+        )
         .route(
             "/v1/threads/{thread_id}/turns",
             post(start_turn).get(list_turns),
