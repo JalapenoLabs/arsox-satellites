@@ -128,6 +128,14 @@ struct Consumed {
     /// [`Runner::session_with_restart`] is what turns a second one into a failed
     /// turn.
     idle: bool,
+
+    /// A failure the proxy reported that the turn cannot go on from.
+    ///
+    /// The proxy sees requests and not the turn they belong to the end of, so it
+    /// says what happened and the runner decides what it means. Every endpoint
+    /// exhausted is the case this exists for: the harness has been answered with
+    /// an error it can read, and there is nothing left for the turn to spend.
+    failed: Option<Failure>,
 }
 
 /// The turn's wall clock ceiling, shared by every harness session in it.
@@ -352,16 +360,20 @@ impl Runner {
             Ok(finished) => finished,
             Err(failure) => {
                 // Fatal by construction: `drive` only returns an error when the
-                // turn could not go on.
-                self.record_incident(
-                    &thread_id,
-                    &turn_id,
-                    failure.code,
-                    Disposition::Fatal,
-                    retryable(failure.code),
-                    &failure.message,
-                )
-                .await;
+                // turn could not go on. A failure the proxy already recorded is
+                // skipped here rather than written twice.
+                if !failure.recorded {
+                    self.record_incident(
+                        &thread_id,
+                        &turn_id,
+                        failure.code,
+                        Disposition::Fatal,
+                        failure.retryable,
+                        &failure.message,
+                    )
+                    .await;
+                }
+
                 (TurnStatus::Failed, failure.into_result(&claimed))
             }
         };
@@ -559,19 +571,20 @@ impl Runner {
             .cost_ceiling_reached(thread_id, &claimed.turn.turn_id, ceilings)
             .await
         {
-            return Err(Failure {
-                code: ErrorCode::BudgetCostExhausted,
-                message: "the thread has spent maxCostPerThread, so no further turns can run"
-                    .to_owned(),
-            });
+            return Err(Failure::new(
+                ErrorCode::BudgetCostExhausted,
+                "the thread has spent maxCostPerThread, so no further turns can run",
+            ));
         }
 
         let working_dir = self.workspace_root.join(thread_id);
         tokio::fs::create_dir_all(&working_dir)
             .await
-            .map_err(|error| Failure {
-                code: ErrorCode::HarnessLaunchFailed,
-                message: format!("could not create the thread workspace: {error}"),
+            .map_err(|error| {
+                Failure::new(
+                    ErrorCode::HarnessLaunchFailed,
+                    format!("could not create the thread workspace: {error}"),
+                )
             })?;
 
         Ok(working_dir)
@@ -599,14 +612,17 @@ impl Runner {
         let meter = Arc::new(Meter::new(ceilings, crossings));
         let bounds = Bounds::for_thread(&claimed.settings);
 
-        let upstream = crate::proxy::upstream::Upstream::resolve(&claimed.settings.models);
+        // Every endpoint the thread declared, in the order the contract promises
+        // they are tried. Resolving the list here rather than one destination is
+        // what makes failover the proxy's to perform.
+        let route = crate::proxy::failover::Route::resolve(&claimed.settings.models);
         let token = self
             .proxy
             .grant(
                 crate::proxy::Grant::new(
                     &claimed.turn.thread_id,
                     &claimed.turn.turn_id,
-                    upstream,
+                    route,
                     Arc::clone(&meter),
                 )
                 .bounded(bounds.llm_request)
@@ -705,14 +721,14 @@ impl Runner {
             }
         }
 
-        Err(Failure {
-            code: ErrorCode::HarnessIdleTimeout,
-            message: format!(
+        Err(Failure::new(
+            ErrorCode::HarnessIdleTimeout,
+            format!(
                 "the harness produced no output for {:?}, twice, and did not recover \
                  when it was restarted",
                 context.bounds.harness_idle
             ),
-        })
+        ))
     }
 
     /// Builds the command one session of this turn runs.
@@ -756,9 +772,17 @@ impl Runner {
     ) -> Result<Consumed, Failure> {
         let (mut child, stdout, stderr) = spawn_harness(command)?;
 
-        let consumed = self
+        let mut consumed = self
             .consume(stdout, stderr, thread_id, turn_id, context)
             .await;
+
+        // Ahead of everything else, because a session the proxy ended has
+        // nothing further to say and a restart would only spend another one
+        // reaching the same wall.
+        if let Some(failure) = consumed.failed.take() {
+            drop(child.start_kill());
+            return Err(failure);
+        }
 
         if consumed.cancelled || consumed.exhausted.is_some() || consumed.idle {
             // Asked to stop cooperatively first. `kill_on_drop` is the backstop
@@ -767,16 +791,18 @@ impl Runner {
             return Ok(consumed);
         }
 
-        let status = child.wait().await.map_err(|error| Failure {
-            code: ErrorCode::HarnessCrashed,
-            message: format!("could not wait on the harness: {error}"),
+        let status = child.wait().await.map_err(|error| {
+            Failure::new(
+                ErrorCode::HarnessCrashed,
+                format!("could not wait on the harness: {error}"),
+            )
         })?;
 
         if !status.success() {
-            return Err(Failure {
-                code: ErrorCode::HarnessCrashed,
-                message: format!("the harness exited with {status}"),
-            });
+            return Err(Failure::new(
+                ErrorCode::HarnessCrashed,
+                format!("the harness exited with {status}"),
+            ));
         }
 
         Ok(consumed)
@@ -953,16 +979,20 @@ impl Runner {
             }
             Err(failure) => {
                 // Degraded rather than fatal: the work the turn already did
-                // survives on disk, and what is missing is its verification.
-                self.record_incident(
-                    thread_id,
-                    turn_id,
-                    failure.code,
-                    Disposition::Degraded,
-                    retryable(failure.code),
-                    &failure.message,
-                )
-                .await;
+                // survives on disk, and what is missing is its verification. A
+                // failure the proxy already recorded keeps the disposition it
+                // arrived with rather than being written down twice.
+                if !failure.recorded {
+                    self.record_incident(
+                        thread_id,
+                        turn_id,
+                        failure.code,
+                        Disposition::Degraded,
+                        failure.retryable,
+                        &failure.message,
+                    )
+                    .await;
+                }
 
                 Some(StoppedEarly {
                     reason: format!(
@@ -1129,6 +1159,16 @@ impl Runner {
 
                 Some(incident) = incidents.recv() => {
                     self.store_incident(&incident).await;
+
+                    // Fatal is the proxy saying the turn has nowhere left to
+                    // go, which today means every declared endpoint was given
+                    // up on. Reading the disposition rather than the code keeps
+                    // this from needing an edit every time the proxy learns a
+                    // new way to end a turn.
+                    if incident.disposition == i32::from(Disposition::Fatal) {
+                        consumed.failed = Some(Failure::from_incident(&incident));
+                        break;
+                    }
                 }
 
                 () = tokio::time::sleep_until(clock.warn_at), if !clock.warned => {
@@ -1167,6 +1207,10 @@ impl Runner {
         // the whole incident system exists to prevent.
         while let Ok(incident) = incidents.try_recv() {
             self.store_incident(&incident).await;
+
+            if incident.disposition == i32::from(Disposition::Fatal) && consumed.failed.is_none() {
+                consumed.failed = Some(Failure::from_incident(&incident));
+            }
         }
 
         consumed
@@ -1492,22 +1536,28 @@ fn spawn_harness(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|error| Failure {
-            code: ErrorCode::HarnessLaunchFailed,
-            message: format!("could not launch {}: {error}", command.program),
+        .map_err(|error| {
+            Failure::new(
+                ErrorCode::HarnessLaunchFailed,
+                format!("could not launch {}: {error}", command.program),
+            )
         })?;
 
-    let stdout = child.stdout.take().ok_or_else(|| Failure {
-        code: ErrorCode::HarnessLaunchFailed,
-        message: "the harness produced no stdout to read".to_owned(),
+    let stdout = child.stdout.take().ok_or_else(|| {
+        Failure::new(
+            ErrorCode::HarnessLaunchFailed,
+            "the harness produced no stdout to read",
+        )
     })?;
 
     // Taken as well as piped. An unread pipe fills its buffer and blocks the
     // process writing to it, which would look exactly like the hang the idle
     // bound is there to catch and would be caused by the satellite.
-    let stderr = child.stderr.take().ok_or_else(|| Failure {
-        code: ErrorCode::HarnessLaunchFailed,
-        message: "the harness produced no stderr to read".to_owned(),
+    let stderr = child.stderr.take().ok_or_else(|| {
+        Failure::new(
+            ErrorCode::HarnessLaunchFailed,
+            "the harness produced no stderr to read",
+        )
     })?;
 
     Ok((child, stdout, stderr))
@@ -1620,12 +1670,60 @@ const fn retryable(code: ErrorCode) -> bool {
 }
 
 /// A reason a turn could not run.
+#[derive(Debug)]
 struct Failure {
     code: ErrorCode,
     message: String,
+
+    /// Whether this turn is worth submitting again.
+    ///
+    /// Usually derived from the code, and carried when the failure arrived from
+    /// somewhere that had already decided. A proxy incident states its own, and
+    /// re-deriving it here would let the turn's error and the incident beside it
+    /// disagree about the one field a client falls back to.
+    retryable: bool,
+
+    /// Structured evidence, in the shape `Error.details` takes.
+    ///
+    /// `LLM_ALL_ENDPOINTS_EXHAUSTED` carries `attempts` here, which is the only
+    /// place a caller learns why each endpoint was given up on.
+    details: Option<prost_types::Struct>,
+
+    /// Whether the incident behind this failure is already in the database.
+    ///
+    /// A failure the proxy found arrives as a whole incident and is recorded
+    /// where it is received. Recording it a second time on the way out would put
+    /// one failure in the log twice.
+    recorded: bool,
 }
 
 impl Failure {
+    /// A failure the runner itself decided, with the disposition its code
+    /// implies.
+    fn new(code: ErrorCode, message: impl Into<String>) -> Self {
+        Self {
+            code,
+            message: message.into(),
+            retryable: retryable(code),
+            details: None,
+            recorded: false,
+        }
+    }
+
+    /// The failure an incident the proxy already recorded amounts to.
+    ///
+    /// Everything is carried through rather than re-derived: the proxy saw the
+    /// failure and this function did not.
+    fn from_incident(incident: &Incident) -> Self {
+        Self {
+            code: ErrorCode::try_from(incident.code).unwrap_or(ErrorCode::Internal),
+            message: incident.message.clone(),
+            retryable: incident.retryable,
+            details: incident.details.clone(),
+            recorded: true,
+        }
+    }
+
     fn into_result(self, claimed: &ClaimedTurn) -> TurnResult {
         TurnResult {
             turn_id: claimed.turn.turn_id.clone(),
@@ -1635,8 +1733,8 @@ impl Failure {
             error: Some(arsox_sdk::proto::error::v1::Error {
                 code: self.code.into(),
                 message: self.message,
-                retryable: retryable(self.code),
-                details: None,
+                retryable: self.retryable,
+                details: self.details,
                 trace_id: None,
             }),
             metadata: claimed.turn.metadata.clone(),
