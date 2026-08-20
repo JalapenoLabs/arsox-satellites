@@ -53,6 +53,18 @@ member id in the native stream, so one is derived from `parent_tool_use_id`.
 Deriving is what keeps that field out of the contract: a consumer sees a stable
 member id and never learns which harness produced its stream.
 
+Two more are worth knowing, and both were found by recording a second version:
+
+**Reasoning tokens are broken out, in newer versions only.** 2.1.237 reports
+`usage.output_tokens_details.thinking_tokens`; 2.1.221 has no such field.
+`reasoning_output_tokens` therefore carries a count wherever the CLI reports one,
+a genuine zero included, and stays absent where the CLI reports nothing. Absent
+and zero say different things and the contract keeps them apart.
+
+**A failed run carries no `result`.** The reason arrives in an `errors` array
+instead. Reading only `result` reports a failed turn with an empty summary, which
+is the turn's own explanation of itself lost.
+
 ## Where the Codex shape disagrees
 
 Codex models a run as a thread holding turns, and a turn as a list of *items*.
@@ -124,6 +136,26 @@ The suite asserts the whole canonical document rather than a field at a time,
 which is what stops a mapper from dropping a field nobody wrote an assertion for.
 A version bump becomes: record new fixtures, and let the suite say exactly what
 changed.
+
+What is recorded today:
+
+| Harness | CLI version | Scenarios |
+|---|---|---|
+| Claude | 2.1.221 | `tool-call` |
+| Claude | 2.1.237 | `plain-text`, `tool-call`, `error-result`, `multi-message` |
+| Codex | 0.147.0 | `plain-text`, `tool-call`, `command-declined`, `auth-failure` |
+
+**Both Claude versions stay.** A recording proves the version that produced it
+and nothing else, so a newer CLI earns a new directory rather than an edit to the
+old one. That pair is what makes a shape that shifts on upgrade a diff between
+two directories, and it caught the first one: 2.1.237 reports
+`output_tokens_details.thinking_tokens` and 2.1.221 has no such field.
+
+**A half-recorded directory fails the suite.** One test asserts every recording
+under a version directory has its expectation and every expectation has its
+recording; another reads each mapper's source and asserts every recording is
+reached by an `include_str!`. A transcript no test includes asserts nothing while
+looking like coverage.
 
 Their value is that nobody wrote them from imagination. Every fixture is a
 recording, so every field one carries is something the harness actually emitted.

@@ -1,0 +1,44 @@
+{
+  "events": [
+    {
+      "member_id": null,
+      "occurred_at": null,
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "text": "CONFORMANCE"
+      },
+      "type": "agent.message"
+    }
+  ],
+  "harness_session_id": "01a01cfa-78be-70b0-abf7-1fa883d8b491",
+  "result": {
+    "by_model": [],
+    "cost": {
+      "amount": null,
+      "is_partial": false
+    },
+    "is_error": false,
+    "permission_denials": [],
+    "stop_reason": null,
+    "summary": "",
+    "timing": {
+      "llm": null,
+      "model_round_trips": null,
+      "time_to_first_token": null,
+      "total": null
+    },
+    "tokens": {
+      "cache_read_tokens": 11008,
+      "cache_write_tokens": null,
+      "input_tokens": 3436,
+      "output_tokens": 6,
+      "reasoning_output_tokens": 0,
+      "total_tokens": 3442
+    }
+  }
+}

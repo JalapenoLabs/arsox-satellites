@@ -277,11 +277,16 @@ fn tool_input(kind: &str, item: &Value) -> Option<prost_types::Struct> {
 /// A command that ran to completion and exited nonzero is a failed tool call,
 /// not a successful one, so the exit code decides the outcome wherever the
 /// harness reports one.
+///
+/// `declined` is named alongside `failed` because a recorded run carries it: the
+/// sandbox refused a command, and the item completed with `exit_code: -1`. The
+/// exit code alone happens to catch that, which is luck rather than a
+/// guarantee, and a refusal reported without one would read as a success.
 fn succeeded(item: &Value) -> bool {
     let exit_code = item.get("exit_code").and_then(Value::as_i64);
 
     match item.get("status").and_then(Value::as_str) {
-        Some("failed") => false,
+        Some("failed" | "declined") => false,
         // No status at all: the item has no way to fail, e.g. a web search.
         _completed_or_absent => exit_code.unwrap_or(0) == 0,
     }
@@ -436,27 +441,6 @@ mod tests {
     use super::*;
     use crate::conformance;
 
-    /// A `codex exec --json` transcript for a patch and a shell command.
-    ///
-    /// Recorded in full from Codex 0.147.0: a live run that wrote a file and
-    /// then read it back. See `fixtures/README.md` for how it was captured.
-    const TOOL_CALL_TRANSCRIPT: &str =
-        include_str!("../fixtures/codex/0.147.0/tool-call.stdout.jsonl");
-
-    /// The canonical output that transcript must produce, byte for byte.
-    const TOOL_CALL_EVENTS: &str = include_str!("../fixtures/codex/0.147.0/tool-call.events.json");
-
-    /// A run whose credentials had expired, recorded from Codex 0.147.0 in full.
-    ///
-    /// Every line of it is something the CLI actually wrote, which is what makes
-    /// it evidence: a stream error is not fatal on its own, and the failure that
-    /// ends the turn arrives separately as `turn.failed`.
-    const AUTH_FAILURE_TRANSCRIPT: &str =
-        include_str!("../fixtures/codex/0.147.0/auth-failure.stdout.jsonl");
-
-    const AUTH_FAILURE_EVENTS: &str =
-        include_str!("../fixtures/codex/0.147.0/auth-failure.events.json");
-
     fn map_all(transcript: &str) -> Vec<Mapping> {
         conformance::map_all(transcript, map_line)
     }
@@ -465,6 +449,13 @@ mod tests {
         map_all(transcript)
             .into_iter()
             .flat_map(|mapping| mapping.events)
+            .collect()
+    }
+
+    fn event_names(transcript: &str) -> Vec<&'static str> {
+        all_events(transcript)
+            .iter()
+            .map(|event| event.type_name)
             .collect()
     }
 
@@ -479,201 +470,272 @@ mod tests {
         token_usage(&serde_json::from_str::<Value>(json).expect("the usage should be valid JSON"))
     }
 
-    #[test]
-    fn the_tool_call_transcript_produces_the_recorded_canonical_output() {
-        // The whole conformance claim in one assertion: this transcript, these
-        // canonical events, exactly. A mapper that starts dropping, reordering,
-        // or renaming anything fails here with a diff rather than passing a
-        // narrower test that happened not to look at the field it broke.
-        conformance::assert_matches(&map_all(TOOL_CALL_TRANSCRIPT), TOOL_CALL_EVENTS);
-    }
+    /// Recorded from Codex 0.147.0, the version the satellite pins.
+    ///
+    /// Four scenarios, every one of them a live run. See `fixtures/README.md`
+    /// for how each was captured and what, if anything, was scrubbed.
+    mod v0_147_0 {
+        use super::*;
 
-    #[test]
-    fn the_auth_failure_transcript_produces_the_recorded_canonical_output() {
-        conformance::assert_matches(&map_all(AUTH_FAILURE_TRANSCRIPT), AUTH_FAILURE_EVENTS);
-    }
+        /// A `codex exec --json` transcript for a patch and a shell command.
+        ///
+        /// A live run that wrote a file and then read it back.
+        const TOOL_CALL_TRANSCRIPT: &str =
+            include_str!("../fixtures/codex/0.147.0/tool-call.stdout.jsonl");
 
-    #[test]
-    fn the_transcript_maps_to_the_expected_canonical_sequence() {
-        let names: Vec<&str> = all_events(TOOL_CALL_TRANSCRIPT)
-            .iter()
-            .map(|event| event.type_name)
-            .collect();
+        /// The canonical output that transcript must produce, byte for byte.
+        const TOOL_CALL_EVENTS: &str =
+            include_str!("../fixtures/codex/0.147.0/tool-call.events.json");
 
-        // Nine native lines in, six canonical events out. The lifecycle lines
-        // carry no events of their own: `thread.started` carries the session id,
-        // `turn.started` carries nothing, and `turn.completed` becomes a
-        // HarnessResult. The two agent messages bracket the work, which is what
-        // makes the *last* one the summary rather than the only one.
-        assert_eq!(
-            names,
-            vec![
-                "agent.message",
-                "tool.started",
-                "tool.completed",
-                "tool.started",
-                "tool.completed",
-                "agent.message",
-            ]
-        );
-    }
+        /// A run whose credentials had expired, recorded in full.
+        ///
+        /// Every line of it is something the CLI actually wrote, which is what
+        /// makes it evidence: a stream error is not fatal on its own, and the
+        /// failure that ends the turn arrives separately as `turn.failed`.
+        const AUTH_FAILURE_TRANSCRIPT: &str =
+            include_str!("../fixtures/codex/0.147.0/auth-failure.stdout.jsonl");
 
-    #[test]
-    fn a_patch_is_a_tool_call_rather_than_nothing() {
-        // Codex writes a file as a `file_change` item rather than as a tool
-        // call, and Claude delivers the same act as one. Dropping it would
-        // leave the stream missing the edit the run existed to make.
-        let events = all_events(TOOL_CALL_TRANSCRIPT);
+        const AUTH_FAILURE_EVENTS: &str =
+            include_str!("../fixtures/codex/0.147.0/auth-failure.events.json");
 
-        let Payload::ToolStarted(started) = &events[1].payload else {
-            panic!("expected the second event to be a tool call");
-        };
-        let Payload::ToolCompleted(completed) = &events[2].payload else {
-            panic!("expected the third event to be a tool result");
-        };
+        /// A prose answer and nothing else: four lines, one of them the message.
+        const PLAIN_TEXT_TRANSCRIPT: &str =
+            include_str!("../fixtures/codex/0.147.0/plain-text.stdout.jsonl");
+        const PLAIN_TEXT_EVENTS: &str =
+            include_str!("../fixtures/codex/0.147.0/plain-text.events.json");
 
-        assert_eq!(started.tool_name, "apply_patch");
-        assert_eq!(started.tool_call_id, completed.tool_call_id);
-        assert!(completed.ok);
-        assert_eq!(
-            completed.output_preview.as_deref(),
-            Some("add E:\\tmp\\codex-fixture\\work\\hello.txt"),
-            "a patch is rendered for a human rather than dumped as JSON"
-        );
-    }
+        /// A command the sandbox refused, which the turn survived.
+        ///
+        /// The agent asked for a shell command, the policy said no, and the run
+        /// went on to answer anyway. So the transcript carries a tool call that
+        /// did not succeed inside a turn that did.
+        const COMMAND_DECLINED_TRANSCRIPT: &str =
+            include_str!("../fixtures/codex/0.147.0/command-declined.stdout.jsonl");
+        const COMMAND_DECLINED_EVENTS: &str =
+            include_str!("../fixtures/codex/0.147.0/command-declined.events.json");
 
-    #[test]
-    fn a_command_pairs_its_start_with_its_completion() {
-        let events = all_events(TOOL_CALL_TRANSCRIPT);
+        #[test]
+        fn the_tool_call_transcript_produces_the_recorded_canonical_output() {
+            // The whole conformance claim in one assertion: this transcript,
+            // these canonical events, exactly. A mapper that starts dropping,
+            // reordering, or renaming anything fails here with a diff rather
+            // than passing a narrower test that happened not to look at the
+            // field it broke.
+            conformance::assert_matches(&map_all(TOOL_CALL_TRANSCRIPT), TOOL_CALL_EVENTS);
+        }
 
-        let Payload::ToolStarted(started) = &events[3].payload else {
-            panic!("expected the fourth event to be a tool call");
-        };
-        let Payload::ToolCompleted(completed) = &events[4].payload else {
-            panic!("expected the fifth event to be a tool result");
-        };
+        #[test]
+        fn the_auth_failure_transcript_produces_the_recorded_canonical_output() {
+            conformance::assert_matches(&map_all(AUTH_FAILURE_TRANSCRIPT), AUTH_FAILURE_EVENTS);
+        }
 
-        assert_eq!(started.tool_name, "shell");
-        assert_eq!(started.tool_call_id, completed.tool_call_id);
-        assert!(completed.ok);
-        assert_eq!(
-            completed.output_preview.as_deref(),
-            Some("hello\r\n"),
-            "the command's output is what a consumer reads, byte for byte"
-        );
+        #[test]
+        fn the_plain_text_transcript_produces_the_recorded_canonical_output() {
+            conformance::assert_matches(&map_all(PLAIN_TEXT_TRANSCRIPT), PLAIN_TEXT_EVENTS);
+        }
 
-        // The command survives into the Struct rather than being flattened to a
-        // string, which is what will let the exec broker inspect it.
-        let input = started
-            .input
-            .as_ref()
-            .expect("tool call should carry input");
-        assert!(input.fields.contains_key("command"));
-    }
+        #[test]
+        fn the_command_declined_transcript_produces_the_recorded_canonical_output() {
+            conformance::assert_matches(
+                &map_all(COMMAND_DECLINED_TRANSCRIPT),
+                COMMAND_DECLINED_EVENTS,
+            );
+        }
 
-    #[test]
-    fn the_harness_session_id_is_captured_from_the_thread_line() {
-        let session = map_all(TOOL_CALL_TRANSCRIPT)
-            .into_iter()
-            .find_map(|mapping| mapping.harness_session_id);
+        #[test]
+        fn the_transcript_maps_to_the_expected_canonical_sequence() {
+            // Nine native lines in, six canonical events out. The lifecycle
+            // lines carry no events of their own: `thread.started` carries the
+            // session id, `turn.started` carries nothing, and `turn.completed`
+            // becomes a HarnessResult. The two agent messages bracket the work,
+            // which is what makes the *last* one the summary rather than the
+            // only one.
+            assert_eq!(
+                event_names(TOOL_CALL_TRANSCRIPT),
+                vec![
+                    "agent.message",
+                    "tool.started",
+                    "tool.completed",
+                    "tool.started",
+                    "tool.completed",
+                    "agent.message",
+                ]
+            );
+        }
 
-        assert_eq!(
-            session.as_deref(),
-            Some("01a01cd2-200b-77f0-b4b8-7421557ff5ed")
-        );
-    }
+        #[test]
+        fn a_prose_answer_produces_one_message_and_no_tool_call() {
+            // The simplest turn there is: four native lines, three of them
+            // lifecycle, and one message. A turn with no preamble is also the
+            // case where "the last agent message is the summary" and "the first
+            // one is" agree, which is exactly why it cannot stand alone as
+            // evidence for the rule.
+            assert_eq!(event_names(PLAIN_TEXT_TRANSCRIPT), vec!["agent.message"]);
 
-    #[test]
-    fn cached_tokens_are_subtracted_from_the_input_count() {
-        // The defect this prevents: Codex counts cached tokens inside
-        // `input_tokens` and Anthropic counts them beside it, so a mapper that
-        // copies the field across overstates a cached run by most of its
-        // prompt, in a number somebody eventually reconciles against a bill.
-        let tokens = result_of(TOOL_CALL_TRANSCRIPT).tokens;
+            let Payload::AgentMessage(message) = &all_events(PLAIN_TEXT_TRANSCRIPT)[0].payload
+            else {
+                panic!("expected the only event to be a message");
+            };
+            assert_eq!(message.text, "CONFORMANCE");
+        }
 
-        assert_eq!(tokens.cache_read_tokens, Some(17_920));
-        assert_eq!(
-            tokens.input_tokens, 11_117,
-            "29,037 reported minus 17,920 cached"
-        );
-        assert_eq!(
-            tokens.total_tokens,
-            tokens.input_tokens + tokens.output_tokens,
-            "cache reads are reported beside input and must not be added back"
-        );
-    }
+        #[test]
+        fn a_patch_is_a_tool_call_rather_than_nothing() {
+            // Codex writes a file as a `file_change` item rather than as a tool
+            // call, and Claude delivers the same act as one. Dropping it would
+            // leave the stream missing the edit the run existed to make.
+            let events = all_events(TOOL_CALL_TRANSCRIPT);
 
-    #[test]
-    fn the_cached_count_is_read_under_either_spelling() {
-        // The exec stream flattens it; the provider's own usage object, which
-        // the LLM proxy sees, nests it. Knowing one spelling and not the other
-        // means subtracting nothing from an input count that included it.
-        let nested = usage_of(
-            r#"{"input_tokens":12345,"input_tokens_details":{"cached_tokens":11008},"output_tokens":57}"#,
-        );
+            let Payload::ToolStarted(started) = &events[1].payload else {
+                panic!("expected the second event to be a tool call");
+            };
+            let Payload::ToolCompleted(completed) = &events[2].payload else {
+                panic!("expected the third event to be a tool result");
+            };
 
-        assert_eq!(nested.cache_read_tokens, Some(11_008));
-        assert_eq!(nested.input_tokens, 1_337);
-    }
+            assert_eq!(started.tool_name, "apply_patch");
+            assert_eq!(started.tool_call_id, completed.tool_call_id);
+            assert!(completed.ok);
+            assert_eq!(
+                completed.output_preview.as_deref(),
+                Some("add E:\\tmp\\codex-fixture\\work\\hello.txt"),
+                "a patch is rendered for a human rather than dumped as JSON"
+            );
+        }
 
-    #[test]
-    fn cache_writes_are_absent_rather_than_zero() {
-        // This provider has no cache-write concept, so the zero it reports is a
-        // placeholder rather than a measurement, and "this run wrote nothing to
-        // cache" is a claim the contract must not make on its behalf.
-        let reported_zero = usage_of(r#"{"input_tokens":10,"cache_write_input_tokens":0}"#);
-        let unreported = usage_of(r#"{"input_tokens":10}"#);
-        let measured = usage_of(r#"{"input_tokens":10,"cache_write_input_tokens":4096}"#);
+        #[test]
+        fn a_command_pairs_its_start_with_its_completion() {
+            let events = all_events(TOOL_CALL_TRANSCRIPT);
 
-        assert_eq!(reported_zero.cache_write_tokens, None);
-        assert_eq!(unreported.cache_write_tokens, None);
-        // A real count is still carried, so a provider that grows the concept
-        // needs no change here.
-        assert_eq!(measured.cache_write_tokens, Some(4096));
-    }
+            let Payload::ToolStarted(started) = &events[3].payload else {
+                panic!("expected the fourth event to be a tool call");
+            };
+            let Payload::ToolCompleted(completed) = &events[4].payload else {
+                panic!("expected the fifth event to be a tool result");
+            };
 
-    #[test]
-    fn reasoning_tokens_are_reported_rather_than_folded_into_output() {
-        let tokens = result_of(TOOL_CALL_TRANSCRIPT).tokens;
+            assert_eq!(started.tool_name, "shell");
+            assert_eq!(started.tool_call_id, completed.tool_call_id);
+            assert!(completed.ok);
+            assert_eq!(
+                completed.output_preview.as_deref(),
+                Some("hello\r\n"),
+                "the command's output is what a consumer reads, byte for byte"
+            );
 
-        // The recorded turn reasoned none, and that zero is kept rather than
-        // dropped. Codex has a reasoning concept and measured nothing, which is
-        // a measurement. The cache-write zero is dropped for the opposite
-        // reason: there the concept itself is missing.
-        assert_eq!(tokens.reasoning_output_tokens, Some(0));
-        assert_eq!(
-            usage_of(r#"{"output_tokens":57,"reasoning_output_tokens":32}"#)
-                .reasoning_output_tokens,
-            Some(32)
-        );
-        assert_eq!(
-            usage_of(r#"{"output_tokens":57}"#).reasoning_output_tokens,
-            None,
-            "a harness that does not separate reasoning reports absence, not zero"
-        );
-    }
+            // The command survives into the Struct rather than being flattened
+            // to a string, which is what will let the exec broker inspect it.
+            let input = started
+                .input
+                .as_ref()
+                .expect("tool call should carry input");
+            assert!(input.fields.contains_key("command"));
+        }
 
-    #[test]
-    fn usage_is_mapped_even_though_the_event_names_no_model() {
-        // The trap this test guards: `turn.completed` carries counts and no
-        // model, so requiring both on one object discards every count Codex
-        // reports.
-        let result = result_of(TOOL_CALL_TRANSCRIPT);
+        #[test]
+        fn a_command_the_sandbox_refused_is_a_failed_tool_call_in_a_turn_that_survived() {
+            // Recorded rather than imagined: the sandbox refused the command,
+            // the agent answered anyway, and the turn completed. So a refusal is
+            // a tool call that did not succeed, not the end of a run, and a
+            // mapper that ended the turn here would fail turns that finished.
+            let events = all_events(COMMAND_DECLINED_TRANSCRIPT);
 
-        assert!(result.by_model.is_empty());
-        assert!(result.tokens.total_tokens > 0);
-        assert_eq!(
-            result.cost.amount, None,
-            "the harness publishes no cost, and a confident zero would be worse than none"
-        );
-    }
+            let Payload::ToolCompleted(completed) = &events[2].payload else {
+                panic!("expected the third event to be a tool result");
+            };
 
-    #[test]
-    fn a_failed_turn_reports_the_error_it_ended_on() {
-        let result = result_of(AUTH_FAILURE_TRANSCRIPT);
+            assert_eq!(completed.tool_name, "shell");
+            assert!(!completed.ok);
+            assert!(
+                completed
+                    .output_preview
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("rejected: blocked by policy"),
+                "the refusal is what the agent was told, and the stream carries it"
+            );
+            assert!(!result_of(COMMAND_DECLINED_TRANSCRIPT).is_error);
+        }
 
-        assert!(result.is_error);
-        assert!(result.summary.contains("refresh token"));
+        #[test]
+        fn the_harness_session_id_is_captured_from_the_thread_line() {
+            let session = map_all(TOOL_CALL_TRANSCRIPT)
+                .into_iter()
+                .find_map(|mapping| mapping.harness_session_id);
+
+            assert_eq!(
+                session.as_deref(),
+                Some("01a01cd2-200b-77f0-b4b8-7421557ff5ed")
+            );
+        }
+
+        #[test]
+        fn cached_tokens_are_subtracted_from_the_input_count() {
+            // The defect this prevents: Codex counts cached tokens inside
+            // `input_tokens` and Anthropic counts them beside it, so a mapper
+            // that copies the field across overstates a cached run by most of
+            // its prompt, in a number somebody eventually reconciles against a
+            // bill.
+            let tokens = result_of(TOOL_CALL_TRANSCRIPT).tokens;
+
+            assert_eq!(tokens.cache_read_tokens, Some(17_920));
+            assert_eq!(
+                tokens.input_tokens, 11_117,
+                "29,037 reported minus 17,920 cached"
+            );
+            assert_eq!(
+                tokens.total_tokens,
+                tokens.input_tokens + tokens.output_tokens,
+                "cache reads are reported beside input and must not be added back"
+            );
+        }
+
+        #[test]
+        fn reasoning_tokens_are_reported_rather_than_folded_into_output() {
+            // The tool-call turn reasoned none, and that zero is kept rather
+            // than dropped. Codex has a reasoning concept and measured nothing,
+            // which is a measurement. The cache-write zero is dropped for the
+            // opposite reason: there the concept itself is missing.
+            assert_eq!(
+                result_of(TOOL_CALL_TRANSCRIPT)
+                    .tokens
+                    .reasoning_output_tokens,
+                Some(0)
+            );
+
+            // The declined-command turn reasoned, so the same field carries a
+            // count. Both are recordings, which is what makes the zero above a
+            // measurement rather than a mapper's default.
+            assert_eq!(
+                result_of(COMMAND_DECLINED_TRANSCRIPT)
+                    .tokens
+                    .reasoning_output_tokens,
+                Some(10)
+            );
+        }
+
+        #[test]
+        fn usage_is_mapped_even_though_the_event_names_no_model() {
+            // The trap this test guards: `turn.completed` carries counts and no
+            // model, so requiring both on one object discards every count Codex
+            // reports.
+            let result = result_of(TOOL_CALL_TRANSCRIPT);
+
+            assert!(result.by_model.is_empty());
+            assert!(result.tokens.total_tokens > 0);
+            assert_eq!(
+                result.cost.amount, None,
+                "the harness publishes no cost, and a confident zero would be worse than none"
+            );
+        }
+
+        #[test]
+        fn a_failed_turn_reports_the_error_it_ended_on() {
+            let result = result_of(AUTH_FAILURE_TRANSCRIPT);
+
+            assert!(result.is_error);
+            assert!(result.summary.contains("refresh token"));
+        }
     }
 
     #[test]
@@ -713,10 +775,11 @@ mod tests {
 
     #[test]
     fn a_reasoning_summary_becomes_agent_thinking() {
-        // Not covered by the recorded transcript: that turn reasoned nothing,
-        // and a fixture cannot be staged into producing a shape a real run did
-        // not produce. So the shape is asserted from the event schema published
-        // with 0.147.0, and the assertion says which of the two it is.
+        // Not covered by any recording: none of the captured turns emitted a
+        // reasoning item, and a fixture cannot be staged into producing a shape
+        // a real run did not produce. So the shape is asserted from the event
+        // schema published with 0.147.0, and the assertion says which of the two
+        // it is.
         let mapping = map_line(
             r#"{"type":"item.completed","item":{"id":"item_0","type":"reasoning","text":"**Reading the file back**"}}"#,
         );
@@ -733,11 +796,10 @@ mod tests {
 
     #[test]
     fn an_item_update_carries_no_event_of_its_own() {
-        // Also not in the recorded transcript: 0.147.0's exec stream sends no
-        // `item.updated` at all. It stays mapped because an update restates an
-        // item the stream delivers in full when it completes, so a harness that
-        // began sending them would otherwise put one tool call on the stream a
-        // dozen times.
+        // Also in no recording: 0.147.0's exec stream sends no `item.updated` at
+        // all. It stays mapped because an update restates an item the stream
+        // delivers in full when it completes, so a harness that began sending
+        // them would otherwise put one tool call on the stream a dozen times.
         let mapping = map_line(
             r#"{"type":"item.updated","item":{"id":"item_1","type":"command_execution","command":"ls","aggregated_output":"partial","status":"in_progress"}}"#,
         );
@@ -794,6 +856,69 @@ mod tests {
         assert!(
             !completed.ok,
             "a command that ran and exited nonzero failed, whatever the item status says"
+        );
+    }
+
+    #[test]
+    fn a_declined_command_fails_even_without_an_exit_code() {
+        // The recorded refusal carries `exit_code: -1`, so the exit code check
+        // catches it and the status is redundant there. It is not redundant
+        // here: an item refused before it ran has no exit code to report, and
+        // reading the absence as zero would put a permission gate on the stream
+        // as a tool call that worked.
+        let mapping = map_line(
+            r#"{"type":"item.completed","item":{"id":"item_0","type":"command_execution","command":"rm -rf /","aggregated_output":"rejected: blocked by policy","status":"declined"}}"#,
+        );
+
+        let [event] = mapping.events.as_slice() else {
+            panic!("a declined command should produce one event");
+        };
+        let Payload::ToolCompleted(completed) = &event.payload else {
+            panic!("a declined command should be a tool result");
+        };
+
+        assert!(!completed.ok);
+    }
+
+    #[test]
+    fn the_cached_count_is_read_under_either_spelling() {
+        // The exec stream flattens it; the provider's own usage object, which
+        // the LLM proxy sees, nests it. Knowing one spelling and not the other
+        // means subtracting nothing from an input count that included it.
+        let nested = usage_of(
+            r#"{"input_tokens":12345,"input_tokens_details":{"cached_tokens":11008},"output_tokens":57}"#,
+        );
+
+        assert_eq!(nested.cache_read_tokens, Some(11_008));
+        assert_eq!(nested.input_tokens, 1_337);
+    }
+
+    #[test]
+    fn cache_writes_are_absent_rather_than_zero() {
+        // This provider has no cache-write concept, so the zero it reports is a
+        // placeholder rather than a measurement, and "this run wrote nothing to
+        // cache" is a claim the contract must not make on its behalf.
+        let reported_zero = usage_of(r#"{"input_tokens":10,"cache_write_input_tokens":0}"#);
+        let unreported = usage_of(r#"{"input_tokens":10}"#);
+        let measured = usage_of(r#"{"input_tokens":10,"cache_write_input_tokens":4096}"#);
+
+        assert_eq!(reported_zero.cache_write_tokens, None);
+        assert_eq!(unreported.cache_write_tokens, None);
+        // A real count is still carried, so a provider that grows the concept
+        // needs no change here.
+        assert_eq!(measured.cache_write_tokens, Some(4096));
+    }
+
+    #[test]
+    fn a_harness_that_does_not_separate_reasoning_reports_absence_not_zero() {
+        assert_eq!(
+            usage_of(r#"{"output_tokens":57,"reasoning_output_tokens":32}"#)
+                .reasoning_output_tokens,
+            Some(32)
+        );
+        assert_eq!(
+            usage_of(r#"{"output_tokens":57}"#).reasoning_output_tokens,
+            None
         );
     }
 }

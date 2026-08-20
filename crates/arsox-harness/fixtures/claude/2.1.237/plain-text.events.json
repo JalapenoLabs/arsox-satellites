@@ -1,0 +1,130 @@
+{
+  "events": [
+    {
+      "member_id": null,
+      "occurred_at": null,
+      "payload": {
+        "endpoint_name": "",
+        "status": {
+          "throttled": false,
+          "windows": [
+            {
+              "percent_used": null,
+              "resets_at": {
+                "epoch_seconds": 1787205600,
+                "nanos": 0,
+                "timezone": "Etc/UTC"
+              },
+              "window": "five_hour"
+            }
+          ]
+        }
+      },
+      "type": "rate_limit.reported"
+    },
+    {
+      "member_id": null,
+      "occurred_at": {
+        "epoch_seconds": 1787192412,
+        "nanos": 285000000,
+        "timezone": "Etc/UTC"
+      },
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "text": "CONFORMANCE"
+      },
+      "type": "agent.message"
+    }
+  ],
+  "harness_session_id": "8e4a29a6-1d2f-43b2-8539-a2d0fb6b0759",
+  "result": {
+    "by_model": [
+      {
+        "cost": {
+          "amount": {
+            "currency_code": "USD",
+            "nanos": 954000,
+            "units": 0
+          },
+          "is_partial": false
+        },
+        "model": "claude-haiku-4-5-20251001",
+        "server_tools": {
+          "web_fetch_requests": null,
+          "web_search_requests": 0
+        },
+        "tokens": {
+          "cache_read_tokens": 0,
+          "cache_write_tokens": 0,
+          "input_tokens": 899,
+          "output_tokens": 11,
+          "reasoning_output_tokens": null,
+          "total_tokens": 910
+        }
+      },
+      {
+        "cost": {
+          "amount": {
+            "currency_code": "USD",
+            "nanos": 338760000,
+            "units": 0
+          },
+          "is_partial": false
+        },
+        "model": "claude-opus-5[1m]",
+        "server_tools": {
+          "web_fetch_requests": null,
+          "web_search_requests": 0
+        },
+        "tokens": {
+          "cache_read_tokens": 0,
+          "cache_write_tokens": 33850,
+          "input_tokens": 2,
+          "output_tokens": 10,
+          "reasoning_output_tokens": null,
+          "total_tokens": 12
+        }
+      }
+    ],
+    "cost": {
+      "amount": {
+        "currency_code": "USD",
+        "nanos": 339714000,
+        "units": 0
+      },
+      "is_partial": false
+    },
+    "is_error": false,
+    "permission_denials": [],
+    "stop_reason": "STOP_REASON_END_TURN",
+    "summary": "CONFORMANCE",
+    "timing": {
+      "llm": {
+        "nanos": 874000000,
+        "seconds": 2
+      },
+      "model_round_trips": 1,
+      "time_to_first_token": {
+        "nanos": 93000000,
+        "seconds": 2
+      },
+      "total": {
+        "nanos": 111000000,
+        "seconds": 2
+      }
+    },
+    "tokens": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 33850,
+      "input_tokens": 2,
+      "output_tokens": 10,
+      "reasoning_output_tokens": 0,
+      "total_tokens": 12
+    }
+  }
+}

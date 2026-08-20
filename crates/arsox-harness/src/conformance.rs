@@ -275,3 +275,140 @@ macro_rules! proto_enum {
 proto_enum!(ErrorCode);
 proto_enum!(Disposition);
 proto_enum!(AuthorKind);
+
+#[cfg(test)]
+mod layout {
+    //! The fixture directory's own shape, asserted rather than assumed.
+    //!
+    //! Two things are easy to leave behind while recording a new CLI version,
+    //! and neither fails any other test in the suite. A recording without its
+    //! expectation proves nothing, because nothing asserts what it must map to.
+    //! An expectation nobody wired into a mapper's tests proves less than that,
+    //! because it looks like coverage while asserting nothing at all.
+    //!
+    //! So the layout is checked here rather than trusted, and a half-recorded
+    //! version fails loudly on the next `cargo test`.
+
+    use std::collections::BTreeSet;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// Each mapper's source, beside the fixture directory it owns.
+    ///
+    /// The source is read as text rather than reflected over, because what has
+    /// to be proven is that a transcript reaches a test, and `include_str!` is
+    /// the only way one does.
+    const MAPPERS: [(&str, &str); 2] = [
+        ("claude", include_str!("claude.rs")),
+        ("codex", include_str!("codex.rs")),
+    ];
+
+    const TRANSCRIPT_SUFFIX: &str = ".stdout.jsonl";
+    const EXPECTATION_SUFFIX: &str = ".events.json";
+
+    fn fixtures() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures")
+    }
+
+    /// The directories directly under `parent`, sorted, so failures name the
+    /// same one every run.
+    fn directories(parent: &Path) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = fs::read_dir(parent)
+            .unwrap_or_else(|error| panic!("{} should be readable: {error}", parent.display()))
+            .map(|entry| {
+                entry
+                    .expect("a fixture directory entry should be readable")
+                    .path()
+            })
+            .filter(|path| path.is_dir())
+            .collect();
+
+        found.sort();
+        found
+    }
+
+    /// The scenario names a version directory holds, split by which half of the
+    /// pair each file is.
+    fn scenarios(version: &Path) -> (BTreeSet<String>, BTreeSet<String>) {
+        let mut recorded = BTreeSet::new();
+        let mut expected = BTreeSet::new();
+
+        for entry in fs::read_dir(version).expect("a version directory should be readable") {
+            let path = entry
+                .expect("a fixture file entry should be readable")
+                .path();
+            let name = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("a fixture file should have a readable name")
+                .to_owned();
+
+            if let Some(scenario) = name.strip_suffix(TRANSCRIPT_SUFFIX) {
+                recorded.insert(scenario.to_owned());
+            } else if let Some(scenario) = name.strip_suffix(EXPECTATION_SUFFIX) {
+                expected.insert(scenario.to_owned());
+            } else {
+                panic!(
+                    "{} is neither a transcript nor an expectation, and a fixture directory holds nothing else",
+                    path.display()
+                );
+            }
+        }
+
+        (recorded, expected)
+    }
+
+    #[test]
+    fn every_recording_is_paired_with_its_expectation() {
+        for harness in directories(&fixtures()) {
+            for version in directories(&harness) {
+                let (recorded, expected) = scenarios(&version);
+
+                assert!(
+                    !recorded.is_empty(),
+                    "{} holds no recordings, so the version it names proves nothing",
+                    version.display()
+                );
+                assert_eq!(
+                    recorded,
+                    expected,
+                    "every recording under {} needs its expectation, and every expectation needs its recording",
+                    version.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_recording_is_referenced_by_its_mapper() {
+        let harnesses: BTreeSet<String> = directories(&fixtures())
+            .iter()
+            .filter_map(|path| path.file_name()?.to_str().map(str::to_owned))
+            .collect();
+
+        assert_eq!(
+            harnesses,
+            MAPPERS.iter().map(|(name, _)| (*name).to_owned()).collect(),
+            "a harness with fixtures needs a mapper listed here, and the other way around"
+        );
+
+        for (harness, source) in MAPPERS {
+            for version in directories(&fixtures().join(harness)) {
+                let named = version
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .expect("a version directory should have a readable name");
+
+                for scenario in scenarios(&version).0 {
+                    let reference =
+                        format!("fixtures/{harness}/{named}/{scenario}{TRANSCRIPT_SUFFIX}");
+
+                    assert!(
+                        source.contains(&reference),
+                        "{harness}.rs includes no {reference}, so nothing asserts what it maps to"
+                    );
+                }
+            }
+        }
+    }
+}

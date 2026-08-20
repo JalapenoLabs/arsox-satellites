@@ -1,0 +1,94 @@
+{
+  "events": [
+    {
+      "member_id": null,
+      "occurred_at": null,
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "text": "I’ll run the requested command and then return the exact text specified."
+      },
+      "type": "agent.message"
+    },
+    {
+      "member_id": null,
+      "occurred_at": null,
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "input": {
+          "command": "\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'exit 3'"
+        },
+        "tool_call_id": "item_1",
+        "tool_name": "shell"
+      },
+      "type": "tool.started"
+    },
+    {
+      "member_id": null,
+      "occurred_at": null,
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "elapsed": null,
+        "ok": false,
+        "output_preview": "`\"C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1.0\\\\powershell.exe\" -Command 'exit 3'` rejected: blocked by policy",
+        "tool_call_id": "item_1",
+        "tool_name": "shell"
+      },
+      "type": "tool.completed"
+    },
+    {
+      "member_id": null,
+      "occurred_at": null,
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "text": "FAILED"
+      },
+      "type": "agent.message"
+    }
+  ],
+  "harness_session_id": "01a01cfa-bb11-7bb2-b11c-74ee9bcf1961",
+  "result": {
+    "by_model": [],
+    "cost": {
+      "amount": null,
+      "is_partial": false
+    },
+    "is_error": false,
+    "permission_denials": [],
+    "stop_reason": null,
+    "summary": "",
+    "timing": {
+      "llm": null,
+      "model_round_trips": null,
+      "time_to_first_token": null,
+      "total": null
+    },
+    "tokens": {
+      "cache_read_tokens": 22016,
+      "cache_write_tokens": null,
+      "input_tokens": 7016,
+      "output_tokens": 82,
+      "reasoning_output_tokens": 10,
+      "total_tokens": 7098
+    }
+  }
+}
