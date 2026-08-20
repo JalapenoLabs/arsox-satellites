@@ -50,13 +50,20 @@
 //! settings are decoded, because the provisioner and the spawn read the same
 //! stored settings to do real work with a live credential.
 //!
+//! # The hard gate for git reads this, and holds nothing of its own
+//!
+//! The root-owned `pre-push` hook refuses a push carrying an unredacted secret,
+//! and it does that by asking this engine rather than by being given the
+//! secrets: the hook runs as the agent, and a set that includes the repo's own
+//! access token is one the agent must never hold. See
+//! [`crate::broker::scan`] for the channel and [`Redactor::contains_secret`]
+//! for what it asks.
+//!
 //! # What this module is not
 //!
-//! It is the scanning and masking engine and its wiring into the paths that
-//! exist today. The root-owned `pre-push` hook that refuses a push carrying an
-//! unredacted secret, and the `override_redaction` MCP tool that lets an agent
-//! deliberately move the guardrail, are separate work. Neither changes what is
-//! here: this masks what leaves, and the hook is the hard gate for git.
+//! The `override_redaction` MCP tool, which lets an agent deliberately move the
+//! guardrail for one secret and one operation, is separate work. It does not
+//! change what is here: this masks what leaves.
 
 use aho_corasick::{AhoCorasick, MatchKind};
 use arsox_sdk::proto::artifact::v1::Artifact;
@@ -250,6 +257,28 @@ impl Redactor {
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.scanner.is_none()
+    }
+
+    /// Whether any secret appears in `text`, without building a masked copy.
+    ///
+    /// For the callers that need the answer rather than the text: the
+    /// [`pre-push` scan](crate::broker::scan) refuses a push on the first hit
+    /// and never renders what it found. Masking to find out would allocate a
+    /// copy of every chunk of every push.
+    #[must_use]
+    pub fn contains_secret(&self, text: &str) -> bool {
+        self.scanner
+            .as_deref()
+            .is_some_and(|scanner| scanner.contains(text))
+    }
+
+    /// The longest secret's length in bytes, or zero when there are none.
+    ///
+    /// Read by a chunked scan to decide how much of one chunk to carry into the
+    /// next, which is what makes a secret split across a read still findable.
+    #[must_use]
+    pub fn longest_secret(&self) -> usize {
+        self.scanner.as_deref().map_or(0, Scanner::longest)
     }
 
     /// Masks every secret in `text`, borrowing when there was nothing to mask.
@@ -818,6 +847,22 @@ impl Scanner {
 
     fn len(&self) -> usize {
         self.secrets.len()
+    }
+
+    /// The longest secret's length in bytes.
+    fn longest(&self) -> usize {
+        self.secrets.iter().map(String::len).max().unwrap_or(0)
+    }
+
+    /// Whether any secret appears in `text`.
+    fn contains(&self, text: &str) -> bool {
+        match &self.strategy {
+            Strategy::Automaton(automaton) => automaton.is_match(text),
+            Strategy::Sequential => self
+                .secrets
+                .iter()
+                .any(|secret| text.contains(secret.as_str())),
+        }
     }
 
     /// Replaces every secret in `text` with its mask.
