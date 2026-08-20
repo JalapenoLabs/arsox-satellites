@@ -125,6 +125,26 @@ which is what stops a mapper from dropping a field nobody wrote an assertion for
 A version bump becomes: record new fixtures, and let the suite say exactly what
 changed.
 
+What is recorded today:
+
+| Harness | CLI version | Scenarios |
+|---|---|---|
+| Claude | 2.1.221 | `tool-call` |
+| Claude | 2.1.237 | `plain-text`, `tool-call`, `error-result`, `multi-message` |
+| Codex | 0.147.0 | `tool-call`, `auth-failure` |
+
+**Both Claude versions stay.** A recording proves the version that produced it
+and nothing else, so a newer CLI earns a new directory rather than an edit to the
+old one. That pair is what makes a shape that shifts on upgrade a diff between
+two directories, and it caught the first one: 2.1.237 reports
+`output_tokens_details.thinking_tokens` and 2.1.221 has no such field.
+
+**A half-recorded directory fails the suite.** One test asserts every recording
+under a version directory has its expectation and every expectation has its
+recording; another reads each mapper's source and asserts every recording is
+reached by an `include_str!`. A transcript no test includes asserts nothing while
+looking like coverage.
+
 Their value is that nobody wrote them from imagination. Every fixture is a
 recording, so every field one carries is something the harness actually emitted.
 Each still states its provenance and `fixtures/README.md` keeps the table, so a

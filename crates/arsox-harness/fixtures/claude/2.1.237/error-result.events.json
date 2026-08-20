@@ -1,0 +1,39 @@
+{
+  "events": [],
+  "harness_session_id": null,
+  "result": {
+    "by_model": [],
+    "cost": {
+      "amount": {
+        "currency_code": "USD",
+        "nanos": 0,
+        "units": 0
+      },
+      "is_partial": false
+    },
+    "is_error": true,
+    "permission_denials": [],
+    "stop_reason": null,
+    "summary": "",
+    "timing": {
+      "llm": {
+        "nanos": 0,
+        "seconds": 0
+      },
+      "model_round_trips": 0,
+      "time_to_first_token": null,
+      "total": {
+        "nanos": 0,
+        "seconds": 0
+      }
+    },
+    "tokens": {
+      "cache_read_tokens": 0,
+      "cache_write_tokens": 0,
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "reasoning_output_tokens": null,
+      "total_tokens": 0
+    }
+  }
+}

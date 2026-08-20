@@ -412,18 +412,6 @@ mod tests {
 
     use crate::conformance;
 
-    /// A real `stream-json` transcript, captured from the CLI and scrubbed of
-    /// the capturing machine's identifiers.
-    ///
-    /// This is the conformance fixture, and its value is that nobody wrote it
-    /// from imagination. Every field, and every place the native shape disagrees
-    /// with the contract, is something the harness actually emitted.
-    const TOOL_CALL_TRANSCRIPT: &str =
-        include_str!("../fixtures/claude/2.1.221/tool-call.stdout.jsonl");
-
-    /// The canonical output that transcript must produce, byte for byte.
-    const TOOL_CALL_EVENTS: &str = include_str!("../fixtures/claude/2.1.221/tool-call.events.json");
-
     fn map_all(transcript: &str) -> Vec<Mapping> {
         conformance::map_all(transcript, map_line)
     }
@@ -435,6 +423,13 @@ mod tests {
             .collect()
     }
 
+    fn event_names(transcript: &str) -> Vec<&'static str> {
+        all_events(transcript)
+            .iter()
+            .map(|event| event.type_name)
+            .collect()
+    }
+
     fn result_of(transcript: &str) -> HarnessResult {
         map_all(transcript)
             .into_iter()
@@ -442,131 +437,276 @@ mod tests {
             .expect("the transcript should end with a result")
     }
 
-    #[test]
-    fn the_transcript_produces_the_recorded_canonical_output() {
-        // The whole conformance claim in one assertion: this transcript, these
-        // canonical events, exactly. A mapper that starts dropping, reordering,
-        // or renaming anything fails here with a diff rather than passing a
-        // narrower test that happened not to look at the field it broke.
-        conformance::assert_matches(&map_all(TOOL_CALL_TRANSCRIPT), TOOL_CALL_EVENTS);
+    /// Recorded from Claude CLI 2.1.221, and kept after 2.1.237 was recorded.
+    ///
+    /// An output shape belongs to a version, so a newer recording proves the
+    /// newer CLI and nothing else. These fixtures go on proving the older one,
+    /// which is what turns a shape that shifts on upgrade into a diff rather
+    /// than a silent change.
+    mod v2_1_221 {
+        use super::*;
+
+        /// A real `stream-json` transcript, captured from the CLI and scrubbed
+        /// of the capturing machine's identifiers.
+        ///
+        /// Its value is that nobody wrote it from imagination. Every field, and
+        /// every place the native shape disagrees with the contract, is
+        /// something the harness actually emitted.
+        const TOOL_CALL_TRANSCRIPT: &str =
+            include_str!("../fixtures/claude/2.1.221/tool-call.stdout.jsonl");
+
+        /// The canonical output that transcript must produce, byte for byte.
+        const TOOL_CALL_EVENTS: &str =
+            include_str!("../fixtures/claude/2.1.221/tool-call.events.json");
+
+        #[test]
+        fn the_transcript_produces_the_recorded_canonical_output() {
+            // The whole conformance claim in one assertion: this transcript,
+            // these canonical events, exactly. A mapper that starts dropping,
+            // reordering, or renaming anything fails here with a diff rather
+            // than passing a narrower test that happened not to look at the
+            // field it broke.
+            conformance::assert_matches(&map_all(TOOL_CALL_TRANSCRIPT), TOOL_CALL_EVENTS);
+        }
+
+        #[test]
+        fn the_transcript_maps_to_the_expected_canonical_sequence() {
+            // Six native lines in, four canonical events out. The `system` line
+            // carries configuration rather than an event, and the `result` line
+            // becomes a HarnessResult rather than an event.
+            assert_eq!(
+                event_names(TOOL_CALL_TRANSCRIPT),
+                vec![
+                    "rate_limit.reported",
+                    "tool.started",
+                    "tool.completed",
+                    "agent.message",
+                ]
+            );
+        }
+
+        #[test]
+        fn a_tool_result_arrives_as_a_user_line_and_still_pairs_with_its_call() {
+            // The most surprising thing about the native protocol: a tool's
+            // outcome is delivered as something the *user* said. If this pairing
+            // ever breaks, every tool call in the stream is orphaned.
+            let events = all_events(TOOL_CALL_TRANSCRIPT);
+
+            let Payload::ToolStarted(started) = &events[1].payload else {
+                panic!("expected the second event to be a tool call");
+            };
+            let Payload::ToolCompleted(completed) = &events[2].payload else {
+                panic!("expected the third event to be a tool result");
+            };
+
+            assert_eq!(started.tool_name, "Bash");
+            assert!(!started.tool_call_id.is_empty());
+            assert_eq!(started.tool_call_id, completed.tool_call_id);
+            assert!(completed.ok);
+
+            // The command survives into the Struct rather than being flattened
+            // to a string, which is what will let the exec broker inspect it.
+            let input = started
+                .input
+                .as_ref()
+                .expect("tool call should carry input");
+            assert!(input.fields.contains_key("command"));
+        }
+
+        #[test]
+        fn the_harness_session_id_is_captured_from_the_init_line() {
+            let session = map_all(TOOL_CALL_TRANSCRIPT)
+                .into_iter()
+                .find_map(|mapping| mapping.harness_session_id);
+
+            assert_eq!(
+                session.as_deref(),
+                Some("0199c0de-1111-7000-8000-000000000001")
+            );
+        }
+
+        #[test]
+        fn the_result_line_yields_usage_cost_and_timing() {
+            let result = result_of(TOOL_CALL_TRANSCRIPT);
+
+            assert!(!result.is_error);
+            assert_eq!(result.stop_reason, Some(StopReason::EndTurn));
+
+            // Cost crosses from the harness's f64 into exact integer units here,
+            // and this is the only place a float is allowed to touch a cost.
+            let amount = result.cost.amount.expect("a priced run should carry cost");
+            assert_eq!(amount.currency_code, "USD");
+            assert!(amount.units > 0 || amount.nanos > 0);
+
+            assert!(result.timing.total.is_some());
+            assert!(result.timing.time_to_first_token.is_some());
+            // Two round trips, not one: the model was called once to issue the
+            // tool call and again to answer after seeing its result. This is
+            // exactly the distinction the field exists to draw, and it is why it
+            // counts model round trips rather than Arsox turns, of which there
+            // was one.
+            assert_eq!(result.timing.model_round_trips, Some(2));
+        }
+
+        #[test]
+        fn cache_tokens_are_reported_beside_input_rather_than_inside_it() {
+            let result = result_of(TOOL_CALL_TRANSCRIPT);
+
+            assert!(result.tokens.cache_read_tokens.is_some());
+            assert_eq!(
+                result.tokens.total_tokens,
+                result.tokens.input_tokens + result.tokens.output_tokens,
+                "cache tokens are already counted in input and must not be added again"
+            );
+        }
+
+        #[test]
+        fn usage_is_split_by_the_model_that_answered() {
+            // The run used more than one model. Folding them into a single total
+            // is what makes a failover's cost invisible.
+            let result = result_of(TOOL_CALL_TRANSCRIPT);
+
+            assert!(
+                result.by_model.len() >= 2,
+                "expected a per-model breakdown, got {:?}",
+                result.by_model
+            );
+            assert!(result.by_model.iter().all(|model| model.tokens.is_some()));
+        }
     }
 
-    #[test]
-    fn the_transcript_maps_to_the_expected_canonical_sequence() {
-        let names: Vec<&str> = all_events(TOOL_CALL_TRANSCRIPT)
-            .iter()
-            .map(|event| event.type_name)
-            .collect();
+    /// Recorded from Claude CLI 2.1.237, live, four scenarios in one sitting.
+    ///
+    /// Every transcript here is unedited except for the `system` init line,
+    /// which is the only place the CLI reports the capturing machine's installed
+    /// tooling rather than its own behaviour. See `fixtures/README.md`.
+    mod v2_1_237 {
+        use super::*;
 
-        // Six native lines in, four canonical events out. The `system` line
-        // carries configuration rather than an event, and the `result` line
-        // becomes a HarnessResult rather than an event.
-        assert_eq!(
-            names,
-            vec![
-                "rate_limit.reported",
-                "tool.started",
-                "tool.completed",
-                "agent.message",
-            ]
-        );
-    }
+        /// A prose answer and nothing else: no tool, no reasoning, one message.
+        const PLAIN_TEXT_TRANSCRIPT: &str =
+            include_str!("../fixtures/claude/2.1.237/plain-text.stdout.jsonl");
+        const PLAIN_TEXT_EVENTS: &str =
+            include_str!("../fixtures/claude/2.1.237/plain-text.events.json");
 
-    #[test]
-    fn a_tool_result_arrives_as_a_user_line_and_still_pairs_with_its_call() {
-        // The most surprising thing about the native protocol: a tool's outcome
-        // is delivered as something the *user* said. If this pairing ever
-        // breaks, every tool call in the stream is orphaned.
-        let events = all_events(TOOL_CALL_TRANSCRIPT);
+        /// A shell command, its result, and the answer that followed it.
+        const TOOL_CALL_TRANSCRIPT: &str =
+            include_str!("../fixtures/claude/2.1.237/tool-call.stdout.jsonl");
+        const TOOL_CALL_EVENTS: &str =
+            include_str!("../fixtures/claude/2.1.237/tool-call.events.json");
 
-        let Payload::ToolStarted(started) = &events[1].payload else {
-            panic!("expected the second event to be a tool call");
-        };
-        let Payload::ToolCompleted(completed) = &events[2].payload else {
-            panic!("expected the third event to be a tool result");
-        };
+        /// A run the CLI refused to start, resumed against a session id that
+        /// does not exist. One line of stdout, and every byte of it is a failure
+        /// the harness reported structurally rather than as prose.
+        const ERROR_RESULT_TRANSCRIPT: &str =
+            include_str!("../fixtures/claude/2.1.237/error-result.stdout.jsonl");
+        const ERROR_RESULT_EVENTS: &str =
+            include_str!("../fixtures/claude/2.1.237/error-result.events.json");
 
-        assert_eq!(started.tool_name, "Bash");
-        assert!(!started.tool_call_id.is_empty());
-        assert_eq!(started.tool_call_id, completed.tool_call_id);
-        assert!(completed.ok);
+        /// A turn that reasoned, spoke, used a tool, and spoke again.
+        const MULTI_MESSAGE_TRANSCRIPT: &str =
+            include_str!("../fixtures/claude/2.1.237/multi-message.stdout.jsonl");
+        const MULTI_MESSAGE_EVENTS: &str =
+            include_str!("../fixtures/claude/2.1.237/multi-message.events.json");
 
-        // The command survives into the Struct rather than being flattened to a
-        // string, which is what will let the exec broker inspect it.
-        let input = started
-            .input
-            .as_ref()
-            .expect("tool call should carry input");
-        assert!(input.fields.contains_key("command"));
-    }
+        #[test]
+        fn the_plain_text_transcript_produces_the_recorded_canonical_output() {
+            conformance::assert_matches(&map_all(PLAIN_TEXT_TRANSCRIPT), PLAIN_TEXT_EVENTS);
+        }
 
-    #[test]
-    fn the_harness_session_id_is_captured_from_the_init_line() {
-        let session = map_all(TOOL_CALL_TRANSCRIPT)
-            .into_iter()
-            .find_map(|mapping| mapping.harness_session_id);
+        #[test]
+        fn the_tool_call_transcript_produces_the_recorded_canonical_output() {
+            conformance::assert_matches(&map_all(TOOL_CALL_TRANSCRIPT), TOOL_CALL_EVENTS);
+        }
 
-        assert_eq!(
-            session.as_deref(),
-            Some("0199c0de-1111-7000-8000-000000000001")
-        );
-    }
+        #[test]
+        fn the_error_result_transcript_produces_the_recorded_canonical_output() {
+            conformance::assert_matches(&map_all(ERROR_RESULT_TRANSCRIPT), ERROR_RESULT_EVENTS);
+        }
 
-    #[test]
-    fn the_result_line_yields_usage_cost_and_timing() {
-        let result = result_of(TOOL_CALL_TRANSCRIPT);
+        #[test]
+        fn the_multi_message_transcript_produces_the_recorded_canonical_output() {
+            conformance::assert_matches(&map_all(MULTI_MESSAGE_TRANSCRIPT), MULTI_MESSAGE_EVENTS);
+        }
 
-        assert!(!result.is_error);
-        assert_eq!(result.stop_reason, Some(StopReason::EndTurn));
+        #[test]
+        fn a_prose_answer_produces_one_message_and_no_tool_call() {
+            // The simplest turn there is, and the one a mapper built around tool
+            // calls is most likely to fumble.
+            assert_eq!(
+                event_names(PLAIN_TEXT_TRANSCRIPT),
+                vec!["rate_limit.reported", "agent.message"]
+            );
+            assert_eq!(result_of(PLAIN_TEXT_TRANSCRIPT).summary, "CONFORMANCE");
+        }
 
-        // Cost crosses from the harness's f64 into exact integer units here,
-        // and this is the only place a float is allowed to touch a cost.
-        let amount = result.cost.amount.expect("a priced run should carry cost");
-        assert_eq!(amount.currency_code, "USD");
-        assert!(amount.units > 0 || amount.nanos > 0);
+        #[test]
+        fn a_tool_call_still_pairs_its_start_with_a_result_delivered_as_a_user_line() {
+            let events = all_events(TOOL_CALL_TRANSCRIPT);
 
-        assert!(result.timing.total.is_some());
-        assert!(result.timing.time_to_first_token.is_some());
-        // Two round trips, not one: the model was called once to issue the tool
-        // call and again to answer after seeing its result. This is exactly the
-        // distinction the field exists to draw, and it is why it counts model
-        // round trips rather than Arsox turns, of which there was one.
-        assert_eq!(result.timing.model_round_trips, Some(2));
-    }
+            let Payload::ToolStarted(started) = &events[1].payload else {
+                panic!("expected the second event to be a tool call");
+            };
+            let Payload::ToolCompleted(completed) = &events[2].payload else {
+                panic!("expected the third event to be a tool result");
+            };
 
-    #[test]
-    fn reasoning_tokens_are_absent_rather_than_zero() {
-        // This harness folds reasoning into `output_tokens`. Reporting 0 would
-        // claim the run did no reasoning, which is a different and false
-        // statement, and exactly the defect `optional` exists to prevent.
-        let result = result_of(TOOL_CALL_TRANSCRIPT);
+            assert_eq!(started.tool_name, "Bash");
+            assert_eq!(started.tool_call_id, completed.tool_call_id);
+            assert!(completed.ok);
+            assert_eq!(completed.output_preview.as_deref(), Some("arsox-probe"));
+        }
 
-        assert_eq!(result.tokens.reasoning_output_tokens, None);
-        assert!(result.tokens.cache_read_tokens.is_some());
-        assert_eq!(
-            result.tokens.total_tokens,
-            result.tokens.input_tokens + result.tokens.output_tokens,
-            "cache tokens are already counted in input and must not be added again"
-        );
-    }
+        #[test]
+        fn a_reasoning_turn_reports_thinking_beside_its_messages() {
+            // One turn, four kinds of event. A mapper that handled only prose
+            // and tool calls would drop the reasoning entirely, and a consumer
+            // watching the stream would see the agent go quiet and then act.
+            assert_eq!(
+                event_names(MULTI_MESSAGE_TRANSCRIPT),
+                vec![
+                    "rate_limit.reported",
+                    "agent.thinking",
+                    "agent.message",
+                    "tool.started",
+                    "tool.completed",
+                    "agent.message",
+                ]
+            );
+        }
 
-    #[test]
-    fn usage_is_split_by_the_model_that_answered() {
-        // The run used more than one model. Folding them into a single total is
-        // what makes a failover's cost invisible.
-        let result = result_of(TOOL_CALL_TRANSCRIPT);
+        #[test]
+        fn a_redacted_thinking_block_is_still_an_event() {
+            // The recorded block carries a signature and no text: this model
+            // returns its reasoning encrypted rather than in the clear. The
+            // event is emitted anyway, because "the agent reasoned here" is true
+            // and dropping it would make the turn look like it acted without
+            // thinking.
+            let events = all_events(MULTI_MESSAGE_TRANSCRIPT);
 
-        assert!(
-            result.by_model.len() >= 2,
-            "expected a per-model breakdown, got {:?}",
-            result.by_model
-        );
-        assert!(result.by_model.iter().all(|model| model.tokens.is_some()));
+            let Payload::AgentThinking(thinking) = &events[1].payload else {
+                panic!("expected the second event to be reasoning");
+            };
+
+            assert_eq!(thinking.text, "");
+        }
+
+        #[test]
+        fn a_run_the_harness_refused_to_start_is_an_error_result_and_no_events() {
+            // The CLI writes one line and exits nonzero. There is no session
+            // line, no message, and nothing the agent did, so the whole turn is
+            // the failure it reported.
+            let result = result_of(ERROR_RESULT_TRANSCRIPT);
+
+            assert!(all_events(ERROR_RESULT_TRANSCRIPT).is_empty());
+            assert!(result.is_error);
+            assert_eq!(result.stop_reason, None);
+        }
     }
 
     #[test]
     fn an_unrecognized_event_type_is_recorded_rather_than_dropped() {
-        let mapping = map_line("{\"type\":\"some_future_event\",\"payload\":{}}");
+        let mapping = map_line(r#"{"type":"some_future_event","payload":{}}"#);
 
         let [event] = mapping.events.as_slice() else {
             panic!("an unknown type should produce exactly one incident");

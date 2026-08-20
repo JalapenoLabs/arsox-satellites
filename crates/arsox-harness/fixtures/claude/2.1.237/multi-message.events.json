@@ -1,0 +1,211 @@
+{
+  "events": [
+    {
+      "member_id": null,
+      "occurred_at": null,
+      "payload": {
+        "endpoint_name": "",
+        "status": {
+          "throttled": false,
+          "windows": [
+            {
+              "percent_used": null,
+              "resets_at": {
+                "epoch_seconds": 1787205600,
+                "nanos": 0,
+                "timezone": "Etc/UTC"
+              },
+              "window": "five_hour"
+            }
+          ]
+        }
+      },
+      "type": "rate_limit.reported"
+    },
+    {
+      "member_id": null,
+      "occurred_at": {
+        "epoch_seconds": 1787192469,
+        "nanos": 741000000,
+        "timezone": "Etc/UTC"
+      },
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "text": ""
+      },
+      "type": "agent.thinking"
+    },
+    {
+      "member_id": null,
+      "occurred_at": {
+        "epoch_seconds": 1787192469,
+        "nanos": 744000000,
+        "timezone": "Etc/UTC"
+      },
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "text": "2+2 = 4."
+      },
+      "type": "agent.message"
+    },
+    {
+      "member_id": null,
+      "occurred_at": {
+        "epoch_seconds": 1787192470,
+        "nanos": 323000000,
+        "timezone": "Etc/UTC"
+      },
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "input": {
+          "command": "echo done",
+          "description": "Echo done"
+        },
+        "tool_call_id": "toolu_0162kKThfUZKPpbkjxdisL81",
+        "tool_name": "Bash"
+      },
+      "type": "tool.started"
+    },
+    {
+      "member_id": null,
+      "occurred_at": {
+        "epoch_seconds": 1787192471,
+        "nanos": 675000000,
+        "timezone": "Etc/UTC"
+      },
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "elapsed": null,
+        "ok": true,
+        "output_preview": "done",
+        "tool_call_id": "toolu_0162kKThfUZKPpbkjxdisL81",
+        "tool_name": ""
+      },
+      "type": "tool.completed"
+    },
+    {
+      "member_id": null,
+      "occurred_at": {
+        "epoch_seconds": 1787192472,
+        "nanos": 651000000,
+        "timezone": "Etc/UTC"
+      },
+      "payload": {
+        "author": {
+          "kind": "AUTHOR_KIND_AGENT",
+          "member_id": null,
+          "parent_member_id": null,
+          "role": null
+        },
+        "text": "`done`"
+      },
+      "type": "agent.message"
+    }
+  ],
+  "harness_session_id": "83526033-2860-40a4-a7cc-a84a263dbe5e",
+  "result": {
+    "by_model": [
+      {
+        "cost": {
+          "amount": {
+            "currency_code": "USD",
+            "nanos": 975000,
+            "units": 0
+          },
+          "is_partial": false
+        },
+        "model": "claude-haiku-4-5-20251001",
+        "server_tools": {
+          "web_fetch_requests": null,
+          "web_search_requests": 0
+        },
+        "tokens": {
+          "cache_read_tokens": 0,
+          "cache_write_tokens": 0,
+          "input_tokens": 910,
+          "output_tokens": 13,
+          "reasoning_output_tokens": null,
+          "total_tokens": 923
+        }
+      },
+      {
+        "cost": {
+          "amount": {
+            "currency_code": "USD",
+            "nanos": 122489000,
+            "units": 0
+          },
+          "is_partial": false
+        },
+        "model": "claude-opus-5[1m]",
+        "server_tools": {
+          "web_fetch_requests": null,
+          "web_search_requests": 0
+        },
+        "tokens": {
+          "cache_read_tokens": 58808,
+          "cache_write_tokens": 9034,
+          "input_tokens": 4,
+          "output_tokens": 109,
+          "reasoning_output_tokens": null,
+          "total_tokens": 113
+        }
+      }
+    ],
+    "cost": {
+      "amount": {
+        "currency_code": "USD",
+        "nanos": 123464000,
+        "units": 0
+      },
+      "is_partial": false
+    },
+    "is_error": false,
+    "permission_denials": [],
+    "stop_reason": "STOP_REASON_END_TURN",
+    "summary": "`done`",
+    "timing": {
+      "llm": {
+        "nanos": 287000000,
+        "seconds": 4
+      },
+      "model_round_trips": 2,
+      "time_to_first_token": {
+        "nanos": 882000000,
+        "seconds": 1
+      },
+      "total": {
+        "nanos": 847000000,
+        "seconds": 4
+      }
+    },
+    "tokens": {
+      "cache_read_tokens": 58808,
+      "cache_write_tokens": 9034,
+      "input_tokens": 4,
+      "output_tokens": 109,
+      "reasoning_output_tokens": null,
+      "total_tokens": 113
+    }
+  }
+}

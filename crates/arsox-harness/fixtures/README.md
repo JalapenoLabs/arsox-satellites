@@ -28,6 +28,10 @@ transcript nobody recorded is a guess wearing evidence's clothes.
 | Fixture | Provenance |
 |---|---|
 | `claude/2.1.221/tool-call` | Recorded from the Claude CLI, scrubbed of the capturing machine's paths and identifiers. |
+| `claude/2.1.237/plain-text` | Recorded live from Claude CLI 2.1.237, four lines, `system` init line scrubbed. See below. |
+| `claude/2.1.237/tool-call` | Recorded live from Claude CLI 2.1.237, six lines, `system` init line scrubbed. |
+| `claude/2.1.237/error-result` | Recorded live from Claude CLI 2.1.237, one line, unscrubbed. |
+| `claude/2.1.237/multi-message` | Recorded live from Claude CLI 2.1.237, ten lines, `system` init line scrubbed. |
 | `codex/0.147.0/auth-failure` | Recorded from Codex 0.147.0 in full, four lines, scrubbed of the thread id and the transport detail in the message. |
 | `codex/0.147.0/tool-call` | Recorded from Codex 0.147.0 in full, nine lines, live run, unscrubbed. See below. |
 
@@ -35,6 +39,60 @@ transcript nobody recorded is a guess wearing evidence's clothes.
 reports. `docs/core-crates.md` records a measurement against 2.1.226, a later
 release of the same CLI; a directory is named for the version that produced the
 bytes in it, so this one follows the recording rather than the prose.
+
+**Both Claude versions stay.** 2.1.237 proves the CLI shipping today and 2.1.221
+proves the one before it, and keeping both is what makes a shape that shifts on
+upgrade a diff between two directories rather than an edit to one. The
+`reasoning_output_tokens` difference below is the first thing that pair caught.
+
+### The recorded Claude 2.1.237 fixtures
+
+Four scenarios, recorded in one sitting against the CLI on the capturing
+machine, each with a prompt small enough that the whole set cost pennies:
+
+- **`plain-text`** is prose and nothing else, the simplest turn there is and the
+  one a mapper built around tool calls is most likely to fumble.
+- **`tool-call`** is a shell command, its result, and the answer after it. Same
+  scenario as the 2.1.221 recording, on the newer CLI.
+- **`error-result`** is a run the CLI refused to start, resumed against a session
+  id that does not exist. It is one line: `type: result`, `subtype:
+  error_during_execution`, `is_error: true`, and an `errors` array carrying why.
+  The turn has no session, no message, and nothing the agent did. Deterministic
+  and free, which is what makes it a fixture rather than a lucky capture.
+- **`multi-message`** is a turn that reasoned, spoke, used a tool, and spoke
+  again: six canonical events out of ten native lines.
+
+Three things about 2.1.237 are easier to get wrong from the older recording than
+from these bytes:
+
+- **`usage.output_tokens_details.thinking_tokens` exists**, and 2.1.221 has no
+  such field. This CLI does separate reasoning from output, so
+  `reasoning_output_tokens` is a measurement rather than the absence the older
+  recording made it look like.
+- **A failed run carries `errors` and no `result`.** Reading only `result`
+  reports a failed turn with an empty summary, which is the turn's own
+  explanation of itself lost.
+- **`system` arrives with more than one subtype.** Alongside `init` the stream
+  carries `subtype: thinking_tokens` progress lines, each repeating the session
+  id the init line already announced.
+
+A recorded thinking block carries a `signature` and an **empty** `thinking`
+string, because this model returns its reasoning encrypted. The canonical event
+is emitted anyway: "the agent reasoned here" is true, and dropping it would make
+the turn look like it acted without thinking.
+
+#### What the scrub touched
+
+Only the `system` init line, and only the parts of it that describe the person
+capturing rather than the harness. Its `tools`, `mcp_servers`, `slash_commands`,
+`skills`, `agents`, `plugins`, and `memory_paths` are that machine's install, and
+`plugins` and `memory_paths` carry home directory paths outright. Each is
+replaced with what a satellite would report: the core tool set, the built-in
+slash commands, and nothing else.
+
+Everything else is the bytes the CLI wrote, `error-result` included, which is
+unscrubbed in full. The session ids, the scratch `cwd`, the message ids, and the
+thinking signature are all about the run rather than about a person.
 
 ### The recorded Codex fixture
 
@@ -84,6 +142,18 @@ claude -p "<prompt>" --output-format stream-json --verbose --allowedTools "Bash"
 
 `< /dev/null` matters. The CLI waits on stdin for a few seconds otherwise, which
 looks like a hang.
+
+Name the directory for the `claude_code_version` the init line reports, and
+**add** a directory rather than overwriting one. A newer CLI proves the newer
+CLI; the recording already there goes on proving the version it came from.
+
+A turn that ends in a failure needs no error to be arranged. Resuming a session
+id that does not exist produces one, deterministically and without a model call:
+
+```bash
+claude -p "hi" --resume 00000000-0000-4000-8000-0000000000ff \
+  --output-format stream-json --verbose < /dev/null
+```
 
 Codex:
 
