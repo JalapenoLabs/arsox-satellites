@@ -183,8 +183,8 @@ wrong produces a wait of hours rather than seconds.
 |---|---|---|
 | a retryable status, still arriving once the policy is spent | yes, per the policy | `LLM_ENDPOINT_RATE_LIMITED` |
 | 401 or 403 | no | `LLM_ENDPOINT_UNAUTHORIZED` |
-| any other status outside the retry set | no | `LLM_MODEL_UNKNOWN` for a 404, otherwise `LLM_ALL_ENDPOINTS_EXHAUSTED` |
-| the endpoint could not be reached | no | `LLM_ENDPOINT_TIMEOUT` |
+| any other status outside the retry set | no | `LLM_MODEL_UNKNOWN` for a 404, otherwise `LLM_ENDPOINT_UNAVAILABLE` |
+| the endpoint could not be reached | no | `LLM_ENDPOINT_UNAVAILABLE` |
 | the request bound elapsed | no | `LLM_ENDPOINT_TIMEOUT` |
 
 A rejected credential is never retried, because a key that is wrong is wrong on
@@ -192,15 +192,19 @@ the tenth attempt too and a second endpoint carrying different credentials is
 exactly what the list exists for. A status outside the retry set is not retried
 either: it is the endpoint saying something it will say again.
 
-**Two rows borrow a code, and that is a gap rather than a preference.** The
-taxonomy names four per-endpoint conditions and routes everything else through
-the aggregate, whose whole job is to say that `details.attempts` holds the
-reason. So an endpoint that could not be reached is recorded as a timeout, which
-is the same fact from the harness's seat, and a status the taxonomy cannot name
-borrows the aggregate's code rather than being mislabeled as a rate limit. Both
-carry the real reason in their message and in `details.attempts`. An
-`LLM_ENDPOINT_UNAVAILABLE` code would fix this and is a proto change, so it is on
-the roadmap below.
+**Every row means what it says.** `LLM_ENDPOINT_UNAVAILABLE` covers the two
+conditions the other codes cannot name: a host that could not be reached at all,
+and a status outside the retry set that is neither a rejected credential nor a
+404. Both are the endpoint failing to serve this request, and neither is a
+request that was accepted and then never answered, which is the one thing
+`LLM_ENDPOINT_TIMEOUT` means.
+
+Naming them matters more than it sounds. A code is what a caller matches on, so
+one that means something else is worse than a vague one: an unreachable host
+recorded as a timeout sends an operator to raise a bound that was never
+involved, and a 500 recorded as `LLM_ALL_ENDPOINTS_EXHAUSTED` claims the list ran
+out when its first entry had not been passed yet. The sentence in the message and
+in `details.attempts` still carries the specific reason either way.
 
 ### Nothing about a failover is silent
 
@@ -377,8 +381,6 @@ wait in a published image would be a retry loop with no wait in it.
 - Cost per request, once the contract carries model pricing.
 - Credential presentation in the contract, so a self-hosted OpenAI-compatible
   endpoint says how its key is sent rather than being inferred from its host.
-- `LLM_ENDPOINT_UNAVAILABLE`, so an endpoint that could not be reached and a
-  status the taxonomy cannot name stop borrowing codes that mean something else.
 - OAuth refresh, so an endpoint whose access token expires mid-thread recovers
   rather than failing over.
 - `GET /v1/statistics`, which is where lifetime totals per model and per thread

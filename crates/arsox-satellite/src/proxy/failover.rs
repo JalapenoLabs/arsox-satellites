@@ -292,22 +292,20 @@ pub enum GaveUp {
 impl GaveUp {
     /// The contract code this failure is recorded under.
     ///
-    /// The taxonomy names four per-endpoint conditions and routes everything
-    /// else through the aggregate, whose whole job is to say that
-    /// `details.attempts` holds the reason. So an endpoint that could not be
-    /// reached is recorded as a timeout, which is the same fact from the
-    /// harness's seat, and a status the taxonomy cannot name borrows the
-    /// aggregate's code rather than being mislabeled as a rate limit. Both carry
-    /// the real reason in their message and details. See the roadmap in
-    /// `docs/llm-proxy.md`.
+    /// Every way of giving up on one endpoint has a code that means that thing,
+    /// so a reader of `details.attempts` never has to reconcile a code against
+    /// the sentence beside it. An endpoint that could not be reached and a
+    /// status the taxonomy cannot name are both `LLM_ENDPOINT_UNAVAILABLE`:
+    /// neither is a request that was accepted and then never answered, and
+    /// neither is the whole list running out.
     #[must_use]
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Unauthorized { .. } => ErrorCode::LlmEndpointUnauthorized,
             Self::RateLimited { .. } => ErrorCode::LlmEndpointRateLimited,
-            Self::TimedOut | Self::Unreachable { .. } => ErrorCode::LlmEndpointTimeout,
+            Self::TimedOut => ErrorCode::LlmEndpointTimeout,
             Self::Refused { status } if *status == NOT_FOUND => ErrorCode::LlmModelUnknown,
-            Self::Refused { .. } => ErrorCode::LlmAllEndpointsExhausted,
+            Self::Unreachable { .. } | Self::Refused { .. } => ErrorCode::LlmEndpointUnavailable,
         }
     }
 
@@ -704,6 +702,32 @@ mod tests {
         );
         assert_eq!(refusal(403), GaveUp::Unauthorized { status: 403 });
         assert_eq!(refusal(500), GaveUp::Refused { status: 500 });
+    }
+
+    #[test]
+    fn an_endpoint_that_did_not_serve_the_request_says_so_rather_than_borrowing() {
+        // A code is what a caller matches on, so one that means something else
+        // is worse than a vague one: an unreachable host recorded as a timeout
+        // sends somebody to raise a bound that was never involved, and a 500
+        // recorded as the aggregate claims the whole list ran out when the
+        // first entry had not been passed yet.
+        assert_eq!(
+            GaveUp::Unreachable {
+                reason: "connection refused".to_owned(),
+            }
+            .code(),
+            ErrorCode::LlmEndpointUnavailable
+        );
+        assert_eq!(
+            GaveUp::Refused { status: 500 }.code(),
+            ErrorCode::LlmEndpointUnavailable
+        );
+
+        assert_eq!(
+            GaveUp::TimedOut.code(),
+            ErrorCode::LlmEndpointTimeout,
+            "a request that was accepted and never answered is still a timeout"
+        );
     }
 
     #[test]

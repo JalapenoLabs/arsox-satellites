@@ -518,6 +518,7 @@ Each control gets its own code, because "denied" without saying which gate close
 | `LLM_ENDPOINT_UNAUTHORIZED` | no | credentials for that endpoint were rejected |
 | `LLM_ENDPOINT_RATE_LIMITED` | yes | 429 or 529 past the endpoint's retry policy |
 | `LLM_ENDPOINT_TIMEOUT` | yes | a single request exceeded the LLM request timeout |
+| `LLM_ENDPOINT_UNAVAILABLE` | yes | the endpoint could not be reached, or answered a status no other code names |
 | `LLM_MODEL_UNKNOWN` | no | the endpoint does not serve the requested model |
 | `LLM_CONTEXT_EXCEEDED` | no | the conversation no longer fits the model's context window |
 | `LLM_ALL_ENDPOINTS_EXHAUSTED` | yes | every configured endpoint failed; `details.attempts` lists why each did |

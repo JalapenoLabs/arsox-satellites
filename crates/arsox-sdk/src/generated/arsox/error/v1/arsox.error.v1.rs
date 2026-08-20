@@ -112,6 +112,12 @@ pub enum ErrorCode {
     LlmModelUnknown = 903,
     LlmContextExceeded = 904,
     LlmAllEndpointsExhausted = 905,
+    /// The endpoint did not serve this request, and none of the codes above says
+    /// why. Fires when the endpoint could not be reached at all, such as a refused
+    /// connection or a name that does not resolve, and when it answered with a
+    /// status the taxonomy cannot name. Retryable: the next attempt opens a new
+    /// socket, and a host that stopped serving frequently starts again.
+    LlmEndpointUnavailable = 906,
     /// Harness.
     HarnessLaunchFailed = 1000,
     HarnessCrashed = 1001,
@@ -181,6 +187,7 @@ impl ErrorCode {
             Self::LlmModelUnknown => "ERROR_CODE_LLM_MODEL_UNKNOWN",
             Self::LlmContextExceeded => "ERROR_CODE_LLM_CONTEXT_EXCEEDED",
             Self::LlmAllEndpointsExhausted => "ERROR_CODE_LLM_ALL_ENDPOINTS_EXHAUSTED",
+            Self::LlmEndpointUnavailable => "ERROR_CODE_LLM_ENDPOINT_UNAVAILABLE",
             Self::HarnessLaunchFailed => "ERROR_CODE_HARNESS_LAUNCH_FAILED",
             Self::HarnessCrashed => "ERROR_CODE_HARNESS_CRASHED",
             Self::HarnessIdleTimeout => "ERROR_CODE_HARNESS_IDLE_TIMEOUT",
@@ -244,6 +251,7 @@ impl ErrorCode {
             "ERROR_CODE_LLM_MODEL_UNKNOWN" => Some(Self::LlmModelUnknown),
             "ERROR_CODE_LLM_CONTEXT_EXCEEDED" => Some(Self::LlmContextExceeded),
             "ERROR_CODE_LLM_ALL_ENDPOINTS_EXHAUSTED" => Some(Self::LlmAllEndpointsExhausted),
+            "ERROR_CODE_LLM_ENDPOINT_UNAVAILABLE" => Some(Self::LlmEndpointUnavailable),
             "ERROR_CODE_HARNESS_LAUNCH_FAILED" => Some(Self::HarnessLaunchFailed),
             "ERROR_CODE_HARNESS_CRASHED" => Some(Self::HarnessCrashed),
             "ERROR_CODE_HARNESS_IDLE_TIMEOUT" => Some(Self::HarnessIdleTimeout),

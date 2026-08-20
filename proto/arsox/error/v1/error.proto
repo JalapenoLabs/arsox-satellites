@@ -99,6 +99,13 @@ enum ErrorCode {
   ERROR_CODE_LLM_CONTEXT_EXCEEDED = 904;
   ERROR_CODE_LLM_ALL_ENDPOINTS_EXHAUSTED = 905;
 
+  // The endpoint did not serve this request, and none of the codes above says
+  // why. Fires when the endpoint could not be reached at all, such as a refused
+  // connection or a name that does not resolve, and when it answered with a
+  // status the taxonomy cannot name. Retryable: the next attempt opens a new
+  // socket, and a host that stopped serving frequently starts again.
+  ERROR_CODE_LLM_ENDPOINT_UNAVAILABLE = 906;
+
   // Harness.
   ERROR_CODE_HARNESS_LAUNCH_FAILED = 1000;
   ERROR_CODE_HARNESS_CRASHED = 1001;
