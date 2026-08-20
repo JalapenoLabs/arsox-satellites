@@ -22,12 +22,62 @@
 //! care whether a thread is alive: an incident from a collected thread is
 //! exactly the incident an operator came looking for.
 
-use super::{Store, StoreError, from_nanos, to_nanos};
+use super::{
+    DEFAULT_PAGE, MAX_PAGE, Store, StoreError, build_cursor, from_nanos, split_cursor, to_nanos,
+};
 use crate::redaction::Redactor;
 use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
-use arsox_sdk::proto::incident::v1::Incident;
+use arsox_sdk::proto::incident::v1::{Disposition, Incident, IncidentCounts};
 use sqlx::Row as _;
+use std::fmt::Write as _;
+
+/// Which incidents a listing should return.
+///
+/// Every list filter is "match any of these", and an empty one does not filter
+/// rather than matching nothing. That is what the contract says an empty
+/// repeated field means, and the alternative would make the default request
+/// return nothing at all.
+#[derive(Debug, Clone, Default)]
+pub struct IncidentFilter {
+    pub thread_ids: Vec<String>,
+    pub turn_ids: Vec<String>,
+    pub member_ids: Vec<String>,
+
+    /// `arsox.error.v1.ErrorCode` values, as stored.
+    pub codes: Vec<i32>,
+
+    /// `arsox.incident.v1.Disposition` values, as stored.
+    pub dispositions: Vec<i32>,
+
+    /// Half-open range in nanoseconds since the epoch: `occurred_at` must be at
+    /// or after `occurred_after`, and strictly before `occurred_before`.
+    ///
+    /// Half-open rather than inclusive at both ends so that adjacent windows
+    /// tile: an operator walking an incident log an hour at a time sees every
+    /// incident exactly once, instead of seeing the ones on a boundary twice.
+    pub occurred_after: Option<i64>,
+    pub occurred_before: Option<i64>,
+
+    /// Resume after this opaque cursor, which encodes the sort key and the
+    /// incident id together.
+    ///
+    /// Both are needed. Incidents sort by when they happened, and a timestamp is
+    /// not unique, so a cursor carrying only the time would repeat or skip every
+    /// incident sharing a nanosecond with the one at the page boundary.
+    pub after: Option<String>,
+
+    pub limit: u32,
+}
+
+/// One page of an incident listing.
+#[derive(Debug, Clone)]
+pub struct IncidentListing {
+    pub incidents: Vec<Incident>,
+
+    /// Pass back to continue. Empty when the page was the last one.
+    pub next_cursor: String,
+}
 
 impl Store {
     /// Records an incident and puts it on its thread's stream.
@@ -151,6 +201,142 @@ impl Store {
         .await?;
 
         Ok(rows.iter().map(hydrate).collect())
+    }
+
+    /// Lists incidents, oldest first, filtered and paged.
+    ///
+    /// Nothing here asks whether a thread is alive. An incident from a collected
+    /// thread is exactly the incident an operator came looking for, so filtering
+    /// on a tombstoned thread returns its evidence rather than `THREAD_EXPIRED`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error if the query fails.
+    pub async fn list_incidents(
+        &self,
+        filter: &IncidentFilter,
+    ) -> Result<IncidentListing, StoreError> {
+        let limit = match filter.limit {
+            0 => DEFAULT_PAGE,
+            asked => asked.min(MAX_PAGE),
+        };
+
+        // Built rather than written out because every filter is optional and
+        // SQLite has no array binding. Every value is still bound, never
+        // interpolated: the fragments written here are fixed strings and the
+        // only thing that varies is how many placeholders they carry.
+        let mut sql = String::from("SELECT * FROM incidents WHERE 1 = 1");
+        for (column, values) in [
+            ("thread_id", filter.thread_ids.len()),
+            ("turn_id", filter.turn_ids.len()),
+            ("member_id", filter.member_ids.len()),
+            ("code", filter.codes.len()),
+            ("disposition", filter.dispositions.len()),
+        ] {
+            if values > 0 {
+                let slots = vec!["?"; values].join(", ");
+                write!(sql, " AND {column} IN ({slots})")
+                    .expect("writing to a String is infallible");
+            }
+        }
+        if filter.occurred_after.is_some() {
+            sql.push_str(" AND occurred_at >= ?");
+        }
+        if filter.occurred_before.is_some() {
+            sql.push_str(" AND occurred_at < ?");
+        }
+        if filter.after.is_some() {
+            sql.push_str(" AND (occurred_at, incident_id) > (?, ?)");
+        }
+        sql.push_str(" ORDER BY occurred_at ASC, incident_id ASC LIMIT ?");
+
+        let mut query = sqlx::query(&sql);
+        for thread_id in &filter.thread_ids {
+            query = query.bind(thread_id);
+        }
+        for turn_id in &filter.turn_ids {
+            query = query.bind(turn_id);
+        }
+        for member_id in &filter.member_ids {
+            query = query.bind(member_id);
+        }
+        for code in &filter.codes {
+            query = query.bind(code);
+        }
+        for disposition in &filter.dispositions {
+            query = query.bind(disposition);
+        }
+        if let Some(after) = filter.occurred_after {
+            query = query.bind(after);
+        }
+        if let Some(before) = filter.occurred_before {
+            query = query.bind(before);
+        }
+        if let Some(cursor) = filter.after.as_deref() {
+            // A cursor that did not come from this satellite is treated as a
+            // sort key with no id rather than refused: it still pages forward
+            // from somewhere sensible, and an opaque token is not the caller's
+            // to get right.
+            let (sort_key, incident_id) = split_cursor(cursor).unwrap_or((cursor, ""));
+            query = query
+                .bind(sort_key.parse::<i64>().unwrap_or_default())
+                .bind(incident_id);
+        }
+        query = query.bind(limit);
+
+        let rows = query.fetch_all(self.pool()).await?;
+
+        let next_cursor = rows.last().map_or_else(String::new, |row| {
+            build_cursor(
+                &row.get::<i64, _>("occurred_at").to_string(),
+                &row.get::<String, _>("incident_id"),
+            )
+        });
+
+        Ok(IncidentListing {
+            incidents: rows.iter().map(hydrate).collect(),
+            next_cursor,
+        })
+    }
+
+    /// Counts a turn's incidents by disposition.
+    ///
+    /// Rides along on every turn report so the common case needs no query at
+    /// all: a consumer reacting to `turn.completed` learns that four things went
+    /// wrong without asking a second question, and asks only when it wants to
+    /// know what they were.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error if the query fails.
+    pub async fn incident_counts(&self, turn_id: &str) -> Result<IncidentCounts, StoreError> {
+        let rows = sqlx::query(
+            "SELECT disposition, count(*) AS total FROM incidents
+              WHERE turn_id = ?
+             GROUP BY disposition",
+        )
+        .bind(turn_id)
+        .fetch_all(self.pool())
+        .await?;
+
+        let mut counts = IncidentCounts::default();
+
+        for row in &rows {
+            let total = u32::try_from(row.get::<i64, _>("total")).unwrap_or(u32::MAX);
+
+            match Disposition::try_from(row.get::<i32, _>("disposition")) {
+                Ok(Disposition::Fatal) => counts.fatal = total,
+                Ok(Disposition::Recovered) => counts.recovered = total,
+                Ok(Disposition::Degraded) => counts.degraded = total,
+                Ok(Disposition::Blocked) => counts.blocked = total,
+                // A disposition this build does not know about was written by a
+                // different major version. It is a real incident and it is in
+                // the listing; there is simply no field here to count it in.
+                Ok(Disposition::Unspecified) | Err(_) => {}
+            }
+        }
+
+        Ok(counts)
     }
 }
 

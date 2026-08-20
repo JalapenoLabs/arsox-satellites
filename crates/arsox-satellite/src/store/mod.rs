@@ -26,6 +26,7 @@ mod turns;
 
 pub use claims::{ClaimedTurn, Interrupted};
 pub use events::AppendEvent;
+pub use incidents::{IncidentFilter, IncidentListing};
 pub use threads::{Listing, NewThread, ProvisionOutcome, StoredThread, ThreadFilter};
 pub use turns::{Drained, NewTurn, StoredTurn};
 
@@ -39,6 +40,29 @@ use std::str::FromStr as _;
 
 /// Nanoseconds in one second.
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
+
+/// Page size used when a caller asks for none.
+const DEFAULT_PAGE: u32 = 50;
+
+/// Largest page a caller can ask for.
+const MAX_PAGE: u32 = 500;
+
+/// Splits a listing cursor back into its sort key and row id.
+///
+/// Every listing pages the same way, so the format lives here rather than once
+/// per listing. See [`build_cursor`] for why it carries two values.
+pub(crate) fn split_cursor(cursor: &str) -> Option<(&str, &str)> {
+    cursor.split_once('|')
+}
+
+/// Builds the cursor a client sends back to continue a listing.
+///
+/// The sort key travels with the row id because a sort key is not unique: a
+/// cursor carrying only a timestamp would repeat or skip every row sharing a
+/// value with the one at the page boundary. The pair makes paging total.
+pub(crate) fn build_cursor(sort_key: &str, row_id: &str) -> String {
+    format!("{sort_key}|{row_id}")
+}
 
 /// Migrations are compiled into the binary rather than shipped beside it.
 ///
@@ -965,6 +989,341 @@ mod store_behaviour {
             .expect("should read");
 
         assert_eq!(incidents.len(), 1, "the evidence survives the workspace");
+    }
+
+    /// Records an incident against a thread, with the fields a test names.
+    async fn record(
+        store: &Store,
+        thread_id: &str,
+        turn_id: Option<&str>,
+        code: ErrorCode,
+        disposition: Disposition,
+        occurred_at: i64,
+    ) -> String {
+        let incident_id = uuid::Uuid::now_v7().to_string();
+
+        store
+            .record_incident(
+                &Incident {
+                    incident_id: incident_id.clone(),
+                    thread_id: Some(thread_id.to_owned()),
+                    turn_id: turn_id.map(str::to_owned),
+                    code: code.into(),
+                    disposition: disposition.into(),
+                    message: "something happened".to_owned(),
+                    occurred_at: Some(from_nanos(occurred_at)),
+                    ..Default::default()
+                },
+                &Redactor::none(),
+            )
+            .await
+            .expect("should record");
+
+        incident_id
+    }
+
+    /// Three incidents over two threads, distinct on every filterable axis.
+    struct Seeded {
+        store: Store,
+        thread_id: String,
+
+        /// Fatal, `HARNESS_CRASHED`, `turn-1`, at 1000.
+        crashed: String,
+
+        /// Blocked, `PERMISSION_COMMAND_DENIED`, `turn-2`, at 2000.
+        denied: String,
+
+        /// Fatal, `HARNESS_CRASHED`, no turn, on the other thread, at 3000.
+        elsewhere: String,
+    }
+
+    async fn seeded_incidents() -> Seeded {
+        let store = store().await;
+        let thread = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("a")
+            .thread;
+        let other = store
+            .create_thread(thread_named("globex"))
+            .await
+            .expect("b")
+            .thread;
+
+        Seeded {
+            crashed: record(
+                &store,
+                &thread.thread_id,
+                Some("turn-1"),
+                ErrorCode::HarnessCrashed,
+                Disposition::Fatal,
+                1_000,
+            )
+            .await,
+            denied: record(
+                &store,
+                &thread.thread_id,
+                Some("turn-2"),
+                ErrorCode::PermissionCommandDenied,
+                Disposition::Blocked,
+                2_000,
+            )
+            .await,
+            elsewhere: record(
+                &store,
+                &other.thread_id,
+                None,
+                ErrorCode::HarnessCrashed,
+                Disposition::Fatal,
+                3_000,
+            )
+            .await,
+            thread_id: thread.thread_id,
+            store,
+        }
+    }
+
+    /// The incidents a filter selects, in the order the store returns them.
+    async fn listed(store: &Store, filter: IncidentFilter) -> Vec<String> {
+        store
+            .list_incidents(&filter)
+            .await
+            .expect("should list")
+            .incidents
+            .into_iter()
+            .map(|incident| incident.incident_id)
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn an_incident_listing_filters_on_thread_turn_code_and_disposition() {
+        let seeded = seeded_incidents().await;
+        let store = &seeded.store;
+
+        // An empty filter does not filter, which is what an empty repeated field
+        // means in the contract. The alternative returns nothing for the request
+        // a caller is most likely to send first.
+        assert_eq!(
+            listed(store, IncidentFilter::default()).await,
+            vec![
+                seeded.crashed.clone(),
+                seeded.denied.clone(),
+                seeded.elsewhere.clone()
+            ]
+        );
+
+        assert_eq!(
+            listed(
+                store,
+                IncidentFilter {
+                    thread_ids: vec![seeded.thread_id.clone()],
+                    ..IncidentFilter::default()
+                }
+            )
+            .await,
+            vec![seeded.crashed.clone(), seeded.denied.clone()]
+        );
+        assert_eq!(
+            listed(
+                store,
+                IncidentFilter {
+                    turn_ids: vec!["turn-2".to_owned()],
+                    ..IncidentFilter::default()
+                }
+            )
+            .await,
+            vec![seeded.denied.clone()]
+        );
+        assert_eq!(
+            listed(
+                store,
+                IncidentFilter {
+                    codes: vec![ErrorCode::HarnessCrashed.into()],
+                    ..IncidentFilter::default()
+                }
+            )
+            .await,
+            vec![seeded.crashed, seeded.elsewhere]
+        );
+        assert_eq!(
+            listed(
+                store,
+                IncidentFilter {
+                    dispositions: vec![Disposition::Blocked.into()],
+                    ..IncidentFilter::default()
+                }
+            )
+            .await,
+            vec![seeded.denied]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_incident_time_window_is_half_open_so_adjacent_windows_tile() {
+        // An operator walking an incident log an hour at a time sees every
+        // incident exactly once, rather than seeing the ones on a boundary in
+        // both windows.
+        let seeded = seeded_incidents().await;
+        let store = &seeded.store;
+
+        assert_eq!(
+            listed(
+                store,
+                IncidentFilter {
+                    occurred_after: Some(1_000),
+                    occurred_before: Some(2_000),
+                    ..IncidentFilter::default()
+                }
+            )
+            .await,
+            vec![seeded.crashed]
+        );
+        assert_eq!(
+            listed(
+                store,
+                IncidentFilter {
+                    occurred_after: Some(2_000),
+                    occurred_before: Some(3_000),
+                    ..IncidentFilter::default()
+                }
+            )
+            .await,
+            vec![seeded.denied]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_incident_cursor_carries_its_sort_key_so_paging_does_not_skip() {
+        // Incidents sort by when they happened, and a timestamp is not unique.
+        // These three share one, so an id-only cursor would repeat or skip them.
+        let store = store().await;
+        let thread = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("a")
+            .thread;
+
+        let mut ids = Vec::new();
+        for _same_instant in 0..3 {
+            ids.push(
+                record(
+                    &store,
+                    &thread.thread_id,
+                    None,
+                    ErrorCode::CheckerFailed,
+                    Disposition::Degraded,
+                    7_000,
+                )
+                .await,
+            );
+        }
+        ids.sort();
+
+        let mut seen = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = store
+                .list_incidents(&IncidentFilter {
+                    limit: 2,
+                    after: cursor.clone(),
+                    ..IncidentFilter::default()
+                })
+                .await
+                .expect("should list");
+
+            if page.incidents.is_empty() {
+                break;
+            }
+            seen.extend(
+                page.incidents
+                    .iter()
+                    .map(|incident| incident.incident_id.clone()),
+            );
+            cursor = Some(page.next_cursor);
+        }
+
+        assert_eq!(seen, ids, "paging must cover every incident exactly once");
+    }
+
+    #[tokio::test]
+    async fn a_collected_thread_still_answers_an_incident_listing() {
+        // The endpoint must not 410 on a tombstone. "Why did last night's run go
+        // wrong" is asked precisely when the workspace is already gone.
+        let store = store().await;
+        let thread = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("a")
+            .thread;
+
+        let recorded = record(
+            &store,
+            &thread.thread_id,
+            None,
+            ErrorCode::HarnessCrashed,
+            Disposition::Fatal,
+            1_000,
+        )
+        .await;
+
+        store
+            .collect_thread(&thread.thread_id, ThreadState::Expired)
+            .await
+            .expect("should collect");
+
+        let listing = store
+            .list_incidents(&IncidentFilter {
+                thread_ids: vec![thread.thread_id],
+                ..IncidentFilter::default()
+            })
+            .await
+            .expect("should list");
+
+        assert_eq!(listing.incidents.len(), 1);
+        assert_eq!(listing.incidents[0].incident_id, recorded);
+    }
+
+    #[tokio::test]
+    async fn a_turn_counts_its_incidents_by_disposition() {
+        let store = store().await;
+        let thread = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("a")
+            .thread;
+
+        for disposition in [
+            Disposition::Degraded,
+            Disposition::Degraded,
+            Disposition::Fatal,
+        ] {
+            record(
+                &store,
+                &thread.thread_id,
+                Some("turn-1"),
+                ErrorCode::CheckerFailed,
+                disposition,
+                1_000,
+            )
+            .await;
+        }
+        record(
+            &store,
+            &thread.thread_id,
+            Some("turn-2"),
+            ErrorCode::CheckerFailed,
+            Disposition::Blocked,
+            1_000,
+        )
+        .await;
+
+        let counts = store.incident_counts("turn-1").await.expect("should count");
+
+        assert_eq!(counts.degraded, 2);
+        assert_eq!(counts.fatal, 1);
+        // Another turn's incidents are another turn's.
+        assert_eq!(counts.blocked, 0);
+        assert_eq!(counts.recovered, 0);
     }
 
     #[tokio::test]
