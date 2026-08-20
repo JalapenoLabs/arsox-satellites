@@ -103,6 +103,116 @@ setting cannot decide the limit for every other turn on the satellite. The
 reasoning behind each of those choices is in
 [the timeouts doc](./timeouts.md#the-request-bound-covers-the-whole-relay).
 
+**It is one bound per attempt, not per harness request.** Each attempt is one
+model request, which is what the bound names, and a policy that retried ten times
+inside a single ten minute bound would never reach its tenth attempt. A
+timed-out attempt is not retried, it gives up on its endpoint, so the worst case
+is one bound per endpoint rather than one per attempt.
+
+## Endpoints are tried in order
+
+A thread's `models` list is a failover list, never a pool. The first entry is
+tried until its own retry policy is spent, then the second, and so on, strictly
+in the order given. The entries are not interchangeable: the first is the
+cheapest and most reliable endpoint a caller has, and the ones after it are what
+that caller is willing to pay when the first will not answer. Load balancing
+across them would spend the expensive one on a good day.
+
+### Same shape only
+
+**Failover relays the harness's request body unchanged.** Every endpoint in one
+list therefore has to accept the same request shape: several Anthropic keys, the
+same provider listed twice, a self-hosted deployment of the same API. Only the
+base URL and the credential differ per endpoint.
+
+Re-serializing a conversation into a second provider's shape, and rewriting
+tool-call ids along with it, is the [LiteLLM sidecar's](../README.md#the-model-axis)
+job and is deliberately not done here. Saying otherwise would mean claiming that
+listing an OpenAI endpoint behind an Anthropic one works today, and it does not.
+The cost that does apply to same-shape failover is the cache: the prompt prefix
+cached at the endpoint that failed is gone, so the request that lands on the next
+one pays full price for the entire conversation.
+
+### What each endpoint's policy decides
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `maxAttempts` | 10 | Requests sent to this endpoint, not retries after the first. Zero is read as one, which is what "disables retries" means: the endpoint is still tried, once. |
+| `initialBackoff` | 5s | The wait after the first retryable answer. |
+| `maxBackoff` | 60s | The longest wait between two attempts, and the ceiling a `Retry-After` is clamped to. |
+| `retryOnStatus` | 429, 529 | Statuses worth waiting out. A declared set replaces the default rather than adding to it. |
+
+The wait doubles and then stops: 5, 10, 20, 40, 60, 60. A zero or negative span
+falls back to the default for the same reason the timeout bounds refuse one, a
+retry loop with no wait in it is how a rate limit becomes a denial of service
+against the endpoint that reported it.
+
+**A `Retry-After` the endpoint sends wins over that schedule**, clamped to the
+same ceiling. A provider knows better than we do when it will serve again, and is
+still not entitled to hold a turn for an hour. Only the delta-seconds form is
+read: the HTTP-date form is legal, no model provider sends it, and a date parsed
+wrong produces a wait of hours rather than seconds.
+
+### What gives up on an endpoint
+
+| What happened | Retried first | Recorded as |
+|---|---|---|
+| a retryable status, still arriving once the policy is spent | yes, per the policy | `LLM_ENDPOINT_RATE_LIMITED` |
+| 401 or 403 | no | `LLM_ENDPOINT_UNAUTHORIZED` |
+| any other status outside the retry set | no | `LLM_MODEL_UNKNOWN` for a 404, otherwise `LLM_ALL_ENDPOINTS_EXHAUSTED` |
+| the endpoint could not be reached | no | `LLM_ENDPOINT_TIMEOUT` |
+| the request bound elapsed | no | `LLM_ENDPOINT_TIMEOUT` |
+
+A rejected credential is never retried, because a key that is wrong is wrong on
+the tenth attempt too and a second endpoint carrying different credentials is
+exactly what the list exists for. A status outside the retry set is not retried
+either: it is the endpoint saying something it will say again.
+
+**Two rows borrow a code, and that is a gap rather than a preference.** The
+taxonomy names four per-endpoint conditions and routes everything else through
+the aggregate, whose whole job is to say that `details.attempts` holds the
+reason. So an endpoint that could not be reached is recorded as a timeout, which
+is the same fact from the harness's seat, and a status the taxonomy cannot name
+borrows the aggregate's code rather than being mislabeled as a rate limit. Both
+carry the real reason in their message and in `details.attempts`. An
+`LLM_ENDPOINT_UNAVAILABLE` code would fix this and is a proto change, so it is on
+the roadmap below.
+
+### Nothing about a failover is silent
+
+**A request a later endpoint answers records a `recovered` incident.** This is
+the disposition people forget and the one that pays for the feature: if the first
+endpoint rejects every request and the second quietly covers, the failover tax is
+paid on every call forever and nothing says so. The incident carries the code of
+the failure it recovered from, and `details.attempts` names every endpoint given
+up on along the way.
+
+**A request that outlives the list ends the turn.** The proxy sends a `fatal`
+`LLM_ALL_ENDPOINTS_EXHAUSTED` to the runner, which ends the turn with that error
+and its `details.attempts` attached. It is retryable: the thread and its
+workspace survive, so a turn submitted once working credentials are added resumes
+from where this one stopped.
+
+Each entry in `details.attempts` carries the endpoint's position in the declared
+list, its name, how many requests it took to decide, the status it last answered
+with when it answered at all, the code it was recorded under, and a sentence
+saying what happened. An endpoint that was never named is recorded as
+`endpoint 2`, because an attempt list of blank names answers "which one failed"
+with nothing.
+
+The harness gets a 502, or a 504 when the last endpoint timed out, shaped like
+the provider's own error for the same reason every other refusal here is. A 5xx
+is also what the harness's own retry policy is written against.
+
+**Failover happens before the response is relayed.** Once bytes have reached the
+harness the request is committed, so a stream that dies mid-body is not failed
+over. That is why the request body is collected rather than streamed through: a
+body already sent could not be offered to a second endpoint.
+
+**Counting is unaffected.** The meter rides on the grant rather than on an
+endpoint, so usage is counted from whichever endpoint answered, and a turn past
+its ceiling is refused before the first endpoint is tried, let alone the second.
+
 ## Errors are shaped like the provider's
 
 The harness on the other side of this speaks one provider's error format and
@@ -220,11 +330,29 @@ streaming and then stops without ending. A third asserts that healthy traffic
 inside its bound reports nothing, because a bound that fired on a good request
 would fill the incident log with the one thing an operator most needs to trust.
 
+`tests/llm_failover.rs` drives the endpoint list the same way, against stub
+upstreams that answer a chosen status and count what reached them. Covered: a 429
+endpoint retried on its own schedule and then failed over, an auth rejection
+failed over without a retry, every endpoint exhausted reporting per-endpoint
+attempts, a `Retry-After` winning over our schedule, a one attempt policy sending
+exactly one request, usage metered from whichever endpoint answered, a ceiling
+refusing before any endpoint is reached, and a timed-out endpoint feeding
+failover.
+
+**The backoff schedule is recorded rather than slept through.** A policy is
+measured in seconds, so a test that waited one out would take a minute to assert
+numbers it can read directly. The waiter rides on the grant exactly as the
+request bound does, so a test injects one that writes each wait down and returns
+at once. That is stronger than scaling the policy down: the assertion is the
+exact schedule the published defaults produce, 5 seconds then 10, rather than a
+smaller copy of it. It is feature gated behind `test-util`, because a recorded
+wait in a published image would be a retry loop with no wait in it.
+
 ## Roadmap
 
 - Cost per request, once the contract carries model pricing.
-- Endpoint failover in the documented order, with each endpoint's own retry
-  policy, and an incident recorded for every endpoint given up on.
+- `LLM_ENDPOINT_UNAVAILABLE`, so an endpoint that could not be reached and a
+  status the taxonomy cannot name stop borrowing codes that mean something else.
 - OAuth refresh, so an endpoint whose access token expires mid-thread recovers
   rather than failing over.
 - `GET /v1/statistics`, which is where lifetime totals per model and per thread

@@ -11,7 +11,7 @@ So each carries a bound, and every bound is per thread.
 | Operation | Default | On expiry |
 |---|---|---|
 | one exec command | 30 minutes | the command is killed, and its outcome returns to the agent as a failure that says it timed out |
-| one model request | 10 minutes | the request is abandoned, the harness gets a 504 shaped like the provider's own, and a `degraded` incident records it |
+| one model request | 10 minutes | the attempt is abandoned, its endpoint is given up on, and a `degraded` incident records it; the harness gets a 504 only once every endpoint has been tried |
 | harness idle, meaning no output at all | 15 minutes | the harness is torn down and started once on the same session; a second expiry fails the turn with `HARNESS_IDLE_TIMEOUT` |
 
 The turn wall clock is deliberately not in this table. Exceeding it is a budget
@@ -71,12 +71,17 @@ The cut-off arrives as a stream **error** rather than a tidy end, because a
 truncated server-sent event stream that ended cleanly would reach the harness as
 a completion that simply stopped.
 
-The incident is `degraded`, not `fatal`: the harness is answered with an error it
-can read, so it may retry or fail over and the turn goes on. That is exactly why
-it is recorded. A timeout that was quietly retried and then succeeded looks
+The incident is `degraded`, not `fatal`: the timed-out attempt gives up on its
+endpoint and the next endpoint is tried, so the turn goes on. That is exactly why
+it is recorded. A timeout that was quietly failed over and then answered looks
 identical to success, and a tax paid on every turn forever is invisible until
 somebody reconciles a bill against it. See
 [dispositions](../README.md#dispositions).
+
+**The bound is per attempt rather than per harness request.** Each attempt is one
+model request, which is what this row names. A timed-out attempt is not retried,
+so the worst case is one bound per endpoint rather than one per attempt. See
+[the proxy doc](./llm-proxy.md#endpoints-are-tried-in-order).
 
 **The proxy holds no database, and reports rather than records.** It sees
 requests and not the turn they belong to the end of, so what it finds travels a
@@ -153,5 +158,3 @@ a test would have to reach around:
 - **Process-group teardown** for exec commands, so a killed shell takes its
   children with it rather than leaving orphans.
 - **Crash restart-once**, sharing the restart the idle bound already uses.
-- **Failover on a timed-out request**, once endpoint failover exists. Today the
-  timeout returns a 5xx and the harness's own retry policy is what acts on it.
