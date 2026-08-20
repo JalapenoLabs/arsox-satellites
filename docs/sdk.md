@@ -1,6 +1,6 @@
 # SDKs
 
-Three are planned: Rust, Node, and Python. Rust and Node exist.
+Three are planned: Rust, Node, and Python. All three exist.
 
 All three are clients of the same protobuf API, and none of them expose a
 protobuf type by accident. Protobuf is always on the wire; what a consumer holds
@@ -180,10 +180,104 @@ rather than a number that might be a sentinel, and `idleTtl` is
 Ergonomic sugar over both is a later decision, and it belongs next to the helper
 wrappers `protobuf.md` already plans rather than in one SDK on its own.
 
+## The Python client
+
+`sdks/python`, published as `arsox-sdk` and imported as `arsox_sdk`. It mirrors
+the Rust and Node clients rather than inventing a third vocabulary: `connect`
+checks the contract version, a handle holds an id and a connection, `pause`,
+`resume`, and `drain` stay three verbs, and one `ArsoxError` answers which code,
+whether to retry, and what happened.
+
+It reaches the same surface as Node today: version, status, harness, threads,
+turns, the thread event stream, and incidents. Streaming settings toggles, text
+and markdown reports, artifacts, plan approval, question answering, and the
+control socket are not there yet.
+
+Async throughout, on `asyncio`. Events are an async iterator, so a consumer writes
+`async for event in stream`, which is the Python spelling of the `while let` the
+Rust client hands back and the `for await` the Node one does.
+
+`examples/example.py` is a design target rather than a description of the package,
+and it diverges in two visible ways worth naming: it imports the client as
+`arsox` and reaches threads through a property rather than `threads()`. The
+import name is settled here, because `arsox_sdk` leaves the contract's own
+top-level name free. The property is not: `threads()` matches Rust and Node, and
+collapsing the pair is a decision to make once, for all three SDKs.
+
+### What a consumer holds is the generated message
+
+Python's conventions say domain data is a pydantic model. This package hands back
+the generated protobuf message instead, typed by its `.pyi` stub, and the
+divergence is deliberate.
+
+The contract is defined once in `proto/` and compiled. A parallel pydantic model
+per message would be a second hand-written copy of a contract whose whole promise
+is that it only ever grows, so it drifts the day a field is added and nothing
+fails to say so. Worse, proto3 explicit presence would have to be mirrored by
+hand on every `optional` field: an `int | None` that somebody types as `int`
+turns "this harness reports no cache accounting" into "this run read nothing from
+cache", which is the billing-adjacent defect the contract's presence rules exist
+to prevent.
+
+It is also the parallel the other two clients already set. Rust hands out prost
+structs and Node hands out protobuf-es plain objects, so a consumer of any of the
+three holds the contract rather than a rendering of it. Message constructors take
+nested dictionaries, so settings still read as ordinary literals rather than a
+tree of constructors.
+
+Incident filters are the contract's own `ListIncidentsRequest` for the same
+reason. Rust carries an `IncidentQuery` struct and Node a query object, and in
+Python either would be a third shape to keep in step with a request message that
+already says exactly this.
+
+One wart is worth stating: the generated stubs declare `__slots__ = ()`, which
+mypy reads literally and rejects `message.field = value` under. Building through
+constructor keywords, repeated-field methods, and `CopyFrom` is what the package
+does and what its README tells a consumer to do.
+
+### The contract is copied in, and one import is rewritten
+
+`gen/python` is the one checked-in Python output. The package syncs it into
+`src/arsox_sdk/proto` before every build, typecheck, and test, and git ignores the
+copy, exactly as `sdks/node` does with `gen/ts`.
+
+The Python copy needs one thing the TypeScript copy did not. The generated
+modules import each other absolutely, as `arsox.common.v1`, which resolves only
+when `gen/python` is the import root. A plain copy would import a top-level
+`arsox` package this distribution does not ship. So the sync rewrites the import
+prefix, mechanically, on every run.
+
+The alternative was shipping the generated tree as a top-level `arsox` package,
+which needs no rewriting and costs the most useful import name in the ecosystem,
+handing it to machine-written modules and leaving nowhere sensible for the client
+to live.
+
+### aiohttp for both transports
+
+One dependency covers HTTP and the WebSocket, natively async.
+
+The listing endpoints carry their filters in a protobuf request message on GET,
+like every other request in the contract, so the client has to put a body on a
+GET. The thread socket sits behind the same bearer check as every other
+authenticated route, so it has to set a header on a handshake. `aiohttp` does
+both. The alternative was `websockets` for the socket plus blocking `http.client`
+in a thread pool for everything else: two dependencies and a thread hop to reach
+the same place.
+
+It does mean the client owns a connection pool where the Node one owns nothing,
+so `Satellite` closes: `async with`, or `await satellite.close()`.
+
+### Pins
+
+`protobuf` is pinned to `6.33.1`, the runtime the checked-in gencode was
+generated by. The gencode validates only that the runtime is not older than
+itself, so a 7.x runtime is in policy too; matching the gencode exactly is the
+version the contract was compiled and tested against. `types-protobuf` tracks the
+same major, because the protobuf runtime ships no inline types and the stub
+series follows the runtime it describes.
+
 ## Roadmap
 
-- **The Python client**, against the same contract and the same conformance
-  expectations.
 - **Retry and failover** in the client, so a `TURN_QUEUE_FULL` or a restarting
   satellite is handled rather than surfaced.
 - **`arsox-testkit`**, a fake satellite so a consumer can test their integration
