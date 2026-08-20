@@ -17,7 +17,6 @@
     "codex",
     "sdk"
   ],
-  "private": true,
   "type": "module",
   "packageManager": "yarn@4.17.0",
   "engines": {
@@ -39,6 +38,9 @@
     "dist"
   ],
   "sideEffects": false,
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "sync-proto": "node scripts/sync-proto.mjs",
     "build": "yarn sync-proto && tsc --project tsconfig.build.json",
