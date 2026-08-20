@@ -1,11 +1,21 @@
 from arsox.common.v1 import common_pb2 as _common_pb2
 from google.protobuf.internal import containers as _containers
+from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
 from google.protobuf import message as _message
 from collections.abc import Iterable as _Iterable, Mapping as _Mapping
 from typing import ClassVar as _ClassVar, Optional as _Optional, Union as _Union
 
 DESCRIPTOR: _descriptor.FileDescriptor
+
+class CredentialPresentation(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
+    __slots__ = ()
+    CREDENTIAL_PRESENTATION_UNSPECIFIED: _ClassVar[CredentialPresentation]
+    CREDENTIAL_PRESENTATION_API_KEY_HEADER: _ClassVar[CredentialPresentation]
+    CREDENTIAL_PRESENTATION_BEARER: _ClassVar[CredentialPresentation]
+CREDENTIAL_PRESENTATION_UNSPECIFIED: CredentialPresentation
+CREDENTIAL_PRESENTATION_API_KEY_HEADER: CredentialPresentation
+CREDENTIAL_PRESENTATION_BEARER: CredentialPresentation
 
 class ModelEndpoint(_message.Message):
     __slots__ = ()
@@ -26,10 +36,12 @@ class LlmAuth(_message.Message):
     API_KEY_FIELD_NUMBER: _ClassVar[int]
     SUBSCRIPTION_TOKEN_FIELD_NUMBER: _ClassVar[int]
     OAUTH_FIELD_NUMBER: _ClassVar[int]
+    PRESENTATION_FIELD_NUMBER: _ClassVar[int]
     api_key: _common_pb2.Secret
     subscription_token: _common_pb2.Secret
     oauth: OAuthCredential
-    def __init__(self, api_key: _Optional[_Union[_common_pb2.Secret, _Mapping]] = ..., subscription_token: _Optional[_Union[_common_pb2.Secret, _Mapping]] = ..., oauth: _Optional[_Union[OAuthCredential, _Mapping]] = ...) -> None: ...
+    presentation: CredentialPresentation
+    def __init__(self, api_key: _Optional[_Union[_common_pb2.Secret, _Mapping]] = ..., subscription_token: _Optional[_Union[_common_pb2.Secret, _Mapping]] = ..., oauth: _Optional[_Union[OAuthCredential, _Mapping]] = ..., presentation: _Optional[_Union[CredentialPresentation, str]] = ...) -> None: ...
 
 class OAuthCredential(_message.Message):
     __slots__ = ()

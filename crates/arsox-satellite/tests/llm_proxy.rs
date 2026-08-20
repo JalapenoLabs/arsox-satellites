@@ -118,6 +118,7 @@ fn endpoint_at(base_url: &str, key: &str) -> ModelEndpoint {
                 value: Some(key.to_owned()),
                 display: None,
             })),
+            presentation: None,
         }),
         retry: None,
     }

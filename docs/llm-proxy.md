@@ -49,22 +49,30 @@ The proxy strips whatever the caller presented and attaches the real credential
 itself. Stripped rather than overwritten, so a request cannot arrive carrying
 two and have the upstream pick the agent's.
 
-A subscription or OAuth token is sent as `Authorization: Bearer`. An API key is
-sent as `x-api-key`, except to OpenAI, which reads one from `Authorization:
-Bearer` like everything else. The header is decided from the endpoint's own base
-URL rather than from the shape of the key, because guessing a vendor from a
-key's prefix breaks the first time a vendor changes one.
+An endpoint says where its credential goes with `auth.presentation`, and that
+answer wins. It applies to whichever credential the endpoint carries rather than
+to API keys alone: the field names how this endpoint is spoken to, so honouring
+it for one arm of the oneof and not the others would put the guessing straight
+back.
+
+**Absent, the satellite infers**, which is what every endpoint written before
+the field does. A subscription or OAuth token is sent as `Authorization:
+Bearer`. An API key is sent as `x-api-key`, except to OpenAI, which reads one
+from `Authorization: Bearer` like everything else. The header is inferred from
+the endpoint's own base URL rather than from the shape of the key, because
+guessing a vendor from a key's prefix breaks the first time a vendor changes
+one.
+
+Inference is right for the two vendors it knows and cannot be right for a
+self-hosted OpenAI-compatible deployment, which lives on a host that matches
+nobody's. That endpoint declares `CREDENTIAL_PRESENTATION_BEARER` and stops
+depending on a rule about somebody else's domain.
 
 None of these is interchangeable: a credential in the wrong header is rejected
 in a way that looks like a bad credential rather than a mis-shaped request,
 which is the most expensive possible way to be wrong about a header. An OAuth
 credential presents its access token only; the refresh token never leaves the
 satellite.
-
-A self-hosted OpenAI-compatible endpoint is not matched by host and should
-declare its credential as a subscription token, which already presents a bearer.
-Carrying the presentation in the contract is the real fix and is a proto change,
-so it is on the roadmap below.
 
 A `Secret` carrying a `display` and no `value` presents nothing. Settings that
 round-tripped through a response have the redacted rendering and no plaintext,
@@ -379,8 +387,6 @@ wait in a published image would be a retry loop with no wait in it.
 ## Roadmap
 
 - Cost per request, once the contract carries model pricing.
-- Credential presentation in the contract, so a self-hosted OpenAI-compatible
-  endpoint says how its key is sent rather than being inferred from its host.
 - OAuth refresh, so an endpoint whose access token expires mid-thread recovers
   rather than failing over.
 - `GET /v1/statistics`, which is where lifetime totals per model and per thread

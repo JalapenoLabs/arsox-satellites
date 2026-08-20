@@ -2,8 +2,8 @@
 
 //! Where a model request goes, and what credential it carries.
 
-use arsox_sdk::proto::settings::v1::ModelEndpoint;
 use arsox_sdk::proto::settings::v1::llm_auth::Credential;
+use arsox_sdk::proto::settings::v1::{CredentialPresentation, LlmAuth, ModelEndpoint};
 
 /// The provider's own base URL, used when a thread declares no endpoint.
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
@@ -16,7 +16,11 @@ const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const AMBIENT_BEARER: &str = "ANTHROPIC_AUTH_TOKEN";
 const AMBIENT_API_KEY: &str = "ANTHROPIC_API_KEY";
 
-/// How a credential is presented to the provider.
+/// How a credential is presented to the provider, and which one.
+///
+/// The contract's [`CredentialPresentation`] names the same two headers without
+/// the credential in them, because a caller declares where its key goes and the
+/// satellite is what pairs that with the key itself.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Presentation {
     /// `x-api-key`, which is how a plain API key is sent.
@@ -34,6 +38,28 @@ enum Presentation {
     None,
 }
 
+/// The header an endpoint declared its credential goes in, if it declared one.
+///
+/// A declaration wins over inference, and it wins for every kind of credential
+/// rather than for API keys alone. The field says how this endpoint's credential
+/// is sent, so one rule with no exceptions is what lets a caller answer it
+/// without first working out which arm of the oneof the satellite will read.
+///
+/// A value this satellite does not recognize is read as no declaration. Enum
+/// values are additive within a proto major, so an older satellite will meet
+/// ones it has never heard of, and inferring is a better answer than refusing a
+/// turn over a field set for a newer one.
+fn declared_header(auth: &LlmAuth) -> Option<fn(String) -> Presentation> {
+    match auth
+        .presentation
+        .and_then(|declared| CredentialPresentation::try_from(declared).ok())
+    {
+        Some(CredentialPresentation::ApiKeyHeader) => Some(Presentation::ApiKey),
+        Some(CredentialPresentation::Bearer) => Some(Presentation::Bearer),
+        Some(CredentialPresentation::Unspecified) | None => None,
+    }
+}
+
 /// Whether this destination takes an API key as a bearer token.
 ///
 /// The proxy relays the harness's request body opaquely and swaps the
@@ -48,10 +74,9 @@ enum Presentation {
 /// string of characters and guessing a vendor from its prefix is the kind of
 /// rule that breaks the first time a vendor changes one.
 ///
-/// A self-hosted OpenAI-compatible endpoint is not matched here and should
-/// declare its credential as a subscription token, which already presents a
-/// bearer. Carrying the presentation in the contract is the real fix and is a
-/// proto change; see the roadmap in `docs/llm-proxy.md`.
+/// This is inference, and it is only consulted when the endpoint declared
+/// nothing. A self-hosted OpenAI-compatible deployment lives on a host that
+/// matches nobody's, and [`declared_header`] is how it says so.
 fn api_key_is_a_bearer(base_url: &str) -> bool {
     let Some(host) = reqwest::Url::parse(base_url)
         .ok()
@@ -86,31 +111,31 @@ impl Upstream {
             .clone()
             .unwrap_or_else(|| DEFAULT_BASE_URL.to_owned());
 
-        // An API key is the one credential whose header depends on where it is
-        // going. See [`api_key_header`].
-        let as_key = if api_key_is_a_bearer(&base_url) {
+        let auth = endpoint.auth.as_ref();
+        let declared = auth.and_then(declared_header);
+
+        // An API key is the one credential whose inferred header depends on
+        // where it is going. See [`api_key_is_a_bearer`]. A token is a bearer
+        // wherever it goes, so inference has nothing to decide for it.
+        let as_key = declared.unwrap_or(if api_key_is_a_bearer(&base_url) {
             Presentation::Bearer
         } else {
             Presentation::ApiKey
-        };
+        });
+        let as_token = declared.unwrap_or(Presentation::Bearer);
 
-        let presentation = match endpoint
-            .auth
-            .as_ref()
-            .and_then(|auth| auth.credential.as_ref())
-        {
+        let presentation = match auth.and_then(|auth| auth.credential.as_ref()) {
             Some(Credential::ApiKey(secret)) => {
                 secret.value.clone().map_or(Presentation::None, as_key)
             }
-            Some(Credential::SubscriptionToken(secret)) => secret
-                .value
-                .clone()
-                .map_or(Presentation::None, Presentation::Bearer),
+            Some(Credential::SubscriptionToken(secret)) => {
+                secret.value.clone().map_or(Presentation::None, as_token)
+            }
             Some(Credential::Oauth(oauth)) => oauth
                 .access_token
                 .as_ref()
                 .and_then(|secret| secret.value.clone())
-                .map_or(Presentation::None, Presentation::Bearer),
+                .map_or(Presentation::None, as_token),
             None => Presentation::None,
         };
 
@@ -174,7 +199,7 @@ impl Upstream {
 mod tests {
     use super::*;
     use arsox_sdk::proto::common::v1::Secret;
-    use arsox_sdk::proto::settings::v1::{LlmAuth, OAuthCredential};
+    use arsox_sdk::proto::settings::v1::OAuthCredential;
 
     fn endpoint_with(credential: Credential) -> ModelEndpoint {
         ModelEndpoint {
@@ -183,9 +208,22 @@ mod tests {
             base_url: None,
             auth: Some(LlmAuth {
                 credential: Some(credential),
+                presentation: None,
             }),
             retry: None,
         }
+    }
+
+    /// `endpoint` with its credential declared as going in `presentation`.
+    fn declaring(
+        mut endpoint: ModelEndpoint,
+        presentation: CredentialPresentation,
+    ) -> ModelEndpoint {
+        if let Some(auth) = endpoint.auth.as_mut() {
+            auth.presentation = Some(presentation.into());
+        }
+
+        endpoint
     }
 
     fn secret(value: &str) -> Secret {
@@ -242,6 +280,82 @@ mod tests {
         assert_eq!(
             Upstream::declared(&endpoint).credential_headers(),
             vec![("authorization", "Bearer sk-proj-123".to_owned())]
+        );
+
+        assert_eq!(
+            Upstream::declared(&declaring(endpoint, CredentialPresentation::Unspecified))
+                .credential_headers(),
+            vec![("authorization", "Bearer sk-proj-123".to_owned())],
+            "unspecified is what every endpoint written before this field says, \
+             so it has to mean the inference that was there before it"
+        );
+    }
+
+    #[test]
+    fn a_declared_header_wins_over_what_the_host_would_have_implied() {
+        // The whole reason the field exists. A self-hosted OpenAI-compatible
+        // deployment lives on a host that matches nobody's, so inference reaches
+        // `x-api-key` and the endpoint rejects the request in a way that reads
+        // as a bad key rather than as a mis-shaped request.
+        let mut self_hosted = endpoint_with(Credential::ApiKey(secret("local-key")));
+        self_hosted.base_url = Some("https://llm.internal.example.com/v1".to_owned());
+
+        assert_eq!(
+            Upstream::declared(&declaring(self_hosted, CredentialPresentation::Bearer))
+                .credential_headers(),
+            vec![("authorization", "Bearer local-key".to_owned())]
+        );
+
+        // And the other direction, so this is a declaration rather than a way of
+        // nudging inference: an OpenAI host would have implied a bearer.
+        let mut openai = endpoint_with(Credential::ApiKey(secret("sk-proj-123")));
+        openai.base_url = Some("https://api.openai.com".to_owned());
+
+        assert_eq!(
+            Upstream::declared(&declaring(openai, CredentialPresentation::ApiKeyHeader))
+                .credential_headers(),
+            vec![("x-api-key", "sk-proj-123".to_owned())]
+        );
+    }
+
+    #[test]
+    fn a_declaration_covers_every_kind_of_credential_it_could_apply_to() {
+        // The field says how this endpoint's credential is sent. Honouring it
+        // for API keys only would make the answer depend on which arm of the
+        // oneof the caller filled in, which is exactly the guessing the
+        // declaration exists to end.
+        let token = endpoint_with(Credential::SubscriptionToken(secret("sess-abc")));
+
+        assert_eq!(
+            Upstream::declared(&declaring(token, CredentialPresentation::ApiKeyHeader))
+                .credential_headers(),
+            vec![("x-api-key", "sess-abc".to_owned())]
+        );
+
+        let oauth = endpoint_with(Credential::Oauth(OAuthCredential {
+            access_token: Some(secret("access-1")),
+            refresh_token: Some(secret("refresh-1")),
+            expires_at: None,
+        }));
+
+        assert_eq!(
+            Upstream::declared(&declaring(oauth, CredentialPresentation::ApiKeyHeader))
+                .credential_headers(),
+            vec![("x-api-key", "access-1".to_owned())],
+            "still the access token and never the refresh one"
+        );
+    }
+
+    #[test]
+    fn a_presentation_this_satellite_has_never_heard_of_falls_back_to_inference() {
+        // Enum values are additive within a proto major, so an older satellite
+        // meets ones a newer caller set. Inferring beats refusing the turn.
+        let mut endpoint = endpoint_with(Credential::ApiKey(secret("sk-ant-123")));
+        endpoint.auth.as_mut().expect("auth was set").presentation = Some(9_999);
+
+        assert_eq!(
+            Upstream::declared(&endpoint).credential_headers(),
+            vec![("x-api-key", "sk-ant-123".to_owned())]
         );
     }
 

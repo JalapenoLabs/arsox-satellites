@@ -143,6 +143,18 @@ pub struct ModelEndpoint {
 /// Credentials for one endpoint.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LlmAuth {
+    /// Which header this endpoint reads its credential from.
+    ///
+    /// Absent, or CREDENTIAL_PRESENTATION_UNSPECIFIED, leaves the satellite to
+    /// infer it from `base_url` exactly as it does today, so an endpoint that
+    /// never set this behaves as it always has.
+    ///
+    /// Declare it when inference cannot reach the right answer: a self-hosted
+    /// OpenAI-compatible deployment lives on a host that matches nobody's, and a
+    /// credential in the wrong header is rejected in a way that reads as a bad key
+    /// rather than as a mis-shaped request.
+    #[prost(enumeration="CredentialPresentation", optional, tag="4")]
+    pub presentation: ::core::option::Option<i32>,
     #[prost(oneof="llm_auth::Credential", tags="1, 2, 3")]
     pub credential: ::core::option::Option<llm_auth::Credential>,
 }
@@ -193,6 +205,41 @@ pub struct RetryPolicy {
     /// default set of 429 and 529.
     #[prost(uint32, repeated, tag="4")]
     pub retry_on_status: ::prost::alloc::vec::Vec<u32>,
+}
+/// How a credential is handed to an endpoint.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum CredentialPresentation {
+    /// The satellite decides. An API key goes in the header its destination reads
+    /// one from, and every token goes as a bearer.
+    Unspecified = 0,
+    /// `x-api-key`, which is how Anthropic reads a plain API key.
+    ApiKeyHeader = 1,
+    /// `Authorization: Bearer`, which is how OpenAI reads an API key and how every
+    /// subscription and OAuth token is sent.
+    Bearer = 2,
+}
+impl CredentialPresentation {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "CREDENTIAL_PRESENTATION_UNSPECIFIED",
+            Self::ApiKeyHeader => "CREDENTIAL_PRESENTATION_API_KEY_HEADER",
+            Self::Bearer => "CREDENTIAL_PRESENTATION_BEARER",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "CREDENTIAL_PRESENTATION_UNSPECIFIED" => Some(Self::Unspecified),
+            "CREDENTIAL_PRESENTATION_API_KEY_HEADER" => Some(Self::ApiKeyHeader),
+            "CREDENTIAL_PRESENTATION_BEARER" => Some(Self::Bearer),
+            _ => None,
+        }
+    }
 }
 /// Deterministic controls, enforced by infrastructure the agent cannot reach.
 ///

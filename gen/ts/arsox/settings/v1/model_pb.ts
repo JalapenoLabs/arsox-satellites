@@ -4,8 +4,8 @@
 // @generated from file arsox/settings/v1/model.proto (package arsox.settings.v1, syntax proto3)
 /* eslint-disable */
 
-import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
-import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
+import type { GenEnum, GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
+import { enumDesc, fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { Duration, Secret, Timestamp } from "../../common/v1/common_pb.js";
 import { file_arsox_common_v1_common } from "../../common/v1/common_pb.js";
 import type { Message } from "@bufbuild/protobuf";
@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/settings/v1/model.proto.
  */
 export const file_arsox_settings_v1_model: GenFile = /*@__PURE__*/
-  fileDesc("Ch1hcnNveC9zZXR0aW5ncy92MS9tb2RlbC5wcm90bxIRYXJzb3guc2V0dGluZ3MudjEiqQEKDU1vZGVsRW5kcG9pbnQSDAoEbmFtZRgBIAEoCRINCgVtb2RlbBgCIAEoCRIVCghiYXNlX3VybBgDIAEoCUgAiAEBEigKBGF1dGgYBCABKAsyGi5hcnNveC5zZXR0aW5ncy52MS5MbG1BdXRoEi0KBXJldHJ5GAUgASgLMh4uYXJzb3guc2V0dGluZ3MudjEuUmV0cnlQb2xpY3lCCwoJX2Jhc2VfdXJsIq8BCgdMbG1BdXRoEioKB2FwaV9rZXkYASABKAsyFy5hcnNveC5jb21tb24udjEuU2VjcmV0SAASNQoSc3Vic2NyaXB0aW9uX3Rva2VuGAIgASgLMhcuYXJzb3guY29tbW9uLnYxLlNlY3JldEgAEjMKBW9hdXRoGAMgASgLMiIuYXJzb3guc2V0dGluZ3MudjEuT0F1dGhDcmVkZW50aWFsSABCDAoKY3JlZGVudGlhbCLLAQoPT0F1dGhDcmVkZW50aWFsEi0KDGFjY2Vzc190b2tlbhgBIAEoCzIXLmFyc294LmNvbW1vbi52MS5TZWNyZXQSMwoNcmVmcmVzaF90b2tlbhgCIAEoCzIXLmFyc294LmNvbW1vbi52MS5TZWNyZXRIAIgBARIzCgpleHBpcmVzX2F0GAMgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcEgBiAEBQhAKDl9yZWZyZXNoX3Rva2VuQg0KC19leHBpcmVzX2F0IuQBCgtSZXRyeVBvbGljeRIZCgxtYXhfYXR0ZW1wdHMYASABKA1IAIgBARI3Cg9pbml0aWFsX2JhY2tvZmYYAiABKAsyGS5hcnNveC5jb21tb24udjEuRHVyYXRpb25IAYgBARIzCgttYXhfYmFja29mZhgDIAEoCzIZLmFyc294LmNvbW1vbi52MS5EdXJhdGlvbkgCiAEBEhcKD3JldHJ5X29uX3N0YXR1cxgEIAMoDUIPCg1fbWF4X2F0dGVtcHRzQhIKEF9pbml0aWFsX2JhY2tvZmZCDgoMX21heF9iYWNrb2ZmQokBChVjb20uYXJzb3guc2V0dGluZ3MudjFCCk1vZGVsUHJvdG9QAaICA0FTWKoCEUFyc294LlNldHRpbmdzLlYxygIRQXJzb3hcU2V0dGluZ3NcVjHiAh1BcnNveFxTZXR0aW5nc1xWMVxHUEJNZXRhZGF0YeoCE0Fyc294OjpTZXR0aW5nczo6VjFiBnByb3RvMw", [file_arsox_common_v1_common]);
+  fileDesc("Ch1hcnNveC9zZXR0aW5ncy92MS9tb2RlbC5wcm90bxIRYXJzb3guc2V0dGluZ3MudjEiqQEKDU1vZGVsRW5kcG9pbnQSDAoEbmFtZRgBIAEoCRINCgVtb2RlbBgCIAEoCRIVCghiYXNlX3VybBgDIAEoCUgAiAEBEigKBGF1dGgYBCABKAsyGi5hcnNveC5zZXR0aW5ncy52MS5MbG1BdXRoEi0KBXJldHJ5GAUgASgLMh4uYXJzb3guc2V0dGluZ3MudjEuUmV0cnlQb2xpY3lCCwoJX2Jhc2VfdXJsIoYCCgdMbG1BdXRoEioKB2FwaV9rZXkYASABKAsyFy5hcnNveC5jb21tb24udjEuU2VjcmV0SAASNQoSc3Vic2NyaXB0aW9uX3Rva2VuGAIgASgLMhcuYXJzb3guY29tbW9uLnYxLlNlY3JldEgAEjMKBW9hdXRoGAMgASgLMiIuYXJzb3guc2V0dGluZ3MudjEuT0F1dGhDcmVkZW50aWFsSAASRAoMcHJlc2VudGF0aW9uGAQgASgOMikuYXJzb3guc2V0dGluZ3MudjEuQ3JlZGVudGlhbFByZXNlbnRhdGlvbkgBiAEBQgwKCmNyZWRlbnRpYWxCDwoNX3ByZXNlbnRhdGlvbiLLAQoPT0F1dGhDcmVkZW50aWFsEi0KDGFjY2Vzc190b2tlbhgBIAEoCzIXLmFyc294LmNvbW1vbi52MS5TZWNyZXQSMwoNcmVmcmVzaF90b2tlbhgCIAEoCzIXLmFyc294LmNvbW1vbi52MS5TZWNyZXRIAIgBARIzCgpleHBpcmVzX2F0GAMgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcEgBiAEBQhAKDl9yZWZyZXNoX3Rva2VuQg0KC19leHBpcmVzX2F0IuQBCgtSZXRyeVBvbGljeRIZCgxtYXhfYXR0ZW1wdHMYASABKA1IAIgBARI3Cg9pbml0aWFsX2JhY2tvZmYYAiABKAsyGS5hcnNveC5jb21tb24udjEuRHVyYXRpb25IAYgBARIzCgttYXhfYmFja29mZhgDIAEoCzIZLmFyc294LmNvbW1vbi52MS5EdXJhdGlvbkgCiAEBEhcKD3JldHJ5X29uX3N0YXR1cxgEIAMoDUIPCg1fbWF4X2F0dGVtcHRzQhIKEF9pbml0aWFsX2JhY2tvZmZCDgoMX21heF9iYWNrb2ZmKpEBChZDcmVkZW50aWFsUHJlc2VudGF0aW9uEicKI0NSRURFTlRJQUxfUFJFU0VOVEFUSU9OX1VOU1BFQ0lGSUVEEAASKgomQ1JFREVOVElBTF9QUkVTRU5UQVRJT05fQVBJX0tFWV9IRUFERVIQARIiCh5DUkVERU5USUFMX1BSRVNFTlRBVElPTl9CRUFSRVIQAkKJAQoVY29tLmFyc294LnNldHRpbmdzLnYxQgpNb2RlbFByb3RvUAGiAgNBU1iqAhFBcnNveC5TZXR0aW5ncy5WMcoCEUFyc294XFNldHRpbmdzXFYx4gIdQXJzb3hcU2V0dGluZ3NcVjFcR1BCTWV0YWRhdGHqAhNBcnNveDo6U2V0dGluZ3M6OlYxYgZwcm90bzM", [file_arsox_common_v1_common]);
 
 /**
  * One place the satellite will try to get completions from.
@@ -99,6 +99,22 @@ export type LlmAuth = Message<"arsox.settings.v1.LlmAuth"> & {
     value: OAuthCredential;
     case: "oauth";
   } | { case: undefined; value?: undefined };
+
+  /**
+   * Which header this endpoint reads its credential from.
+   *
+   * Absent, or CREDENTIAL_PRESENTATION_UNSPECIFIED, leaves the satellite to
+   * infer it from `base_url` exactly as it does today, so an endpoint that
+   * never set this behaves as it always has.
+   *
+   * Declare it when inference cannot reach the right answer: a self-hosted
+   * OpenAI-compatible deployment lives on a host that matches nobody's, and a
+   * credential in the wrong header is rejected in a way that reads as a bad key
+   * rather than as a mis-shaped request.
+   *
+   * @generated from field: optional arsox.settings.v1.CredentialPresentation presentation = 4;
+   */
+  presentation?: CredentialPresentation;
 };
 
 /**
@@ -186,4 +202,40 @@ export type RetryPolicy = Message<"arsox.settings.v1.RetryPolicy"> & {
  */
 export const RetryPolicySchema: GenMessage<RetryPolicy> = /*@__PURE__*/
   messageDesc(file_arsox_settings_v1_model, 3);
+
+/**
+ * How a credential is handed to an endpoint.
+ *
+ * @generated from enum arsox.settings.v1.CredentialPresentation
+ */
+export enum CredentialPresentation {
+  /**
+   * The satellite decides. An API key goes in the header its destination reads
+   * one from, and every token goes as a bearer.
+   *
+   * @generated from enum value: CREDENTIAL_PRESENTATION_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * `x-api-key`, which is how Anthropic reads a plain API key.
+   *
+   * @generated from enum value: CREDENTIAL_PRESENTATION_API_KEY_HEADER = 1;
+   */
+  API_KEY_HEADER = 1,
+
+  /**
+   * `Authorization: Bearer`, which is how OpenAI reads an API key and how every
+   * subscription and OAuth token is sent.
+   *
+   * @generated from enum value: CREDENTIAL_PRESENTATION_BEARER = 2;
+   */
+  BEARER = 2,
+}
+
+/**
+ * Describes the enum arsox.settings.v1.CredentialPresentation.
+ */
+export const CredentialPresentationSchema: GenEnum<CredentialPresentation> = /*@__PURE__*/
+  enumDesc(file_arsox_settings_v1_model, 0);
 

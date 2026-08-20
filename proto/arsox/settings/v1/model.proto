@@ -39,6 +39,32 @@ message LlmAuth {
     // Subscription access and refresh tokens.
     OAuthCredential oauth = 3;
   }
+
+  // Which header this endpoint reads its credential from.
+  //
+  // Absent, or CREDENTIAL_PRESENTATION_UNSPECIFIED, leaves the satellite to
+  // infer it from `base_url` exactly as it does today, so an endpoint that
+  // never set this behaves as it always has.
+  //
+  // Declare it when inference cannot reach the right answer: a self-hosted
+  // OpenAI-compatible deployment lives on a host that matches nobody's, and a
+  // credential in the wrong header is rejected in a way that reads as a bad key
+  // rather than as a mis-shaped request.
+  optional CredentialPresentation presentation = 4;
+}
+
+// How a credential is handed to an endpoint.
+enum CredentialPresentation {
+  // The satellite decides. An API key goes in the header its destination reads
+  // one from, and every token goes as a bearer.
+  CREDENTIAL_PRESENTATION_UNSPECIFIED = 0;
+
+  // `x-api-key`, which is how Anthropic reads a plain API key.
+  CREDENTIAL_PRESENTATION_API_KEY_HEADER = 1;
+
+  // `Authorization: Bearer`, which is how OpenAI reads an API key and how every
+  // subscription and OAuth token is sent.
+  CREDENTIAL_PRESENTATION_BEARER = 2;
 }
 
 message OAuthCredential {

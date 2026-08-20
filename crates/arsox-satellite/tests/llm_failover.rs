@@ -161,6 +161,7 @@ fn endpoint(name: &str, base_url: &str, attempts: u32) -> ModelEndpoint {
                 value: Some(format!("sk-ant-{name}")),
                 display: None,
             })),
+            presentation: None,
         }),
         retry: Some(RetryPolicy {
             max_attempts: Some(attempts),

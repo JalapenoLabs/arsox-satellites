@@ -878,6 +878,8 @@ We support Anthropic auth tokens (subscription access/refresh tokens, `claude se
 
 We also support custom LLM endpoints, for example self-hosted Azure Anthropic models.
 
+By default the satellite decides which header carries your credential: a token always goes as `Authorization: Bearer`, and an API key goes wherever its destination reads one from. Set `auth.presentation` to say so yourself. A self-hosted OpenAI-compatible deployment is the case that needs it, because it lives on a host no rule about somebody else's domain can recognize, and a credential in the wrong header is rejected in a way that reads as a bad key rather than as a mis-shaped request.
+
 #### Endpoint failover
 
 You can pass multiple LLM endpoints per job. If one errors, because usage is exhausted or the provider is returning 529s, the satellite moves to the next. Order matters and is followed strictly. This lets you stack subscriptions, stack API keys, or list the same endpoint twice with different models.
