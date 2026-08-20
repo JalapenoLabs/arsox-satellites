@@ -64,8 +64,7 @@ jobs:
       # The interpreter is named by minor version rather than as plain `python3`.
       # This pool runs Rocky 9, whose `python3` is 3.9, and the package requires
       # 3.10 or newer, so `python3` would fail somewhere inside pip rather than
-      # here with a reason. The check ahead of the venv is what supplies the
-      # reason when the interpreter is missing entirely.
+      # here with a reason.
       #
       # Nothing below activates the environment. Each step is its own shell, so
       # an activation would not survive to the next one, and every command that
@@ -109,9 +108,9 @@ jobs:
         run: .venv/bin/python -m mypy
 
       # The unit tests need nothing. The integration tests spawn the satellite
-      # built above, each on a port of its own through `ARSOX_PORT`, so this job
-      # collides with nothing else on the runner and never skips itself for a
-      # busy port.
+      # built above on a port the kernel hands out, passed through `ARSOX_PORT`,
+      # so this job collides with nothing else on the runner and never skips
+      # itself for a busy port.
       - name: Test
         working-directory: sdks/python
         run: .venv/bin/python -m pytest
