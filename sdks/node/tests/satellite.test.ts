@@ -302,26 +302,33 @@ describe.skipIf(!available)('the Node SDK against a running satellite', () => {
     const created = await client.threads().create(settings)
 
     // The stand-in stops after three lines, which is a harness that exited
-    // without saying what it did: one fatal incident against this turn.
+    // without saying what it did. The satellite restarts it once and it does the
+    // same thing again, so the turn ends with two incidents against it.
     const turn = await created.handle.startTurn('replay the probe [[truncate=3]]')
     const result = await turn.result()
 
     expect(result.status).toBe(TurnStatus.FAILED)
     // The counts ride along on the report, so the common case needs no query.
+    expect(result.incidentCounts?.recovered).toBe(1)
     expect(result.incidentCounts?.fatal).toBe(1)
 
+    // The recovery is recorded because it happened. A restart that worked looks
+    // exactly like a turn that never stalled, and a harness wedging on every
+    // turn is a pattern nobody sees unless the recovery is written down.
     const listed = await created.handle.incidents()
-    expect(listed).toHaveLength(1)
-    expect(listed[0]?.code).toBe(ErrorCode.HARNESS_CRASHED)
-    expect(listed[0]?.disposition).toBe(Disposition.FATAL)
-    expect(listed[0]?.turnId).toBe(turn.id)
+    expect(listed).toHaveLength(2)
+    expect(listed.map((incident) => incident.disposition))
+      .toEqual([ Disposition.RECOVERED, Disposition.FATAL ])
+    expect(listed.map((incident) => incident.code))
+      .toEqual([ ErrorCode.HARNESS_CRASHED, ErrorCode.HARNESS_CRASHED ])
+    expect(listed.map((incident) => incident.turnId)).toEqual([ turn.id, turn.id ])
 
     // A filter narrows. A disposition nothing carries returns nothing rather
     // than falling back to everything.
     const blocked = await created.handle.incidents({ dispositions: [ Disposition.BLOCKED ] })
     expect(blocked).toHaveLength(0)
 
-    // The satellite-wide listing finds the same incident without being told
+    // The satellite-wide listing finds the same incidents without being told
     // which thread to look at.
     const fleet = await client.incidents({ codes: [ ErrorCode.HARNESS_CRASHED ] })
     expect(fleet.map((incident) => incident.threadId)).toContain(created.thread.threadId)
@@ -331,7 +338,7 @@ describe.skipIf(!available)('the Node SDK against a running satellite', () => {
     await created.handle.destroy()
 
     const afterTeardown = await client.incidents({ threadIds: [ created.thread.threadId ] })
-    expect(afterTeardown).toHaveLength(1)
+    expect(afterTeardown).toHaveLength(2)
   })
 
   it('reports what it is holding, and stops holding a destroyed thread', async () => {
