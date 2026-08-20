@@ -1,6 +1,6 @@
 # SDKs
 
-Three are planned: Rust, Node, and Python. The Rust one exists.
+Three are planned: Rust, Node, and Python. Rust and Node exist.
 
 All three are clients of the same protobuf API, and none of them expose a
 protobuf type by accident. Protobuf is always on the wire; what a consumer holds
@@ -104,11 +104,84 @@ and it is deliberate that it does not offer it silently: a call that pages a
 hundred thousand incidents into memory behind a caller's back is worse than one
 that hands back a cursor.
 
+## The Node client
+
+`sdks/node`, published as `@jalapenolabs/arsox-sdk`. It mirrors the Rust client's
+shape and its semantics rather than inventing a second vocabulary: `connect`
+checks the contract version, a handle holds an id and a connection, `pause`,
+`resume`, and `drain` stay three verbs, and one error class answers which code,
+whether to retry, and what happened.
+
+What it reaches today is the surface above: version, status, harness, threads,
+turns, the thread event stream, and incidents. Streaming settings toggles, text
+and markdown reports, artifacts, plan approval, question answering, and the
+control socket are not there yet, and `examples/example.ts` remains a design
+target rather than a description of the package.
+
+Mirroring Rust is also why `create` and `createWith` are two methods where the
+example shows one call with an options argument. The pair is the reference
+client's shape, and collapsing it is a decision to make once, for all three SDKs,
+rather than in whichever one was written most recently.
+
+### The contract is copied in, not committed twice
+
+`gen/ts` is the one checked-in TypeScript output. The package syncs it into
+`src/proto` on every build, typecheck, and test, and git ignores the copy.
+
+npm can only publish files beneath a package directory, which is the same
+constraint that puts the Rust output inside `arsox-sdk` rather than under `gen/`.
+Committing a second copy would satisfy the packager and introduce the failure
+worth avoiding: a contract that is current in one tree and stale in the other,
+with nothing to say which is which.
+
+The generated files carry `.js` import extensions, which is exactly what this
+package's ESM and NodeNext resolution wants, so they compile in place with no
+rewriting. Nothing reads a `.proto` at runtime.
+
+### `node:http` rather than `fetch`
+
+The listing endpoints carry their filters in a protobuf request message, on GET,
+like every other request in the contract. The WHATWG fetch specification forbids
+a body on GET outright, so `fetch` throws before a byte leaves the process. This
+is not nostalgia for the older API; it is the only one that can express the
+contract.
+
+`ws` rather than Node's global `WebSocket` is the same kind of decision. The
+thread socket sits behind the same bearer check as every other authenticated
+route, and the WHATWG WebSocket API cannot set a header on the handshake.
+
+### The integration suite runs on 8080
+
+The Rust suite starts a satellite with `assemble` and binds an ephemeral port
+in-process. A Node client cannot: it drives the binary, and `serve` binds
+`0.0.0.0:8080` with no override.
+
+That fixed port is right for the satellite. The container's port mapping is where
+its reachable address is decided, and a second knob would only be a way for the
+two to disagree. So the Node suite runs one satellite at a time on 8080, and
+skips itself with a message naming the port when something else holds it. A CI
+runner must leave 8080 free, and a skipped suite is reported rather than passing
+quietly.
+
+### Ceilings and durations are typed out
+
+A consumer writes an ordinary object literal, never a protobuf constructor: the
+client accepts an init shape and encodes it. The contract's shapes still show
+through where they carry meaning, and that is deliberate. `maxTokensPerTurn` is
+`{ ceiling: { case: 'tokens', value: 8_000_000n } }` because a ceiling is a case
+rather than a number that might be a sentinel, and `idleTtl` is
+`{ seconds: 7200n }` because every time span in the contract is a Duration.
+
+Ergonomic sugar over both is a later decision, and it belongs next to the helper
+wrappers `protobuf.md` already plans rather than in one SDK on its own.
+
 ## Roadmap
 
-- **Node and Python clients**, against the same contract and the same conformance
+- **The Python client**, against the same contract and the same conformance
   expectations.
 - **Retry and failover** in the client, so a `TURN_QUEUE_FULL` or a restarting
   satellite is handled rather than surfaced.
 - **`arsox-testkit`**, a fake satellite so a consumer can test their integration
   without running a container.
+- **Node CI**, building and testing `sdks/node` on a runner with 8080 free.
+  Nothing runs it automatically yet.
