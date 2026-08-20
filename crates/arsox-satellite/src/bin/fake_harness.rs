@@ -35,6 +35,12 @@
 //! - `[[report_env=NAME]]` writes what the child can see of `NAME` to stderr,
 //!   so a test can assert on the environment an agent actually receives rather
 //!   than on the environment the satellite intended to give it.
+//! - `[[record_argv=FILE]]` writes the command line this replay was launched
+//!   with, one argument per line, to `FILE` in the working directory. Same
+//!   reasoning as `report_env` and the same vantage point: whether a turn
+//!   resumed a session is a fact about what the CLI was asked to do, and the CLI
+//!   is the only thing that can report it. A test names a different file per
+//!   turn so a later spawn does not overwrite the evidence from an earlier one.
 //! - `[[complete=N]]` sends N completion requests through the satellite's own
 //!   proxy before the transcript, exactly as a CLI would. Nothing else in a test
 //!   can make the proxy route a request, so this is the only way to exercise
@@ -150,6 +156,15 @@ async fn main() {
     if let Some(name) = text_directive(&prompt, "report_env") {
         let seen = std::env::var(&name).unwrap_or_else(|_unset| "(unset)".to_owned());
         eprintln!("report_env {name}={seen}");
+    }
+
+    // Written to a file rather than to stderr, which the runner reads for
+    // liveness and then discards. A test that has to know what the CLI was asked
+    // to do needs it to survive the turn.
+    if let Some(file) = text_directive(&prompt, "record_argv")
+        && let Err(error) = std::fs::write(&file, arguments.join("\n"))
+    {
+        eprintln!("could not record the command line to {file}: {error}");
     }
 
     // Before the replay, because a turn that failed to reach a model has nothing
