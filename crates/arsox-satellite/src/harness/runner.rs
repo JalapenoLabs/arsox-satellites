@@ -1191,15 +1191,7 @@ impl Runner {
                 }
 
                 Some(incident) = incidents.recv() => {
-                    self.store_incident(&incident, at.redactor).await;
-
-                    // Fatal is the proxy saying the turn has nowhere left to
-                    // go, which today means every declared endpoint was given
-                    // up on. Reading the disposition rather than the code keeps
-                    // this from needing an edit every time the proxy learns a
-                    // new way to end a turn.
-                    if incident.disposition == i32::from(Disposition::Fatal) {
-                        consumed.failed = Some(Failure::from_incident(&incident));
+                    if self.absorb_proxy_incident(&incident, at, &mut consumed).await {
                         break;
                     }
                 }
@@ -1239,14 +1231,38 @@ impl Runner {
         // to select on, and an incident recorded nowhere is the silent failure
         // the whole incident system exists to prevent.
         while let Ok(incident) = incidents.try_recv() {
-            self.store_incident(&incident, at.redactor).await;
-
-            if incident.disposition == i32::from(Disposition::Fatal) && consumed.failed.is_none() {
-                consumed.failed = Some(Failure::from_incident(&incident));
-            }
+            // The drain keeps going whatever the answer: every incident still
+            // in the channel deserves its row, fatal or not.
+            let _turn_over = self
+                .absorb_proxy_incident(&incident, at, &mut consumed)
+                .await;
         }
 
         consumed
+    }
+
+    /// Stores a proxy incident and notes a fatal one as the turn's failure.
+    ///
+    /// Returns whether the turn is over. Fatal is the proxy saying the turn has
+    /// nowhere left to go, which today means every declared endpoint was given
+    /// up on. Reading the disposition rather than the code keeps this from
+    /// needing an edit every time the proxy learns a new way to end a turn.
+    async fn absorb_proxy_incident(
+        &self,
+        incident: &Incident,
+        at: Attribution<'_>,
+        consumed: &mut Consumed,
+    ) -> bool {
+        self.store_incident(incident, at.redactor).await;
+
+        if incident.disposition == i32::from(Disposition::Fatal) {
+            if consumed.failed.is_none() {
+                consumed.failed = Some(Failure::from_incident(incident));
+            }
+            return true;
+        }
+
+        false
     }
 
     /// Turns one line of harness output into log entries and a result.
