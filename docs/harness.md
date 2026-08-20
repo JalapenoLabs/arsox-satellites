@@ -207,9 +207,9 @@ which is the only part of this the rest of the satellite is written against.
 HTTP request, so the runner learns about it by asking every so often rather than
 being interrupted. Checking every line would be a query per line of output.
 
-**A clean exit with no result line fails the turn.** The harness ended without
-saying what it did, and reporting that as success is exactly the silent failure
-the incident system exists to prevent.
+**A clean exit with no result line fails the turn**, once a restart has been
+spent on it. The harness ended without saying what it did, and reporting that as
+success is exactly the silent failure the incident system exists to prevent.
 
 **A ceiling ends a turn gracefully.** Reading harness output is a `select!` over
 everything that can end it: the harness finishing, a cancellation, a budget
@@ -230,6 +230,40 @@ second expiry fails the turn with `HARNESS_IDLE_TIMEOUT`. Stderr is read for the
 same reason it counts as output: an unread pipe fills and blocks the process the
 loop is waiting on, which would be the satellite manufacturing the hang it then
 reported. See [the timeouts doc](./timeouts.md#the-idle-bound-is-measured-against-silence).
+
+#### Three endings share one restart
+
+A restart replaces a process, so what earns one is a process that stopped rather
+than work that went wrong. Three endings qualify, and the runner treats them
+alike:
+
+| Ending | Recorded as | On the second one |
+|---|---|---|
+| no output at all inside the idle bound | `HARNESS_IDLE_TIMEOUT` | the turn fails with that code |
+| the process died: a nonzero status, or a signal | `HARNESS_CRASHED` | the turn fails with that code |
+| a clean exit that reported no result | `HARNESS_CRASHED` | the turn fails, as it always did, with the reason it always gave |
+
+**A clean exit that did report a result is none of them**, however badly the
+result reads. The harness made a statement about the work, and a second session
+would reach the same answer by the same route. That line is what a restart is
+for: `is_error` is an answer, and a process that stopped is not.
+
+**The evidence is captured because the process cannot be asked afterwards.** A
+crash carries the exit status, the code when a signal did not take its place, and
+the last lines it wrote on either pipe, all in `details` on both the `recovered`
+incident and the `fatal` one. The tail is the only place stderr survives at all,
+and "killed by SIGKILL after twenty lines of a build" is a diagnosis nobody
+reaches from an event log that simply stops.
+
+**One restart per turn, across every cause and every session.** What the budget
+bounds is process instability inside a turn, and a harness that hung, was
+restarted, and then died is unstable twice however differently the two endings
+read. It is held beside the turn's grant, meter, and wall clock for the reason
+those are: a checker fix cycle is another session in the same turn, and a budget
+minted per session would not be a ceiling the turn holds.
+
+The cost of pooling them is that a turn which hung early has no restart left for
+a crash later, and pays a turn to find that out. The alternative pays two.
 
 ### Checkers run after the harness, and can wake it back up
 
@@ -562,9 +596,6 @@ advertised one it cannot run would have a caller learn the truth as
 
 ## Roadmap
 
-- **Crash restart-once.** A harness that died is recovered the same way a hung
-  one already is, through the restart helper the idle bound uses. Today a
-  nonzero exit fails the turn.
 - **Bidirectional mode.** Both CLIs accept streaming input as well as emitting
   streaming output, which suits a long-lived process per thread better than a
   spawn per turn. It is also what makes cancellation and mid-turn input possible.

@@ -109,7 +109,7 @@ The bound belongs to the session rather than to the turn, unlike the wall clock:
 a fresh process that has said nothing yet has not been idle for however long its
 predecessor was.
 
-### Restarted once, never twice
+### Restarted once, never twice, and once per turn
 
 A restart recovers a process that wedged, which is a real and common thing. It
 does not recover a prompt, a repo, or a model that wedges every process reading
@@ -129,10 +129,13 @@ pattern nobody sees unless the recovery is written down.
 A second expiry ends the turn with `HARNESS_IDLE_TIMEOUT`, which is **retryable**:
 the turn is worth running again, just not inside this one.
 
-**A crash is the other ending a restart recovers**, and it belongs in the same
-helper rather than in a second restart loop beside it. That is separate work and
-is deliberately not done here: today a nonzero exit fails the turn exactly as it
-did before.
+**A crash is the other ending the same restart recovers.** A process that died,
+and one that exited cleanly having reported no result, are stopped processes
+exactly as a hung one is, so they share the loop rather than getting a second one
+beside it. They also share its budget: one restart for the whole turn, spent by
+whichever ending reaches it first, because what it bounds is process instability
+inside a turn rather than any one shape of it. See
+[the harness doc](./harness.md#three-endings-share-one-restart).
 
 ## Testing it
 
@@ -148,13 +151,13 @@ a test would have to reach around:
 - **The runner.** The idle bound is a per-thread contract field, so a test
   declares it exactly as a host application would. The stand-in harness takes
   `[[hang=MS]]` and `[[hang_once=MS]]` in the prompt, which produce silence
-  before the transcript. `hang_once` marks the working directory with
-  `create_new`, so the first process hangs and the restart gets through, which is
-  what makes "restarted once, and then the turn completed" a thing a test can
-  assert.
+  before the transcript, and `[[exit=N]]` and `[[crash_once=N]]`, which produce a
+  death. Each `_once` form marks the working directory with `create_new`, so the
+  first process wedges and the restart gets through, which is what makes
+  "restarted once, and then the turn completed" a thing a test can assert. Asking
+  for a hang and then a death is what proves the two share one budget.
 
 ## Roadmap
 
 - **Process-group teardown** for exec commands, so a killed shell takes its
   children with it rather than leaving orphans.
-- **Crash restart-once**, sharing the restart the idle bound already uses.
