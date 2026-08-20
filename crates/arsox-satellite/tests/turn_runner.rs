@@ -1141,3 +1141,93 @@ async fn a_thread_with_no_checkers_runs_exactly_as_it_did_before() {
     );
     assert_eq!(stage.reason.as_deref(), Some("no repo declares a checker"));
 }
+
+/// A stub upstream that rejects every credential it is shown.
+///
+/// The failure a second endpoint exists for, and the one an expired
+/// subscription actually produces.
+async fn stub_that_rejects() -> String {
+    let router = axum::Router::new().route(
+        "/v1/messages",
+        axum::routing::post(|| async {
+            (
+                axum::http::StatusCode::UNAUTHORIZED,
+                r#"{"type":"error","error":{"type":"authentication_error"}}"#,
+            )
+        }),
+    );
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("should bind the stub upstream");
+    let address = listener.local_addr().expect("should have an address");
+
+    tokio::spawn(async move {
+        let _served = axum::serve(listener, router).await;
+    });
+
+    format!("http://{address}")
+}
+
+#[tokio::test]
+async fn a_turn_whose_every_endpoint_failed_ends_on_the_aggregate_error() {
+    // The loop closing on the failover path: the proxy finds the failure, the
+    // runner ends the turn on it, and the caller is told which endpoints were
+    // tried rather than that something went wrong.
+    let settings = ThreadSettings {
+        models: vec![arsox_sdk::proto::settings::v1::ModelEndpoint {
+            name: "expired".to_owned(),
+            model: "claude-opus-5".to_owned(),
+            base_url: Some(stub_that_rejects().await),
+            auth: None,
+            retry: Some(arsox_sdk::proto::settings::v1::RetryPolicy {
+                max_attempts: Some(1),
+                ..arsox_sdk::proto::settings::v1::RetryPolicy::default()
+            }),
+        }],
+        ..ThreadSettings::default()
+    };
+
+    let (harness, thread_id, turn_id) = start_with("[[complete=1]] run the probe", settings).await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Failed
+    );
+
+    let error = result_of(&harness.store, &thread_id, &turn_id)
+        .await
+        .error
+        .expect("a failed turn says why");
+
+    assert_eq!(error.code, i32::from(ErrorCode::LlmAllEndpointsExhausted));
+    assert!(
+        error.retryable,
+        "the workspace survives, so the same turn submitted against working \
+         credentials resumes from where this one stopped"
+    );
+    assert!(
+        error
+            .details
+            .is_some_and(|details| details.fields.contains_key("attempts")),
+        "the aggregate code is useless without the per-endpoint reasons"
+    );
+
+    let recorded = incidents_coded(
+        &harness.store,
+        &thread_id,
+        ErrorCode::LlmAllEndpointsExhausted,
+    )
+    .await;
+
+    assert_eq!(
+        recorded.len(),
+        1,
+        "recorded once, where the proxy found it, rather than again on the way \
+         out of the turn"
+    );
+    assert_eq!(
+        recorded[0].disposition,
+        i32::from(arsox_sdk::proto::incident::v1::Disposition::Fatal)
+    );
+}

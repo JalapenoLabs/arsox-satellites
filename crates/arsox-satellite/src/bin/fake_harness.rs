@@ -24,6 +24,10 @@
 //! - `[[report_env=NAME]]` writes what the child can see of `NAME` to stderr,
 //!   so a test can assert on the environment an agent actually receives rather
 //!   than on the environment the satellite intended to give it.
+//! - `[[complete=N]]` sends N completion requests through the satellite's own
+//!   proxy before the transcript, exactly as a CLI would. Nothing else in a test
+//!   can make the proxy route a request, so this is the only way to exercise
+//!   what the runner does with what the proxy reports back.
 //! - `[[stall=MS]]` holds the process open for MS milliseconds after the
 //!   transcript, producing nothing. A real harness stuck in a long shell command
 //!   looks exactly like this from the satellite's side, which is what the wall
@@ -48,7 +52,8 @@ use std::io::Write as _;
 /// threads hanging at once cannot see each other's marker.
 const HUNG_ALREADY: &str = "arsox-fake-harness-hung";
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let Ok(path) = std::env::var("ARSOX_FAKE_TRANSCRIPT") else {
         eprintln!("ARSOX_FAKE_TRANSCRIPT is not set");
         std::process::exit(64);
@@ -81,6 +86,13 @@ fn main() {
     if let Some(name) = text_directive(&prompt, "report_env") {
         let seen = std::env::var(&name).unwrap_or_else(|_unset| "(unset)".to_owned());
         eprintln!("report_env {name}={seen}");
+    }
+
+    // Before the replay, because a turn that failed to reach a model has nothing
+    // to say afterwards and the runner should not have to read a transcript to
+    // find that out.
+    if let Some(requests) = directive(&prompt, "complete") {
+        complete(requests).await;
     }
 
     // Before the replay rather than after it. A harness that hung before it said
@@ -131,6 +143,38 @@ fn main() {
         reason = "a test directive is small by construction"
     )]
     std::process::exit(exit_code as i32);
+}
+
+/// Asks for a completion the way a CLI does, through the satellite's proxy.
+///
+/// The environment carries where to ask and what to present, and neither is a
+/// provider credential: `ANTHROPIC_BASE_URL` is the satellite's own listener and
+/// `ANTHROPIC_API_KEY` is the turn's token, which is worth nothing anywhere
+/// else.
+///
+/// Whatever comes back is reported on stderr and otherwise ignored. This exists
+/// to make the request happen, not to act on the answer.
+async fn complete(requests: usize) {
+    let Ok(base_url) = std::env::var("ANTHROPIC_BASE_URL") else {
+        eprintln!("ANTHROPIC_BASE_URL is not set, so there is no proxy to ask");
+        return;
+    };
+    let token = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+
+    for _request in 0..requests {
+        let answered = reqwest::Client::new()
+            .post(format!("{base_url}/v1/messages"))
+            .header("x-api-key", &token)
+            .header("content-type", "application/json")
+            .body(r#"{"model":"claude-opus-5","messages":[]}"#)
+            .send()
+            .await;
+
+        match answered {
+            Ok(response) => eprintln!("complete {}", response.status()),
+            Err(error) => eprintln!("complete failed: {error}"),
+        }
+    }
 }
 
 /// Produces nothing at all for `millis`, which is what a wedged harness does.
