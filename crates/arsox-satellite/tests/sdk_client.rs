@@ -11,9 +11,11 @@
 #![cfg(feature = "test-util")]
 
 use arsox_satellite::{ServeOptions, assemble};
-use arsox_sdk::client::Satellite as Client;
+use arsox_sdk::client::{IncidentQuery, Satellite as Client};
 use arsox_sdk::proto::common::v1::{Duration as ProtoDuration, Secret};
+use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::harness::v1::Harness;
+use arsox_sdk::proto::incident::v1::Disposition;
 use arsox_sdk::proto::settings::v1::{Budget, EnvVar, ThreadSettings};
 use arsox_sdk::proto::thread::v1::ThreadState;
 use arsox_sdk::proto::turn::v1::TurnStatus;
@@ -429,6 +431,113 @@ async fn a_turn_runs_and_its_result_comes_back_through_the_sdk() {
     // Absent rather than zero, all the way out to a consumer.
     assert_eq!(tokens.reasoning_output_tokens, None);
     assert!(result.by_model.len() >= 2, "failover cost stays visible");
+}
+
+#[tokio::test]
+async fn incidents_are_listed_through_the_sdk_per_thread_and_per_satellite() {
+    // The question a host application asks after a bad night, from a consumer's
+    // seat: what went wrong on this thread, and what went wrong anywhere.
+    let url = start().await;
+    let client = Client::connect(&url, SECRET).await.expect("should connect");
+
+    let created = client
+        .threads()
+        .create(settings())
+        .await
+        .expect("should create");
+
+    // The stand-in stops after three lines, which is a harness that exited
+    // without saying what it did: one fatal incident against this turn.
+    let turn = created
+        .handle
+        .start_turn("replay the probe [[truncate=3]]")
+        .await
+        .expect("should queue");
+
+    let result = tokio::time::timeout(Duration::from_secs(30), turn.result())
+        .await
+        .expect("should not time out")
+        .expect("should report a result");
+
+    assert_eq!(result.status, i32::from(TurnStatus::Failed));
+    assert_eq!(
+        result
+            .incident_counts
+            .expect("a report carries its counts")
+            .fatal,
+        1,
+        "the counts ride along, so the common case needs no query"
+    );
+
+    let listed = created
+        .handle
+        .incidents(IncidentQuery::default())
+        .await
+        .expect("should list this thread's incidents");
+
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].code, i32::from(ErrorCode::HarnessCrashed));
+    assert_eq!(listed[0].disposition, i32::from(Disposition::Fatal));
+    assert_eq!(listed[0].turn_id.as_deref(), Some(turn.id()));
+    // The sequence is what lets a query result be located in the stream the same
+    // incident was emitted on.
+    assert!(listed[0].sequence.is_some());
+
+    // A filter narrows. A disposition nothing carries returns nothing rather
+    // than falling back to everything.
+    let blocked = created
+        .handle
+        .incidents(IncidentQuery {
+            dispositions: vec![Disposition::Blocked],
+            ..IncidentQuery::default()
+        })
+        .await
+        .expect("should filter");
+    assert!(blocked.is_empty());
+
+    let fatal = created
+        .handle
+        .incidents(IncidentQuery {
+            dispositions: vec![Disposition::Fatal],
+            turn_ids: vec![turn.id().to_owned()],
+            ..IncidentQuery::default()
+        })
+        .await
+        .expect("should filter");
+    assert_eq!(fatal.len(), 1);
+
+    // The satellite-wide listing finds the same incident without being told
+    // which thread to look at.
+    let fleet = client
+        .incidents(IncidentQuery {
+            codes: vec![ErrorCode::HarnessCrashed],
+            ..IncidentQuery::default()
+        })
+        .await
+        .expect("should list every thread's incidents");
+    assert!(
+        fleet.iter().any(
+            |incident| incident.thread_id.as_deref() == Some(created.thread.thread_id.as_str())
+        )
+    );
+
+    // Destroying the thread takes its workspace, its turns, and its events. The
+    // evidence stays, which is the whole reason incidents are not ephemeral.
+    created.handle.destroy().await.expect("should destroy");
+
+    let after_teardown = client
+        .incidents(IncidentQuery {
+            thread_ids: vec![created.thread.thread_id.clone()],
+            ..IncidentQuery::default()
+        })
+        .await
+        .expect("a tombstoned thread is not an error to filter on");
+
+    assert_eq!(
+        after_teardown.len(),
+        1,
+        "incidents outlive the thread they describe"
+    );
 }
 
 #[tokio::test]
