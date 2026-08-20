@@ -179,7 +179,6 @@ the container-side mount paths are rewritten into Windows paths.
 
 ## Roadmap
 
-- **Idle TTL collection.** `expires_at` is maintained and nothing sweeps it yet.
 - **Retention for incidents and statistics**, which is separate from the thread
   TTL by design.
 - **Aggregate disk accounting**, so `GetStatusResponse.disk` stops being absent.
