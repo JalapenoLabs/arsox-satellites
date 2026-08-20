@@ -58,12 +58,14 @@ Serve the API over TLS whenever it is reachable outside a trusted network. The s
 | Output | Built in | Distribution | For |
 |---|---|---|---|
 | Rust SDK | this repo | Cargo <!-- TODO: link --> | Applications |
-| Node/Web SDK | this repo | NPM <!-- TODO: link --> | Applications |
-| Python SDK | this repo | PyPi <!-- TODO: link --> | Applications |
-| Satellite images | this repo | docker.io <!-- TODO: link --> | The satellites themselves |
+| Node/Web SDK | this repo | [`@jalapenolabs/arsox-sdk`](https://www.npmjs.com/package/@jalapenolabs/arsox-sdk) on NPM | Applications |
+| Python SDK | this repo | PyPi, remaining | Applications |
+| Satellite images | this repo | [`jalapenolabs/arsox-satellite`](https://hub.docker.com/r/jalapenolabs/arsox-satellite) on docker.io | The satellites themselves |
 | `arsox` CLI | [`JalapenoLabs/arsox-cli`](https://github.com/JalapenoLabs/arsox-cli) | GitHub Releases and `cargo install` | Humans at a terminal |
 
 The three SDKs and the CLI are all clients of the same protobuf API.
+
+One version tag publishes the image and the Node package together, from one commit, which is what stops their versions drifting apart. Both links resolve from the first tagged release onward. See [Release](./docs/ci.md#release).
 
 **The CLI is built in its own repository and depends on the published Rust SDK.** That boundary is deliberate rather than tidy: a separate repo can only reach the public API, so anything the CLI needs and cannot get is a hole in the SDK rather than something a sibling crate quietly reaches around. It makes the CLI the Rust SDK's first real consumer, and the first honest test of whether the published surface is enough to build something with.
 
@@ -370,7 +372,7 @@ Generation happens at build time into strongly typed artifacts per language. Not
 - An SDK **refuses** to talk to a satellite with a higher proto major and says so clearly, rather than failing later with a confusing decode error.
 - An SDK talking to a satellite with a higher minor version warns once and proceeds. Additive fields it does not know about are ignored.
 
-Pin your image tag and your SDK version together.
+Pin your image tag and your SDK version together. There is a mechanism behind that advice rather than a hope: one version tag builds the image and the Node package from the same commit, and the tag is asserted against the workspace manifest before anything is published, so `ubuntu-1.2.3` and `@jalapenolabs/arsox-sdk@1.2.3` are always the same source. See [Release](./docs/ci.md#release).
 
 #### One canonical message per concept
 

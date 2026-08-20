@@ -106,11 +106,18 @@ that hands back a cursor.
 
 ## The Node client
 
-`sdks/node`, published as `@jalapenolabs/arsox-sdk`. It mirrors the Rust client's
-shape and its semantics rather than inventing a second vocabulary: `connect`
-checks the contract version, a handle holds an id and a connection, `pause`,
-`resume`, and `drain` stay three verbs, and one error class answers which code,
-whether to retry, and what happened.
+`sdks/node`, published as `@jalapenolabs/arsox-sdk` on every `v*` tag, by the
+same workflow that publishes the satellite image. One tag, one commit, two
+outputs carrying the same version, which is what makes the README's "pin your
+image tag and your SDK version together" a mechanism rather than a request. The
+tarball carries `dist` and the README and nothing else, and something checks
+that before each publish rather than trusting the allowlist. See
+[Release](./ci.md#release).
+
+It mirrors the Rust client's shape and its semantics rather than inventing a
+second vocabulary: `connect` checks the contract version, a handle holds an id
+and a connection, `pause`, `resume`, and `drain` stay three verbs, and one error
+class answers which code, whether to retry, and what happened.
 
 What it reaches today is the surface above: version, status, harness, threads,
 turns, the thread event stream, and incidents. Streaming settings toggles, text

@@ -27,11 +27,13 @@ checksum-verified each run.
 | Rust | `.github/workflows/rust.yml` | pushes and PRs touching `crates/`, the workspace manifest, or the toolchain pin |
 | Node | `.github/workflows/node.yml` | pushes and PRs touching `sdks/node/`, `gen/ts/`, `crates/`, the workspace manifest, or the toolchain pin |
 | Docker | `.github/workflows/docker.yml` | pushes and PRs touching the `Dockerfile`, `crates/`, the workspace manifest, or the toolchain pin |
+| Release | `.github/workflows/release.yml` | `v*` tags, and `workflow_dispatch` with a version |
 
 Each workflow is path-filtered, so editing a README never queues a proto build.
 `workflow_dispatch` is enabled on all of them for manual runs, and
 `cancel-in-progress` concurrency means a second push supersedes the first rather
-than racing it.
+than racing it. Release is the exception on both counts: it is triggered by a
+tag rather than a path, and it is never cancelled.
 
 ## Proto
 
@@ -145,7 +147,117 @@ so this workflow is the only thing standing between a crate moving directory and
 an image that silently stops building.
 
 The image is built and thrown away. Publishing to docker.io is a release step,
-not a CI step, and lands with the release automation.
+not a CI step, and lives in the Release workflow below.
+
+## Release
+
+One workflow publishes the satellite image and the Node SDK, because they are
+one release. The README tells you to pin your image tag and your SDK version
+together, and a pipeline that shipped them separately would make that advice
+something you have to arrange by hand.
+
+### Trigger
+
+A `v*` tag. `workflow_dispatch` takes a version and reruns the same release,
+which is what a half-finished run needs.
+
+Both paths check out the tag rather than a branch, so a rerun cannot quietly
+publish a different commit under a version number that is already spent. The
+dispatch input accepts `v0.1.0` or `0.1.0` and normalizes; anything that is not
+`major.minor.patch` with an optional prerelease suffix fails immediately, before
+a runner spends fifteen minutes on it.
+
+**A prerelease claims its exact tag and nothing else.** `v1.0.0-rc.1` pushes
+`ubuntu-1.0.0-rc.1` and leaves `ubuntu-latest` and `latest` where they are. A
+release candidate that becomes `latest` is how a fleet ends up running one
+without deciding to.
+
+### Secrets
+
+Three, and a release without all three does not start.
+
+| Secret | For |
+|---|---|
+| `DOCKERHUB_USERNAME` | the docker.io account the image is pushed as |
+| `DOCKERHUB_TOKEN` | that account's access token, not its password |
+| `NPM_TOKEN` | an npm automation token with publish rights to the `@jalapenolabs` scope |
+
+The first step checks all three and names every one that is missing, rather than
+failing on the first and making you learn about the second on the next run. This
+matters more than it sounds: the alternative is discovering an absent `NPM_TOKEN`
+after the image is already on docker.io, and the version number is gone.
+
+`GITHUB_TOKEN` is the one credential nobody configures. It is minted per run, and
+the workflow grants it `contents: write` to create the release and upload the
+manifest.
+
+### Gates, then publish
+
+Everything verifiable runs before anything leaves the runner:
+
+1. The secrets are present.
+2. The tag matches the `[workspace.package]` version in `Cargo.toml`. The
+   satellite embeds `CARGO_PKG_VERSION` at compile time and serves it from
+   `/v1/version`, so agreement in the manifest is agreement in the binary the
+   image ships. An image tagged with a version its binary does not report is the
+   drift the rest of this repository works to prevent.
+3. The image builds, with its final tags rather than a scratch tag, so the thing
+   verified is the thing pushed.
+4. The image boots and answers `/healthz`, exactly as the Docker workflow does.
+5. The Node package builds, typechecks, and its full suite runs against the
+   commit being released, including the integration tests that drive a real
+   satellite.
+6. `npm pack --dry-run` is inspected: nothing outside `dist` beyond the README
+   and `package.json`, and the generated contract present under `dist/proto`.
+
+Then, in order: push the image, attach the manifest to the GitHub release, publish
+to npm. The image is the slower and likelier failure, so putting it first means a
+broken release usually stops before anything is published at all. The manifest
+follows the push because a manifest with no image is useless. npm is last because
+it is the only step that can never be redone under the same version.
+
+The ordering does not make a half-release impossible. It makes the worst case one
+artifact short rather than a pair that disagree, and it puts the irreversible step
+where the fewest things can still go wrong after it.
+
+### The image manifest
+
+The README promises the exact package set is published in the image's manifest.
+`.github/scripts/image-manifest.sh` produces it by running inside the image it
+just built, with the entrypoint overridden, and the output is attached to the
+GitHub release as `arsox-satellite-ubuntu-<version>-manifest.txt`.
+
+It reads the running image rather than the Dockerfile on purpose. A Dockerfile
+says what was asked for; the image says what is installed, transitive packages
+included, and that is the only version a consumer can act on.
+
+### The npm package
+
+`@jalapenolabs/arsox-sdk`, published public. The scope is not decoration: an
+unscoped `arsox-sdk` is a name anyone can take, and a scoped one cannot be
+confused for a package Jalapeno Labs did not publish. Scoped packages default to
+restricted, so `publishConfig.access` says `public` in `package.json` rather than
+in a flag somebody can forget.
+
+The version is set from the tag before the build, so the compiled package and its
+manifest agree whatever the committed `package.json` says. A committed version
+that disagrees with the tag is a warning rather than a failure: it means the
+repository disagrees with itself and wants a bump, not that the release is wrong.
+
+**Provenance is on, and whether it attests here is unproven.** npm signs the
+package against an OIDC token minted for the workflow run, which is why the job
+grants `id-token: write`. Self-hosted runners request that token from the same
+Actions service a hosted runner does, so it should work, and nothing in this
+repository has yet proven it does. The honest part is the failure mode:
+`--provenance` fails the publish outright when the token is unavailable, so a
+release can never ship silently unattested. The `provenance` dispatch input turns
+it off for a release that has to go out while that is being sorted, and logs a
+warning when it does.
+
+The token never lands on disk. The `.npmrc` the publish uses holds the literal
+string `${NPM_TOKEN}`, which npm expands out of the environment, and it is written
+under `RUNNER_TEMP` so a persistent runner is not left holding a registry
+credential. Docker is logged out for the same reason.
 
 ## Roadmap
 
@@ -154,8 +266,11 @@ not a CI step, and lands with the release automation.
 - **Conformance suite** once harness mappers exist. That is the job that proves
   the normalization claim, so it belongs in CI from the day the first mapper
   lands.
-- **Fedora and Rocky image variants**, and publishing every variant to docker.io
-  with each package pinned and the manifest published alongside the image.
+- **Fedora and Rocky image variants**, published by the same release workflow
+  with each package pinned and a manifest of its own alongside the image.
+- **The Rust SDK to crates.io and the Python SDK to PyPi**, on the same tag as
+  everything else. Until then a release ships two of the four outputs, and the
+  ship table in the README says which.
 - **`buf breaking` against the last release tag** in addition to the base branch,
   so a sequence of individually non-breaking PRs cannot add up to a break across
   a release.
