@@ -1,0 +1,387 @@
+# Copyright © 2026 Jalapeno Labs
+
+# The release. One tag ships the satellite image and the Node SDK together, so
+# an image and an SDK carrying the same version number are always built from the
+# same commit. That is the mechanism behind the README's "pin your image tag and
+# your SDK version together": without it the advice is a request.
+name: Release
+
+on:
+  push:
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'The release version, with or without the leading v (for example v0.1.0). The tag must already exist.'
+        required: true
+        type: string
+      provenance:
+        description: 'Attach npm provenance. Turn off only if the runner cannot mint an OIDC token; see docs/ci.md.'
+        required: false
+        type: boolean
+        default: true
+
+# `contents: write` creates the GitHub release and uploads the image manifest.
+# `id-token: write` is what lets npm mint the OIDC token its provenance
+# attestation is signed against.
+permissions:
+  contents: write
+  id-token: write
+
+# Never cancelled. Every other workflow supersedes its own previous run because
+# a stale check result is worthless; a half-finished release is not stale, it is
+# an image pushed with no package beside it.
+concurrency:
+  group: release-${{ inputs.version || github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  IMAGE_REPOSITORY: docker.io/jalapenolabs/arsox-satellite
+
+# One job, deliberately. Splitting verification and publishing across jobs would
+# mean either rebuilding the image on the publishing runner or pushing it to a
+# registry to hand it over, and pushing is the thing being gated. Everything the
+# release needs stays on one runner, in one workspace, in order.
+jobs:
+  release:
+    name: Publish the satellite image and the Node SDK
+    runs-on: [ linux, rocky9, flagship, earthly, docker ]
+
+    steps:
+      # Before checkout on purpose: the tag decides which commit is built, so it
+      # has to be resolved first. A dispatch rerun and the original tag push then
+      # build the same commit rather than whatever the default branch has moved
+      # on to.
+      - name: Resolve the release version
+        env:
+          REQUESTED: ${{ inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+          version="${REQUESTED#v}"
+
+          # Prerelease suffixes are allowed; build metadata is not, because a `+`
+          # is not legal in a docker tag and would fail after the image is built.
+          if ! printf '%s' "${version}" \
+            | grep --quiet --extended-regexp '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'; then
+            echo "::error::'${REQUESTED}' is not a release version. Expected v<major>.<minor>.<patch>."
+            exit 1
+          fi
+
+          # A prerelease is published under its exact tag and nothing else. A
+          # release candidate that quietly becomes `latest` is how a fleet ends
+          # up running one by accident.
+          if printf '%s' "${version}" | grep --quiet -- '-'; then
+            echo "PRERELEASE=true" >> "${GITHUB_ENV}"
+          else
+            echo "PRERELEASE=false" >> "${GITHUB_ENV}"
+          fi
+
+          echo "VERSION=${version}" >> "${GITHUB_ENV}"
+          echo "TAG=v${version}" >> "${GITHUB_ENV}"
+          echo "Releasing v${version}"
+
+      # Both triggers check out the tag, so a rerun cannot silently release a
+      # different commit under a version that is already published.
+      - name: Checkout the tag
+        uses: actions/checkout@v5
+        with:
+          ref: refs/tags/${{ env.TAG }}
+
+      # ///////////////////////////////////////////////////////////////////// #
+      #                              Gates                                    #
+      #                                                                       #
+      # Everything below this line up to "Publish" proves the release is        #
+      # publishable. Nothing leaves the runner until all of it passes, because  #
+      # the failure worth designing against is a half-release: an image on      #
+      # docker.io with no package on npm, under a version number that can       #
+      # never be reused.                                                       #
+      # ///////////////////////////////////////////////////////////////////// #
+
+      # First, because it costs a second and the alternative is discovering a
+      # missing credential after a fifteen minute image build. Every missing
+      # secret is named at once rather than one per rerun.
+      - name: Check the release secrets are configured
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          missing=''
+          [ -n "${DOCKERHUB_USERNAME}" ] || missing="${missing} DOCKERHUB_USERNAME"
+          [ -n "${DOCKERHUB_TOKEN}" ] || missing="${missing} DOCKERHUB_TOKEN"
+          [ -n "${NPM_TOKEN}" ] || missing="${missing} NPM_TOKEN"
+
+          if [ -n "${missing}" ]; then
+            echo "::error::Missing repository secrets:${missing}. See docs/ci.md for what each one is for."
+            exit 1
+          fi
+          echo "All three release secrets are configured."
+
+      # An image tagged with a version its binary does not report is exactly the
+      # drift the rest of this pipeline exists to prevent. The satellite embeds
+      # `CARGO_PKG_VERSION` at compile time and serves it from `/v1/version`, and
+      # that value comes from the workspace manifest in this checkout, so
+      # agreement here is agreement in the binary the image ships.
+      - name: Check the tag matches the workspace version
+        run: |
+          set -euo pipefail
+          workspace_version="$(sed -n '/^\[workspace\.package\]/,/^\[/{ s/^version = "\(.*\)"$/\1/p; }' Cargo.toml)"
+
+          if [ -z "${workspace_version}" ]; then
+            echo "::error::Could not read the version from [workspace.package] in Cargo.toml."
+            exit 1
+          fi
+
+          if [ "${workspace_version}" != "${VERSION}" ]; then
+            echo "::error::Tag ${TAG} does not match the workspace version ${workspace_version}."
+            echo "::error::Bump [workspace.package] version in Cargo.toml, then retag."
+            exit 1
+          fi
+          echo "Cargo workspace version ${workspace_version} matches ${TAG}."
+
+          # The npm version is set from the tag below, so a stale package.json
+          # cannot ship. It still means the repository disagrees with itself,
+          # which is worth saying out loud without failing a release over it.
+          package_version="$(node --print "require('./sdks/node/package.json').version")"
+          if [ "${package_version}" != "${VERSION}" ]; then
+            echo "::warning::sdks/node/package.json says ${package_version}; publishing ${VERSION}. Bump it to match."
+          fi
+
+      - name: Install the pinned toolchain
+        run: |
+          set -euo pipefail
+          rustup show active-toolchain
+          rustc --version
+          cargo --version
+
+      # `packageManager` pins yarn, and corepack is what honours it. Asserting
+      # the version means a runner carrying a different yarn fails here rather
+      # than resolving the lockfile with a different resolver.
+      - name: Install the pinned package manager
+        run: |
+          set -euo pipefail
+          node --version
+          npm --version
+          corepack enable
+          corepack prepare yarn@4.17.0 --activate
+          version="$(corepack yarn --version)"
+          echo "yarn $version"
+          test "$version" = '4.17.0'
+
+      # Built with its final tags rather than a scratch tag, so the thing that is
+      # verified below is byte for byte the thing that is pushed. Nothing is
+      # rebuilt between the gate and the push.
+      - name: Build the image
+        run: |
+          set -euo pipefail
+          tags="--tag ${IMAGE_REPOSITORY}:ubuntu-${VERSION}"
+          if [ "${PRERELEASE}" = 'false' ]; then
+            tags="${tags} --tag ${IMAGE_REPOSITORY}:ubuntu-latest --tag ${IMAGE_REPOSITORY}:latest"
+          fi
+          # shellcheck disable=SC2086
+          docker build ${tags} .
+
+      # A compile proves the builder stage. Booting proves the runtime stage: the
+      # binary starts as the unprivileged user, finds every library it links, and
+      # serves liveness. A missing shared object passes the build and fails only
+      # here, and a release is the worst place to learn that.
+      - name: Boot the image and check liveness
+        run: |
+          set -euo pipefail
+
+          container=$(docker run --detach --rm \
+            --env ARSOX_SECRET=release-smoke-secret \
+            --publish 127.0.0.1:18080:8080 \
+            "${IMAGE_REPOSITORY}:ubuntu-${VERSION}")
+          trap 'docker stop "$container" > /dev/null' EXIT
+
+          for _ in $(seq 1 30); do
+            if curl --silent --fail http://127.0.0.1:18080/healthz > /dev/null; then
+              echo "satellite is live"
+              exit 0
+            fi
+            sleep 1
+          done
+
+          echo "satellite never became live" >&2
+          docker logs "$container" >&2
+          exit 1
+
+      # The README promises the exact package set is published in the image's
+      # manifest. This is what produces it, read out of the running image rather
+      # than off the Dockerfile, so transitive packages no ARG names are in it
+      # too. See .github/scripts/image-manifest.sh.
+      - name: Generate the image manifest
+        run: |
+          set -euo pipefail
+          manifest="${RUNNER_TEMP}/arsox-satellite-ubuntu-${VERSION}-manifest.txt"
+
+          # The script reports what is inside the image and never what the image
+          # is called. The tag is known here and nowhere else, so the header is
+          # written here.
+          {
+            echo "Arsox satellite image manifest"
+            echo "Image:  ${IMAGE_REPOSITORY}:ubuntu-${VERSION}"
+            # Read from the checkout rather than GITHUB_SHA, which on a dispatch
+            # rerun names the branch head instead of the tag that was built.
+            echo "Commit: $(git rev-parse HEAD)"
+            echo "Built:  $(date --utc --iso-8601=seconds)"
+            echo
+          } > "${manifest}"
+
+          docker run --rm --interactive \
+            --entrypoint /bin/bash \
+            "${IMAGE_REPOSITORY}:ubuntu-${VERSION}" -s \
+            < .github/scripts/image-manifest.sh >> "${manifest}"
+
+          echo "IMAGE_MANIFEST=${manifest}" >> "${GITHUB_ENV}"
+          head -n 20 "${manifest}"
+
+      # The integration suite spawns this binary with its `test-util` fake
+      # harness. Debug rather than release, because debug is the path the suite
+      # looks for.
+      - name: Build the satellite the integration tests spawn
+        run: cargo build -p arsox-satellite --features test-util
+
+      - name: Install the SDK dependencies
+        working-directory: sdks/node
+        run: corepack yarn install --immutable
+
+      # The version is the tag's, set before the build so the compiled package
+      # and its manifest agree. `--no-git-tag-version` because the tag already
+      # exists and this checkout is never pushed.
+      - name: Set the SDK version from the tag
+        working-directory: sdks/node
+        run: npm version "${VERSION}" --no-git-tag-version --allow-same-version
+
+      - name: Build the SDK
+        working-directory: sdks/node
+        run: corepack yarn build
+
+      - name: Typecheck the SDK
+        working-directory: sdks/node
+        run: corepack yarn typecheck
+
+      # The release is the last moment the suite can run against the exact commit
+      # being published. It costs a few minutes on top of a build the branch
+      # already ran, and it buys the guarantee that the tarball about to become
+      # permanent drives a real satellite.
+      - name: Test the SDK
+        working-directory: sdks/node
+        run: corepack yarn test
+
+      # `npm publish` is irreversible: a version is spent the moment it lands.
+      # This inspects the tarball while a failure still costs nothing.
+      - name: Verify the npm tarball
+        run: node .github/scripts/verify-npm-tarball.mjs
+
+      # ///////////////////////////////////////////////////////////////////// #
+      #                             Publish                                   #
+      #                                                                       #
+      # Image first, then the manifest that describes it, then npm. The image   #
+      # is the slower and more likely failure, so putting it first means a      #
+      # broken release usually stops before anything is published at all. A     #
+      # manifest with no image is useless, which is why it follows the push     #
+      # rather than leading it, and npm is last because it is the only step     #
+      # that can never be redone under the same version.                       #
+      # ///////////////////////////////////////////////////////////////////// #
+
+      - name: Log in to docker.io
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${DOCKERHUB_TOKEN}" \
+            | docker login docker.io --username "${DOCKERHUB_USERNAME}" --password-stdin
+
+      # The floating tags exist because the README documents them. It also
+      # discourages them, and a prerelease never claims one.
+      - name: Push the image
+        run: |
+          set -euo pipefail
+          docker push "${IMAGE_REPOSITORY}:ubuntu-${VERSION}"
+
+          if [ "${PRERELEASE}" = 'true' ]; then
+            echo "Prerelease ${TAG}: leaving ubuntu-latest and latest where they are."
+            exit 0
+          fi
+
+          docker push "${IMAGE_REPOSITORY}:ubuntu-latest"
+          docker push "${IMAGE_REPOSITORY}:latest"
+
+      # Uploaded to the release the tag already has, or to one created here. A
+      # tag pushed by hand has no release; a tag cut through the GitHub UI does.
+      - name: Attach the image manifest to the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if ! gh release view "${TAG}" > /dev/null 2>&1; then
+            echo "No release for ${TAG} yet; creating one."
+            prerelease=''
+            if [ "${PRERELEASE}" = 'true' ]; then
+              prerelease='--prerelease'
+            fi
+            # shellcheck disable=SC2086
+            gh release create "${TAG}" \
+              --title "${TAG}" \
+              --generate-notes \
+              ${prerelease}
+          fi
+
+          # `--clobber` so a rerun replaces the asset rather than failing on a
+          # name that is already taken.
+          gh release upload "${TAG}" "${IMAGE_MANIFEST}" --clobber
+
+      # The token never lands on disk: npm expands `${NPM_TOKEN}` out of the
+      # environment when it reads the config, so the file holds the placeholder
+      # and nothing else. It lives in RUNNER_TEMP rather than the home directory
+      # so a persistent runner is not left holding a registry credential.
+      #
+      # Provenance signs the package against an OIDC token minted for this
+      # workflow run, which is why `id-token: write` is granted above. Whether
+      # the self-hosted pool can mint one is unproven, and it is unproven on
+      # purpose rather than assumed: `--provenance` fails the publish outright if
+      # the token is unavailable, so a release can never ship silently
+      # unattested. The dispatch input turns it off for a release that must go
+      # out while that is being sorted.
+      - name: Publish the Node SDK to npm
+        working-directory: sdks/node
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          PROVENANCE: ${{ github.event_name != 'workflow_dispatch' || inputs.provenance }}
+        run: |
+          set -euo pipefail
+          npmrc="${RUNNER_TEMP}/release.npmrc"
+          printf '%s\n' '//registry.npmjs.org/:_authToken=${NPM_TOKEN}' > "${npmrc}"
+          trap 'rm -f "${npmrc}"' EXIT
+
+          provenance=''
+          if [ "${PROVENANCE}" = 'true' ]; then
+            provenance='--provenance'
+          else
+            echo "::warning::Publishing ${TAG} without provenance."
+          fi
+
+          # shellcheck disable=SC2086
+          npm publish --userconfig "${npmrc}" ${provenance}
+
+      # A persistent runner keeps ~/.docker/config.json between jobs, so a login
+      # that is never undone is a credential left behind for whatever runs next.
+      - name: Log out of docker.io
+        if: always()
+        run: docker logout docker.io || true
+
+      # The image is rebuilt from source next release either way, and the
+      # registry holds the published copy. Leaving tags behind on a persistent
+      # runner just accumulates disk.
+      - name: Remove the local image tags
+        if: always()
+        run: |
+          docker rmi --force \
+            "${IMAGE_REPOSITORY}:ubuntu-${VERSION}" \
+            "${IMAGE_REPOSITORY}:ubuntu-latest" \
+            "${IMAGE_REPOSITORY}:latest" || true
