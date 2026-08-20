@@ -81,21 +81,21 @@ jobs:
           echo "Releasing v${version}"
 
       # Both triggers check out the tag, so a rerun cannot silently release a
-      # different commit under a version that is already published.
+      # different commit under a version that is already published. The workflow
+      # definition itself still comes from the ref the run was started on, which
+      # is GitHub's behavior everywhere: a dispatch rerun builds the tag's code
+      # with the branch's pipeline.
       - name: Checkout the tag
         uses: actions/checkout@v5
         with:
           ref: refs/tags/${{ env.TAG }}
 
-      # ///////////////////////////////////////////////////////////////////// #
-      #                              Gates                                    #
-      #                                                                       #
-      # Everything below this line up to "Publish" proves the release is        #
-      # publishable. Nothing leaves the runner until all of it passes, because  #
-      # the failure worth designing against is a half-release: an image on      #
-      # docker.io with no package on npm, under a version number that can       #
-      # never be reused.                                                       #
-      # ///////////////////////////////////////////////////////////////////// #
+      # ----------------------------- Gates -----------------------------
+      #
+      # Every step from here to "Publish" proves the release is publishable.
+      # Nothing leaves the runner until all of them pass, because the failure
+      # worth designing against is a half-release: an image on docker.io with
+      # no package on npm, under a version number that can never be reused.
 
       # First, because it costs a second and the alternative is discovering a
       # missing credential after a fifteen minute image build. Every missing
@@ -276,16 +276,18 @@ jobs:
       - name: Verify the npm tarball
         run: node .github/scripts/verify-npm-tarball.mjs
 
-      # ///////////////////////////////////////////////////////////////////// #
-      #                             Publish                                   #
-      #                                                                       #
-      # Image first, then the manifest that describes it, then npm. The image   #
-      # is the slower and more likely failure, so putting it first means a      #
-      # broken release usually stops before anything is published at all. A     #
-      # manifest with no image is useless, which is why it follows the push     #
-      # rather than leading it, and npm is last because it is the only step     #
-      # that can never be redone under the same version.                       #
-      # ///////////////////////////////////////////////////////////////////// #
+      # ---------------------------- Publish ----------------------------
+      #
+      # Image first, then the manifest that describes it, then npm. The image
+      # is the slower and likelier failure, so putting it first means a broken
+      # release usually stops before anything is published at all. A manifest
+      # with no image is useless, which is why it follows the push rather than
+      # leading it. npm is last because it is the only step that can never be
+      # redone under the same version.
+      #
+      # This does not make a half-release impossible. It makes the worst case
+      # one artifact short rather than a pair that disagree, and it puts the
+      # irreversible step where the fewest things can still go wrong after it.
 
       - name: Log in to docker.io
         env:
