@@ -33,6 +33,13 @@ pub struct ClaimedTurn {
     /// The thread's settings, needed to decide which harness to spawn and under
     /// what limits.
     pub settings: arsox_sdk::proto::settings::v1::ThreadSettings,
+
+    /// The thread's secrets, compiled once here rather than per event.
+    ///
+    /// Built at the claim because that is where the settings are already
+    /// decoded, and carried with the turn so every event, result, and incident
+    /// the turn produces is masked by the same automaton.
+    pub redactor: crate::redaction::Redactor,
 }
 
 impl Store {
@@ -117,7 +124,16 @@ impl Store {
             .map(|row| (row.get("key"), row.get("value")))
             .collect();
 
+        // A settings blob that will not decode was written by a different major
+        // version, and the turn runs on the defaults. The redactor is built from
+        // whatever decoded, which for an undecodable blob is nothing to mask.
+        let settings =
+            arsox_sdk::proto::settings::v1::ThreadSettings::decode(settings_bytes.as_slice())
+                .unwrap_or_default();
+
         Ok(Some(ClaimedTurn {
+            redactor: crate::redaction::Redactor::for_thread(&settings),
+            settings,
             turn: Turn {
                 turn_id,
                 thread_id,
@@ -130,10 +146,6 @@ impl Store {
                 finished_at: None,
                 metadata: metadata.into_iter().collect(),
             },
-            settings: arsox_sdk::proto::settings::v1::ThreadSettings::decode(
-                settings_bytes.as_slice(),
-            )
-            .unwrap_or_default(),
         }))
     }
 
@@ -200,13 +212,21 @@ impl Store {
 
     /// Records an incident, which outlives the thread it belongs to.
     ///
+    /// The thread's secrets are masked out of the message and the evidence
+    /// here, for the same reason they are masked in [`Store::append_event`]:
+    /// this is the one door, and an incident row is readable long after the
+    /// workspace it describes has been collected.
+    ///
     /// # Errors
     ///
     /// Returns a database error if the insert fails.
     pub async fn record_incident(
         &self,
         incident: &arsox_sdk::proto::incident::v1::Incident,
+        redactor: &crate::redaction::Redactor,
     ) -> Result<(), StoreError> {
+        let incident = redactor.redacted_incident(incident);
+
         sqlx::query(
             "INSERT INTO incidents
                (incident_id, thread_id, sequence, turn_id, member_id,

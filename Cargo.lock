@@ -37,6 +37,7 @@ dependencies = [
 name = "arsox-satellite"
 version = "0.1.0"
 dependencies = [
+ "aho-corasick",
  "anyhow",
  "arsox-harness",
  "arsox-sdk",

@@ -21,6 +21,7 @@ pub mod commands;
 pub mod disk;
 pub mod harness;
 pub mod proxy;
+pub mod redaction;
 pub mod store;
 pub mod stream;
 pub mod timeouts;

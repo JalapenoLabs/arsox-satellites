@@ -37,6 +37,7 @@ required-features = [ "test-util" ]
 arsox-harness.workspace = true
 arsox-sdk.workspace = true
 
+aho-corasick.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 serde.workspace = true

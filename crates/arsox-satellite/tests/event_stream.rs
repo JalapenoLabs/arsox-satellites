@@ -7,6 +7,7 @@
 //! between two code paths and testing it against a reimplementation of that
 //! handoff would prove nothing.
 
+use arsox_satellite::redaction::Redactor;
 use arsox_satellite::store::{AppendEvent, NewThread, Store};
 use arsox_satellite::{ServeOptions, assemble};
 use arsox_sdk::proto::event::v1::ThreadEvent;
@@ -120,6 +121,11 @@ async fn seed_thread(store: &Store) -> String {
 }
 
 async fn append(store: &Store, thread_id: &str, text: &str) {
+    append_masked(store, thread_id, text, Redactor::none()).await;
+}
+
+/// Appends an agent message under a thread's own secrets.
+async fn append_masked(store: &Store, thread_id: &str, text: &str, redactor: Redactor) {
     store
         .append_event(AppendEvent {
             thread_id: thread_id.to_owned(),
@@ -133,6 +139,7 @@ async fn append(store: &Store, thread_id: &str, text: &str) {
                     text: text.to_owned(),
                 },
             ),
+            redactor,
         })
         .await
         .expect("should append");
@@ -156,6 +163,59 @@ async fn next_event(
         }
         other => panic!("expected a binary protobuf frame, got {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn a_secret_never_reaches_a_consumer_live_or_on_replay() {
+    // The stream is the obvious channel and the one a host application logs
+    // wholesale. Both the frame published to a connected consumer and the row a
+    // reconnecting one replays come from the same masked bytes, so a leak here
+    // would have to be a leak in both.
+    let running = start().await;
+    let thread_id = seed_thread(&running.store).await;
+
+    let settings = ThreadSettings {
+        env: vec![arsox_sdk::proto::settings::v1::EnvVar {
+            key: "DEPLOY_TOKEN".to_owned(),
+            value: Some(arsox_sdk::proto::common::v1::Secret {
+                value: Some("ghp_the_real_token".to_owned()),
+                display: None,
+            }),
+            // Absent, which means secret.
+            is_secret: None,
+        }],
+        ..ThreadSettings::default()
+    };
+    let redactor = Redactor::for_thread(&settings);
+
+    let mut socket = connect(running.port, &thread_id, None).await;
+    append_masked(
+        &running.store,
+        &thread_id,
+        "pushed with ghp_the_real_token",
+        redactor,
+    )
+    .await;
+
+    let live = next_event(&mut socket).await;
+    let rendered = format!("{live:?}");
+    assert!(
+        !rendered.contains("ghp_the_real_token"),
+        "the token reached a live consumer: {rendered}"
+    );
+    assert!(
+        rendered.contains("pushed with ******"),
+        "the message should survive with the token masked out: {rendered}"
+    );
+
+    // The persisted copy is the same bytes, so a consumer that reconnects and
+    // replays cannot be told a different story than one that stayed connected.
+    let replayed = running
+        .store
+        .events_after(&thread_id, 0, 10)
+        .await
+        .expect("should replay");
+    assert_eq!(format!("{:?}", replayed[0]), rendered);
 }
 
 #[tokio::test]

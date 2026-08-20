@@ -968,6 +968,65 @@ async fn result_of(
         .expect("a finished turn carries a result")
 }
 
+/// A checker command that prints a declared variable, whatever shell this is.
+///
+/// `cmd` spells expansion with percent signs and `sh` with a dollar, and the two
+/// cannot be written as one string.
+const ECHO_DEPLOY_TOKEN: &str = if cfg!(windows) {
+    "echo %DEPLOY_TOKEN%"
+} else {
+    "echo $DEPLOY_TOKEN"
+};
+
+#[tokio::test]
+async fn a_checker_that_echoed_a_secret_lands_masked_in_the_turn_result() {
+    // A checker runs with the thread's credentials in its environment, exactly
+    // as the agent that wrote the code did, so a lint that prints its own token
+    // is an ordinary Tuesday. The turn result is what a host application logs
+    // and reports on, and an unmasked one puts the credential there.
+    let mut settings = with_checker(ECHO_DEPLOY_TOKEN);
+    settings.env = vec![arsox_sdk::proto::settings::v1::EnvVar {
+        key: "DEPLOY_TOKEN".to_owned(),
+        value: Some(arsox_sdk::proto::common::v1::Secret {
+            value: Some("ghp_the_real_token".to_owned()),
+            display: None,
+        }),
+        // Absent, which means secret. It still reaches the command: secrecy
+        // decides what may be rendered, never what a command is given.
+        is_secret: None,
+    }];
+
+    let (harness, thread_id, turn_id) =
+        start_prepared("run the probe", settings, make_checkout).await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Completed
+    );
+
+    let result = result_of(&harness.store, &thread_id, &turn_id).await;
+    let recorded = format!("{result:?}");
+
+    assert!(
+        !recorded.contains("ghp_the_real_token"),
+        "the token survived into the turn result: {recorded}"
+    );
+    assert!(
+        result.checker_results[0].output.contains("******"),
+        "the checker output should carry the mask rather than having been \
+         dropped: {:?}",
+        result.checker_results[0].output
+    );
+
+    // And on the stream, where a consumer watching a long build sees each
+    // command finish rather than waiting for the turn to end.
+    let streamed = format!("{:?}", checker_events(&harness.store, &thread_id).await);
+    assert!(
+        !streamed.contains("ghp_the_real_token"),
+        "the token survived onto the stream: {streamed}"
+    );
+}
+
 #[tokio::test]
 async fn a_passing_checker_is_recorded_and_the_turn_completes() {
     // The verification that turns "the agent said it was done" into something

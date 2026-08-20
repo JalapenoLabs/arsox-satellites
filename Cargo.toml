@@ -24,6 +24,12 @@ prost-types = "0.14"
 
 anyhow = "1"
 thiserror = "2"
+
+# Secret redaction scans every event, every report, and every captured command
+# log against all of a thread's secrets at once. One automaton is one pass over
+# the text whatever the number of secrets; the obvious alternative is a
+# `String::replace` per secret per event, on the busiest path the satellite has.
+aho-corasick = "1.1"
 tokio = { version = "1", features = [ "rt-multi-thread", "macros", "signal", "net", "io-util", "time", "fs", "process", "sync" ] }
 axum = { version = "0.8", features = [ "ws" ] }
 chrono = { version = "0.4", default-features = false, features = [ "std" ] }

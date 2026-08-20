@@ -462,6 +462,90 @@ async fn a_clone_failure_becomes_an_incident_and_parks_the_thread_with_its_queue
 }
 
 #[tokio::test]
+async fn a_setup_failure_that_echoed_a_secret_is_masked_in_its_incident() {
+    // An incident outlives the thread it describes, so an unmasked one leaves a
+    // credential in a database row long after the workspace is collected. The
+    // evidence is what makes an incident worth having, and it is exactly where
+    // a failing install prints the token it was handed.
+    let fixtures = scratch::Dir::new("origin");
+    let workspace = scratch::Dir::new("workspace");
+    let store = Store::open_in_memory().await.expect("should open");
+    let url = origin(&fixtures.path().join("service"), "README.md");
+
+    let echoing = Repo {
+        setup_commands: if cfg!(windows) {
+            "echo %REGISTRY_TOKEN% && exit 1".to_owned()
+        } else {
+            "echo \"$REGISTRY_TOKEN\" && exit 1".to_owned()
+        },
+        ..repo("api", &url)
+    };
+
+    let declared = ThreadSettings {
+        repos: vec![echoing],
+        env: vec![EnvVar {
+            key: "REGISTRY_TOKEN".to_owned(),
+            value: Some(Secret {
+                value: Some("npm-declared-token".to_owned()),
+                display: None,
+            }),
+            // Absent, which means secret.
+            is_secret: None,
+        }],
+        ..ThreadSettings::default()
+    };
+
+    let thread = store
+        .create_thread(NewThread {
+            settings: declared.clone(),
+            metadata: BTreeMap::new(),
+            idempotency_key: None,
+        })
+        .await
+        .expect("should create")
+        .thread;
+
+    provisioner(&store, &workspace)
+        .provision(&thread.thread_id, &declared)
+        .await;
+
+    let incidents = store
+        .incidents_for_thread(&thread.thread_id)
+        .await
+        .expect("should read");
+    assert_eq!(incidents.len(), 1);
+    assert_eq!(incidents[0].code, i32::from(ErrorCode::RepoSetupFailed));
+
+    let recorded = format!("{:?}", incidents[0]);
+    assert!(
+        !recorded.contains("npm-declared-token"),
+        "the declared token survived into the incident: {recorded}"
+    );
+    assert!(
+        recorded.contains("******"),
+        "the output should carry the mask rather than having been dropped: {recorded}"
+    );
+
+    // And on the stream, which is the copy a live consumer reads.
+    let streamed = store
+        .events_after(&thread.thread_id, 0, 100)
+        .await
+        .expect("should replay")
+        .iter()
+        .filter_map(|event| match event.payload.as_ref() {
+            Some(Payload::Incident(incident)) => Some(format!("{incident:?}")),
+            _other => None,
+        })
+        .collect::<Vec<String>>()
+        .join("\n");
+
+    assert!(
+        !streamed.contains("npm-declared-token"),
+        "the declared token survived onto the stream: {streamed}"
+    );
+}
+
+#[tokio::test]
 async fn a_provisioned_thread_goes_idle_and_releases_the_turns_that_waited() {
     let fixtures = scratch::Dir::new("origin");
     let workspace = scratch::Dir::new("workspace");

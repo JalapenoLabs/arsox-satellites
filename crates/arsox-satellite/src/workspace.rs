@@ -251,7 +251,7 @@ pub async fn provision_repos(
         let name = directory_name(repo)?;
         let checkout = repos_root.join(&name);
 
-        if let Err(failure) = repos::clone(repo, &checkout).await {
+        if let Err(failure) = repos::clone(repo, &checkout, &execution.redactor).await {
             // The captured output stays in the incident rather than being
             // repeated here. It is already durable there, and a full git stderr
             // in a log line is noise in front of the one sentence that matters.
@@ -460,6 +460,8 @@ impl Provisioner {
             return;
         };
 
+        let redactor = crate::redaction::Redactor::for_thread(settings);
+
         tracing::error!(
             event.name = "workspace.instructions.failed",
             thread.id = thread_id,
@@ -479,6 +481,7 @@ impl Provisioner {
                 message: format!("could not write the thread's instruction files: {error}"),
                 output: String::new(),
             },
+            &redactor,
         )
         .await;
     }
@@ -490,6 +493,12 @@ impl Provisioner {
     /// an incident instead.
     pub async fn provision(&self, thread_id: &str, settings: &ThreadSettings) {
         let repos = &settings.repos;
+
+        // Resolved once per provisioning rather than per command. The refusal
+        // rule is applied inside, so a variable that would put back what the
+        // scrub removed never reaches a setup command either, and the thread's
+        // exec bound and its redactor come along with it.
+        let execution = Execution::for_thread(settings);
 
         tracing::info!(
             event.name = "workspace.provision.started",
@@ -503,12 +512,6 @@ impl Provisioner {
         // workspace either way, and an operator looking at that workspace should
         // find the instructions it was created with.
         self.write_instructions(thread_id, settings).await;
-
-        // Resolved once per provisioning rather than per command. The refusal
-        // rule is applied inside, so a variable that would put back what the
-        // scrub removed never reaches a setup command either, and the thread's
-        // exec bound comes along with it.
-        let execution = Execution::for_thread(settings);
 
         let report = match provision_repos(&self.workspace_root, thread_id, repos, &execution).await
         {
@@ -531,6 +534,7 @@ impl Provisioner {
                         message: format!("could not prepare the workspace: {error}"),
                         output: String::new(),
                     },
+                    &execution.redactor,
                 )
                 .await;
 
@@ -540,7 +544,7 @@ impl Provisioner {
         };
 
         for failure in &report.failures {
-            self.report(thread_id, failure).await;
+            self.report(thread_id, failure, &execution.redactor).await;
         }
 
         let outcome = if report.is_fatal() {
@@ -557,7 +561,12 @@ impl Provisioner {
     /// The event goes first so the incident row can carry the sequence it
     /// landed at, which is what lets a query result be located in the stream and
     /// a stream frame be looked up afterwards.
-    async fn report(&self, thread_id: &str, failure: &ProvisionFailure) {
+    async fn report(
+        &self,
+        thread_id: &str,
+        failure: &ProvisionFailure,
+        redactor: &crate::redaction::Redactor,
+    ) {
         let mut incident = Incident {
             incident_id: uuid::Uuid::now_v7().to_string(),
             sequence: None,
@@ -582,6 +591,7 @@ impl Provisioner {
                 type_name: "incident".to_owned(),
                 occurred_at: None,
                 payload: Payload::Incident(incident.clone()),
+                redactor: redactor.clone(),
             })
             .await
         {
@@ -593,7 +603,7 @@ impl Provisioner {
             ),
         }
 
-        if let Err(error) = self.store.record_incident(&incident).await {
+        if let Err(error) = self.store.record_incident(&incident, redactor).await {
             tracing::error!(
                 event.name = "incident.record.failed",
                 thread.id = thread_id,
