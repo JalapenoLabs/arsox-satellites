@@ -138,9 +138,16 @@ rather than stood aside.
 The image workflow builds the Ubuntu satellite image and then boots it. The two
 steps prove different things. The build proves the builder stage: every `COPY`
 path resolves and the workspace compiles. The boot proves the runtime stage: the
-binary starts as the unprivileged user, finds every library it links against,
-and answers `/healthz`. A missing shared object or a broken entrypoint passes
-the build and fails only at boot, which is why the workflow does both.
+binary starts, finds every library it links against, and answers `/healthz`. A
+missing shared object or a broken entrypoint passes the build and fails only at
+boot, which is why the workflow does both.
+
+The boot is also the only place the enforcement posture can be proven, because
+it needs Linux and root and a test runner is neither. It asserts that PID 1 runs
+as uid 0 and that the satellite reported `satellite.boot.enforcement_ready`,
+which is the posture every spawn then applies. See
+[the enforcement doc](./enforcement.md#what-is-proven-where) for what that
+leaves unasserted and what would close it.
 
 The Dockerfile names build inputs by path, and nothing else in CI compiles it,
 so this workflow is the only thing standing between a crate moving directory and
