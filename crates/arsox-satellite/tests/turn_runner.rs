@@ -2054,6 +2054,7 @@ async fn a_command_a_shim_refused_becomes_a_blocked_incident_on_the_turn_that_me
         &spool,
         &arsox_satellite::broker::spool::Denial::now(
             &thread_id,
+            arsox_satellite::broker::spool::Kind::CommandDenied,
             "docker",
             vec!["docker".to_owned(), "build".to_owned(), ".".to_owned()],
             "is not on this thread's exec allowlist",

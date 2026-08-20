@@ -480,6 +480,15 @@ struct Prepared {
 
     /// The thread's shim directory, when the exec broker engaged for it.
     shims: Option<PathBuf>,
+
+    /// The satellite answering the `pre-push` hook, when the thread has a
+    /// secret to scan a push against.
+    ///
+    /// Bound per turn and dropped with it. An agent pushes during a turn and at
+    /// no other time, and the secrets a push is scanned against are the turn's
+    /// own redactor, so binding it here keeps one object rather than two that
+    /// can disagree.
+    scanner: Option<crate::broker::scan::Scanner>,
 }
 
 #[derive(Debug)]
@@ -493,6 +502,12 @@ struct TurnContext {
     /// exec policy and for every satellite that cannot separate privilege, both
     /// of which keep the satellite's own `PATH` exactly as they always have.
     shims: Option<PathBuf>,
+
+    /// The satellite answering this turn's push scans, if it answers any.
+    ///
+    /// Held rather than used: it stops listening when it drops, so it has to
+    /// live exactly as long as the turn an agent could push during.
+    _scanner: Option<crate::broker::scan::Scanner>,
 
     /// The turn's admission to the model, minted once and revoked once.
     access: ModelAccess,
@@ -903,7 +918,7 @@ impl Runner {
     /// Everything that has to hold before a harness is spawned.
     ///
     /// Returns the thread's working directory, which is where every session in
-    /// the turn runs, and its shim directory when the exec broker engaged.
+    /// the turn runs, and whichever gates engaged for it.
     async fn prepare(
         &self,
         claimed: &ClaimedTurn,
@@ -936,40 +951,74 @@ impl Runner {
                 )
             })?;
 
+        let installed = self.install_broker(claimed).await;
+
+        if let Some(hooks) = installed.hooks.as_deref() {
+            let unpointed =
+                crate::workspace::point_hooks_at(&self.workspace_root, thread_id, hooks).await;
+
+            if !unpointed.is_empty() {
+                // A checkout that is not pointed at the hook is a checkout that
+                // pushes ungated, which is the quiet loss of enforcement worth
+                // more than the tracing line it would otherwise get.
+                self.record_incident(
+                    Attribution::of(claimed),
+                    ErrorCode::Internal,
+                    Disposition::Degraded,
+                    false,
+                    &format!(
+                        "{} of this thread's checkouts could not be pointed at its pre-push \
+                         hook, so a push from them is not gated: {}",
+                        unpointed.len(),
+                        unpointed.join("; ")
+                    ),
+                )
+                .await;
+            }
+        }
+
         Ok(Prepared {
-            shims: self.install_broker(claimed).await,
+            scanner: self.bind_scanner(claimed, installed.scan.as_deref()).await,
+            shims: installed.shims,
             working_dir,
         })
     }
 
-    /// Rebuilds the thread's shim directory from the settings it holds now.
+    /// Rebuilds the thread's gates from the settings it holds now.
     ///
     /// **Per turn rather than once at thread creation**, which is the one place
-    /// that cannot be wrong. The shim directories live outside both volumes, so
-    /// they do not survive a container replacement, and a thread resumed on a
-    /// new container must not silently lose its gate. Re-asserting also means a
-    /// thread runs under its current allowlist rather than the one it was
-    /// created with. It is idempotent and rebuilds only when the policy changed
-    /// or the directory is gone.
+    /// that cannot be wrong. The broker directories live outside both volumes,
+    /// so they do not survive a container replacement, and a thread resumed on a
+    /// new container must not silently lose its gates. Re-asserting also means a
+    /// thread runs under its current allowlist and its current push policy
+    /// rather than the ones it was created with. It is idempotent and rebuilds
+    /// only when the policy changed or a directory is gone.
     ///
-    /// A directory that will not build leaves the thread unbrokered, and says so
-    /// as a `degraded` incident. Failing the turn instead would take a thread
-    /// out over a gate the satellite could not raise, and running it silently
-    /// unbrokered is exactly the quiet loss of enforcement this records against.
-    async fn install_broker(&self, claimed: &ClaimedTurn) -> Option<PathBuf> {
+    /// A directory that will not build leaves the thread ungated, and says so as
+    /// a `degraded` incident. Failing the turn instead would take a thread out
+    /// over a gate the satellite could not raise, and running it silently
+    /// ungated is exactly the quiet loss of enforcement this records against.
+    async fn install_broker(&self, claimed: &ClaimedTurn) -> crate::broker::Installed {
         let thread_id = &claimed.turn.thread_id;
 
         match self
             .broker
-            .install(thread_id, claimed.settings.permissions.as_ref())
+            .install(
+                thread_id,
+                claimed.settings.permissions.as_ref(),
+                // Whether a push is worth scanning is a question for the
+                // redactor: it is the one thing that knows whether this thread
+                // declared anything to scan for.
+                !claimed.redactor.is_empty(),
+            )
             .await
         {
-            Ok(shims) => shims,
+            Ok(installed) => installed,
             Err(error) => {
                 tracing::error!(
                     event.name = "broker.install.failed",
                     thread.id = %thread_id,
-                    "could not build the thread's exec shim directory: {error}",
+                    "could not build the thread's broker directory: {error}",
                 );
 
                 self.record_incident(
@@ -978,7 +1027,52 @@ impl Runner {
                     Disposition::Degraded,
                     false,
                     &format!(
-                        "the exec broker could not be installed, so this turn runs with the                          satellite's own PATH and its exec policy is advisory only: {error}"
+                        "the broker could not be installed, so this turn runs with the \
+                         satellite's own PATH, no pre-push hook, and its exec and push \
+                         policies advisory only: {error}"
+                    ),
+                )
+                .await;
+
+                crate::broker::Installed::default()
+            }
+        }
+    }
+
+    /// Starts answering the `pre-push` hook's scans for this turn.
+    ///
+    /// Absent when the thread has no secret to scan a push against, which is
+    /// most threads and costs them nothing.
+    ///
+    /// A scanner that will not bind leaves the hook with nowhere to ask, and the
+    /// hook refuses a push it could not have scanned. That is the right way
+    /// round and it is still worth an incident: an operator whose pushes have
+    /// started failing should find the reason recorded rather than have to
+    /// reason from a hook's stderr.
+    async fn bind_scanner(
+        &self,
+        claimed: &ClaimedTurn,
+        socket: Option<&std::path::Path>,
+    ) -> Option<crate::broker::scan::Scanner> {
+        let socket = socket?;
+
+        match crate::broker::scan::Scanner::bind(socket.to_owned(), claimed.redactor.clone()) {
+            Ok(scanner) => Some(scanner),
+            Err(error) => {
+                tracing::error!(
+                    event.name = "push.scan.bind_failed",
+                    thread.id = %claimed.turn.thread_id,
+                    "could not start answering push scans: {error}",
+                );
+
+                self.record_incident(
+                    Attribution::of(claimed),
+                    ErrorCode::Internal,
+                    Disposition::Degraded,
+                    false,
+                    &format!(
+                        "no push on this turn can be scanned for secrets, so the pre-push \
+                         hook will refuse every one of them: {error}"
                     ),
                 )
                 .await;
@@ -1032,6 +1126,7 @@ impl Runner {
             harness: Harness::try_from(claimed.settings.harness).unwrap_or(Harness::Claude),
             working_dir: prepared.working_dir,
             shims: prepared.shims,
+            _scanner: prepared.scanner,
             access: ModelAccess {
                 base_url: self.proxy.base_url_for(&token),
                 token: token.clone(),
@@ -2046,19 +2141,21 @@ impl Runner {
         .await;
     }
 
-    /// Turns every refusal the thread's shims recorded into a blocked incident.
+    /// Turns every refusal the thread's gates recorded into a blocked incident.
     ///
     /// **`blocked` rather than `degraded`**, because a permission gate closing
     /// is the system working as designed. It is still worth an incident: an
     /// agent that reached for `docker build`, was refused, and quietly worked
     /// around it is almost always telling you the allowlist or the setup script
-    /// is wrong, and that is the evidence a suggestion is later built on.
+    /// is wrong, and that is the evidence a suggestion is later built on. A push
+    /// refused for carrying a secret is the same fact about a different gate.
     ///
-    /// Not retryable. The same argv meets the same allowlist next time, and a
+    /// Not retryable. The same argv meets the same policy next time, and a
     /// caller told to retry would be told to retry forever.
-    /// Drained for every thread rather than only for a brokered one. A thread
-    /// with no shim directory has no spool, which costs one absent-path read
-    /// that the drain already answers with nothing, and skipping it would be a
+    ///
+    /// Drained for every thread rather than only for a gated one. A thread with
+    /// no broker directory has no spool, which costs one absent-path read that
+    /// the drain already answers with nothing, and skipping it would be a
     /// special case whose only effect is to make the reporting path unreachable
     /// from a test.
     async fn report_denials(&self, claimed: &ClaimedTurn) {
@@ -2076,24 +2173,31 @@ impl Runner {
             );
             fields.insert("command".to_owned(), text(denial.name.clone()));
 
+            // Whatever else the gate had to say, such as the `ref` a protected
+            // branch refusal matched. Added after the two above rather than
+            // before, so a gate cannot rename `argv` out from under a consumer.
+            for (key, value) in denial.details.clone() {
+                fields.insert(key, text(value));
+            }
+
             self.report_incident(
                 Incident {
                     incident_id: uuid::Uuid::now_v7().to_string(),
                     sequence: None,
                     thread_id: Some(claimed.turn.thread_id.clone()),
                     turn_id: Some(claimed.turn.turn_id.clone()),
-                    // The exec broker is per thread. Attributing a refusal to a
-                    // member waits for members to exist and for a shim to be
-                    // able to tell which one invoked it.
+                    // The gates are per thread. Attributing a refusal to a
+                    // member waits for members to exist and for a gate to be
+                    // able to tell which one it refused.
                     member_id: None,
-                    code: ErrorCode::PermissionCommandDenied.into(),
+                    code: denial.kind.code().into(),
                     disposition: Disposition::Blocked.into(),
                     retryable: false,
                     message: format!("`{}` {}", denial.invocation(), denial.reason),
                     details: Some(prost_types::Struct {
                         fields: fields.into_iter().collect(),
                     }),
-                    // The shim's clock rather than this drain's, so a refusal
+                    // The gate's clock rather than this drain's, so a refusal
                     // is not reported as having happened when its session ended.
                     occurred_at: Some(denial.occurred_at()),
                 },

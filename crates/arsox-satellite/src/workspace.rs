@@ -51,7 +51,7 @@ mod instructions;
 mod repos;
 
 pub use instructions::write_instructions;
-pub use repos::directory_name;
+pub use repos::{directory_name, point_hooks_at};
 
 use crate::commands::Execution;
 use crate::store::{ProvisionOutcome, Store};
@@ -225,6 +225,11 @@ impl ProvisionReport {
 /// back in the report, so a caller decides what is an incident and this can be
 /// exercised against a `file://` remote without a store, a bus, or a network.
 ///
+/// `hooks` is the thread's root-owned git hooks directory, which every clone is
+/// pointed at through `core.hooksPath`. Absent for a thread with nothing to
+/// enforce about pushing, which leaves each repo's own hooks exactly where they
+/// were.
+///
 /// # Errors
 ///
 /// Returns a [`WorkspaceError`] only for something the satellite got wrong: an
@@ -236,6 +241,7 @@ pub async fn provision_repos(
     thread_id: &str,
     declared: &[Repo],
     execution: &Execution,
+    hooks: Option<&Path>,
 ) -> Result<ProvisionReport, WorkspaceError> {
     let mut report = ProvisionReport::default();
 
@@ -250,7 +256,7 @@ pub async fn provision_repos(
         let name = directory_name(repo)?;
         let checkout = repos_root.join(&name);
 
-        if let Err(failure) = repos::clone(repo, &checkout, &execution.redactor).await {
+        if let Err(failure) = repos::clone(repo, &checkout, &execution.redactor, hooks).await {
             // The captured output stays in the incident rather than being
             // repeated here. It is already durable there, and a full git stderr
             // in a log line is noise in front of the one sentence that matters.
@@ -366,6 +372,15 @@ pub struct Provisioner {
     /// Nudged once a thread is ready, so a turn queued while it was
     /// provisioning starts immediately rather than waiting out the idle poll.
     work_queued: Arc<tokio::sync::Notify>,
+
+    /// Names where a thread's root-owned git hooks live, so a new clone is
+    /// pointed at the push gate before anything runs in it.
+    ///
+    /// The hooks themselves are installed per turn by the runner. A setup
+    /// command that pushes therefore meets a hooks directory that is empty,
+    /// which is a repo with no hooks: provisioning is the satellite running an
+    /// operator's own configuration, and the gate exists for agents.
+    broker: crate::broker::Broker,
 }
 
 impl Provisioner {
@@ -374,11 +389,13 @@ impl Provisioner {
         store: Store,
         workspace_root: PathBuf,
         work_queued: Arc<tokio::sync::Notify>,
+        broker: crate::broker::Broker,
     ) -> Self {
         Self {
             store,
             workspace_root,
             work_queued,
+            broker,
         }
     }
 
@@ -516,7 +533,22 @@ impl Provisioner {
         // find the instructions it was created with.
         self.write_instructions(thread_id, settings).await;
 
-        let report = match provision_repos(&self.workspace_root, thread_id, repos, &execution).await
+        // Resolved from the same settings the runner will resolve them from, so
+        // a clone is pointed at the gate the thread's first turn installs.
+        let hooks = self.broker.hooks_for(
+            thread_id,
+            settings.permissions.as_ref(),
+            !execution.redactor.is_empty(),
+        );
+
+        let report = match provision_repos(
+            &self.workspace_root,
+            thread_id,
+            repos,
+            &execution,
+            hooks.as_deref(),
+        )
+        .await
         {
             Ok(report) => report,
             Err(error) => {
@@ -731,7 +763,7 @@ mod tests {
         let root = std::env::temp_dir().join(format!("arsox-empty-{}", uuid::Uuid::now_v7()));
         let thread_id = "019fd32f-2222-7222-8222-222222222222";
 
-        let report = provision_repos(&root, thread_id, &[], &Execution::default())
+        let report = provision_repos(&root, thread_id, &[], &Execution::default(), None)
             .await
             .expect("nothing to do is not a failure");
 
@@ -754,6 +786,7 @@ mod tests {
                 ..Repo::default()
             }],
             &Execution::default(),
+            None,
         )
         .await
         .expect_err("a traversal must not reach git");

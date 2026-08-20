@@ -179,6 +179,7 @@ async fn a_declared_repo_is_cloned_into_the_thread_workspace() {
         &thread,
         &[repo("api", &url)],
         &Execution::default(),
+        None,
     )
     .await
     .expect("provisioning should not fail on the satellite's side");
@@ -207,6 +208,7 @@ async fn a_repo_with_no_submodules_clones_cleanly_under_recursion() {
         &thread,
         &[repo("plain", &url)],
         &Execution::default(),
+        None,
     )
     .await
     .expect("should provision");
@@ -231,6 +233,7 @@ async fn several_repos_each_get_their_own_checkout() {
         &thread,
         &[repo("api", &api), repo("web", &web)],
         &Execution::default(),
+        None,
     )
     .await
     .expect("should provision");
@@ -265,6 +268,7 @@ async fn setup_commands_run_in_the_checkout_with_barrier_semantics() {
         &thread,
         &[with_setup],
         &Execution::default(),
+        None,
     )
     .await
     .expect("should provision");
@@ -331,7 +335,7 @@ async fn a_setup_command_sees_the_variables_the_thread_declared() {
         ..Execution::default()
     };
 
-    let report = provision_repos(workspace.path(), &thread, &[echoing], &declared)
+    let report = provision_repos(workspace.path(), &thread, &[echoing], &declared, None)
         .await
         .expect("should provision");
     assert!(report.failures.is_empty(), "{:?}", report.failures);
@@ -362,6 +366,7 @@ async fn a_repo_that_will_not_clone_ends_provisioning_and_says_it_may_be_retried
         &thread,
         &[repo("api", &missing), repo("web", &missing)],
         &Execution::default(),
+        None,
     )
     .await
     .expect("a refused clone is a reported failure, not a satellite error");
@@ -647,6 +652,7 @@ async fn a_personal_access_token_never_reaches_the_cloned_repository() {
         &thread,
         &[authenticated],
         &Execution::default(),
+        None,
     )
     .await
     .expect("should provision");
@@ -967,5 +973,10 @@ fn provisioner(store: &Store, workspace: &scratch::Dir) -> Provisioner {
         store.clone(),
         PathBuf::from(workspace.path()),
         Arc::new(tokio::sync::Notify::new()),
+        // A test runner cannot separate privilege, so the broker installs
+        // nothing and points no checkout anywhere. The path is still its own,
+        // rather than the image's, so a satellite that could would not be
+        // writing outside the test's scratch directory.
+        arsox_satellite::broker::Broker::at(workspace.path().join("broker")),
     )
 }

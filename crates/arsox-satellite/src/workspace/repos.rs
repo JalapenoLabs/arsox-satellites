@@ -23,6 +23,26 @@
 //! the clone returned. `GIT_CONFIG_PARAMETERS` and the environment are both
 //! inherited, so submodule clones get the same credential without it being
 //! recorded anywhere.
+//!
+//! # The hooks path is the deliberate opposite
+//!
+//! `core.hooksPath` has to survive the clone that set it, because the push it
+//! gates happens hours later in a process the satellite did not spawn. So it is
+//! passed as `git clone --config`, which is written into the new repository's
+//! config, rather than as `git -c`, which is scoped to the one invocation.
+//! **That is precisely the distinction the credential relies on, used the other
+//! way round**, and getting the two the wrong way around would persist a token
+//! and lose a gate in the same line.
+//!
+//! Every worktree of a clone shares that config, so a team member's worktree
+//! inherits the hook. A submodule does not: it has a config of its own under
+//! `.git/modules`, so it is pointed at the same directory in a pass of its own
+//! after the clone.
+//!
+//! What no config can survive is being rewritten. A repo whose setup installs
+//! husky sets `core.hooksPath` to `.husky` and takes the gate with it, which is
+//! why the runner re-asserts it at the start of every turn. See
+//! [the enforcement doc](../../../../docs/enforcement.md).
 
 use super::WorkspaceError;
 use arsox_sdk::proto::settings::v1::git_auth::Credential;
@@ -68,6 +88,10 @@ pub(super) struct CloneFailed {
 /// on the reference an integration branch is cut from rather than on whatever
 /// the remote's `HEAD` happens to point at.
 ///
+/// `hooks` is the thread's root-owned hooks directory, written into the new
+/// repository's config so a later push meets the gate. Absent for a thread with
+/// nothing to enforce about pushing, which leaves the repo's own hooks alone.
+///
 /// # Errors
 ///
 /// Returns [`CloneFailed`] when git exits nonzero or cannot be launched at all.
@@ -77,6 +101,7 @@ pub(super) async fn clone(
     repo: &Repo,
     into: &Path,
     redactor: &crate::redaction::Redactor,
+    hooks: Option<&Path>,
 ) -> Result<(), CloneFailed> {
     let credential = Credentials::lend(repo).map_err(|error| CloneFailed {
         message: format!(
@@ -99,6 +124,15 @@ pub(super) async fn clone(
     process.env("GIT_TERMINAL_PROMPT", "0");
 
     process.arg("clone").arg("--recurse-submodules");
+
+    // `git clone --config`, never `git -c`. This one has to outlive the clone:
+    // the push it gates happens in a process the satellite never spawns.
+    if let Some(hooks) = hooks {
+        process
+            .arg("--config")
+            .arg(format!("core.hooksPath={}", hooks.display()));
+    }
+
     if let Some(branch) = repo.base_branch.as_deref().filter(|it| !it.is_empty()) {
         process.arg("--branch").arg(branch);
     }
@@ -111,6 +145,13 @@ pub(super) async fn clone(
     })?;
 
     if output.status.success() {
+        // Submodules keep their own config under `.git/modules`, so the
+        // superproject's hooks path does not reach them. Pointed here, once,
+        // because a submodule appears at clone time and nowhere else.
+        if let Some(hooks) = hooks {
+            point_submodules_at(into, hooks).await;
+        }
+
         return Ok(());
     }
 
@@ -131,6 +172,102 @@ pub(super) async fn clone(
         ),
         output: credential.redact(&redactor.redact(&redact_url(said.trim()))),
     })
+}
+
+/// Points every checkout in a thread's workspace at its root-owned hooks.
+///
+/// Returns one message per repo that could not be pointed, which the caller
+/// records: a gate that quietly failed to install is exactly the silent loss of
+/// enforcement the incident system exists to surface.
+///
+/// **Re-asserted at the start of every turn**, for the same two reasons the shim
+/// directory is rebuilt there. `core.hooksPath` is ordinary repository config,
+/// so anything that writes config can replace it, and a repo whose setup
+/// installs husky does exactly that. And a thread provisioned before its
+/// settings grew a protected branch was cloned with no hooks path at all.
+///
+/// Set and never unset. A thread that stops protecting a branch keeps pointing
+/// at a hooks directory the installer has emptied, which is a repo with no
+/// hooks; unsetting instead would clobber whatever the repo's own tooling had
+/// put there.
+pub async fn point_hooks_at(root: &Path, thread_id: &str, hooks: &Path) -> Vec<String> {
+    let Ok(repos_root) = super::repos_directory(root, thread_id) else {
+        return Vec::new();
+    };
+
+    let Ok(mut entries) = tokio::fs::read_dir(&repos_root).await else {
+        // A thread that declared no repos has no `repos/`, which is ordinary.
+        return Vec::new();
+    };
+
+    let mut unpointed = Vec::new();
+
+    while let Ok(Some(entry)) = entries.next_entry().await {
+        let checkout = entry.path();
+
+        // Anything else under `repos/` was not put there by a clone.
+        if !checkout.join(".git").exists() {
+            continue;
+        }
+
+        if let Err(reason) = set_hooks_path(&checkout, hooks).await {
+            unpointed.push(format!("{}: {reason}", checkout.display()));
+        }
+    }
+
+    unpointed
+}
+
+/// Writes `core.hooksPath` into one checkout's config.
+async fn set_hooks_path(checkout: &Path, hooks: &Path) -> Result<(), String> {
+    let mut process = crate::harness::spawn::scrubbed_command("git");
+    process
+        .arg("-C")
+        .arg(checkout)
+        .arg("config")
+        .arg("core.hooksPath")
+        .arg(hooks);
+
+    match process.output().await {
+        Ok(output) if output.status.success() => Ok(()),
+        Ok(output) => Err(format!(
+            "git config exited with {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stderr).trim()
+        )),
+        Err(error) => Err(format!("could not launch git: {error}")),
+    }
+}
+
+/// Points every submodule of `checkout` at the same hooks directory.
+///
+/// Best effort and quiet about a repository with no submodules, which is most
+/// of them: `submodule foreach` on one is a success that ran nothing.
+async fn point_submodules_at(checkout: &Path, hooks: &Path) {
+    let mut process = crate::harness::spawn::scrubbed_command("git");
+    process
+        .arg("-C")
+        .arg(checkout)
+        .arg("submodule")
+        .arg("foreach")
+        .arg("--recursive")
+        .arg("git")
+        .arg("config")
+        .arg("core.hooksPath")
+        .arg(hooks);
+
+    let said = match process.output().await {
+        Ok(output) if output.status.success() => return,
+        Ok(output) => String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        Err(error) => error.to_string(),
+    };
+
+    tracing::warn!(
+        event.name = "workspace.repo.submodule_hooks_unset",
+        repo.path = %checkout.display(),
+        "a submodule of {{repo.path}} could not be pointed at the thread's pre-push hook, \
+         so a push from inside it is not gated: {said}",
+    );
 }
 
 /// Where a repo is cloned under `repos/`.

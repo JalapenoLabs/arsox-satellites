@@ -6,14 +6,16 @@
 //! the library beside it, which is where everything the satellite actually does
 //! lives and where it can be exercised without a running process.
 //!
-//! # It is also every exec shim
+//! # It is also every gate
 //!
 //! A brokered thread's `PATH` is a directory of shebang scripts naming this
-//! binary as their interpreter, so a command an agent types arrives here. That
-//! branch is taken before the runtime is built and before anything is
-//! configured: a shim reads one file, decides, and `exec`s, and paying for a
-//! multi-threaded runtime on the way would put that cost on every command an
-//! agent runs. See [the enforcement doc](../../../docs/enforcement.md).
+//! binary as their interpreter, and its checkouts point `core.hooksPath` at a
+//! `pre-push` that does the same, so a command an agent types and a push it
+//! makes both arrive here. Those branches are taken before the runtime is built
+//! and before anything is configured: a gate reads one file, decides, and gets
+//! out of the way, and paying for a multi-threaded runtime on the way would put
+//! that cost on every command an agent runs. See
+//! [the enforcement doc](../../../docs/enforcement.md).
 
 use anyhow::{Result, bail};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
@@ -30,11 +32,15 @@ const HEALTH_CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs
 fn main() -> Result<()> {
     // Ahead of the runtime, because this process may not be a satellite at all:
     // a brokered thread's PATH is full of shebang scripts naming this binary,
-    // so an agent's `git status` lands here. A shim reads one file, decides,
-    // and execs, and it never returns.
+    // so an agent's `git status` lands here, and so does the `pre-push` hook
+    // git runs on its way to a remote. Each reads one file, decides, and never
+    // returns.
     let arguments: Vec<String> = std::env::args().collect();
     if let Some(invocation) = arsox_satellite::broker::shim::invoked_as(&arguments) {
         arsox_satellite::broker::shim::run(&invocation);
+    }
+    if let Some(invocation) = arsox_satellite::broker::hook::invoked_as(&arguments) {
+        arsox_satellite::broker::hook::run(&invocation);
     }
 
     satellite()

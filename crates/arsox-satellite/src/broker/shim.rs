@@ -191,6 +191,7 @@ pub fn run(invocation: &Invocation) -> ! {
 fn refuse(policy: &Policy, invocation: &Invocation, reason: &'static str) -> ! {
     let denial = super::spool::Denial::now(
         &policy.thread_id,
+        super::spool::Kind::CommandDenied,
         invocation.name(),
         invocation.argv(),
         reason,
@@ -222,10 +223,12 @@ fn read_policy(invocation: &Invocation) -> Option<Policy> {
 
 /// Finds the real binary for `name`, in the order the policy recorded.
 ///
-/// Searched rather than inherited from `PATH`, because the shim runs with the
-/// agent's `PATH`, which is the shim directory and nothing else. A shim that
-/// searched its own `PATH` would find itself.
-fn resolve(search_path: &[PathBuf], name: &str) -> Option<PathBuf> {
+/// Searched rather than inherited from `PATH`, because a gate runs with the
+/// agent's `PATH`, which on a brokered thread is the shim directory and nothing
+/// else. A shim that searched its own `PATH` would find itself, and the
+/// `pre-push` hook needs a `git` that is not a shim it would first have to be
+/// allowed to run.
+pub(super) fn resolve(search_path: &[PathBuf], name: &str) -> Option<PathBuf> {
     search_path
         .iter()
         .map(|directory| directory.join(name))
@@ -337,8 +340,12 @@ mod tests {
                 allowed_commands: allowed.iter().copied().map(str::to_owned).collect(),
                 ..Permissions::default()
             }),
-            PathBuf::from("/opt/arsox/threads/x/denied"),
-            vec![PathBuf::from("/usr/bin")],
+            false,
+            crate::broker::Locations {
+                spool: PathBuf::from("/opt/arsox/threads/x/denied"),
+                scan: PathBuf::from("/opt/arsox/threads/x/scan.sock"),
+                search_path: vec![PathBuf::from("/usr/bin")],
+            },
         )
         .expect("these policies are brokered")
     }

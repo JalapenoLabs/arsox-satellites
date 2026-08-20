@@ -649,6 +649,7 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
         store.clone(),
         std::path::PathBuf::from(&options.workspace_root),
         Arc::clone(&work_queued),
+        broker.clone(),
     );
 
     // A workspace half-built when the satellite stopped is rebuilt rather than

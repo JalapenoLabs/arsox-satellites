@@ -1,10 +1,11 @@
 // Copyright © 2026 Jalapeno Labs
 
-//! The deny spool: how a refusal reaches the satellite from the shim.
+//! The deny spool: how a refusal reaches the satellite from a gate.
 //!
-//! A shim runs as the agent and the satellite runs as root, so a refusal has to
-//! cross a privilege boundary to become an incident. A root-owned unix socket
-//! would be the lower-latency answer and it was the other candidate. **The spool
+//! A shim and a `pre-push` hook both run as the agent, and the satellite runs as
+//! root, so a refusal has to cross a privilege boundary to become an incident.
+//! A root-owned unix socket would be the lower-latency answer and it was the
+//! other candidate. **The spool
 //! is what is built, and the reason is attribution.** A socket message carries no
 //! turn id, so the satellite would have to guess which turn a refusal belonged to
 //! from its timing. The runner drains this between sessions and knows exactly
@@ -29,13 +30,69 @@
 //! record it did not write. See [`super::install`].
 
 use arsox_sdk::proto::common::v1::Timestamp;
+use arsox_sdk::proto::error::v1::ErrorCode;
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// One command a shim refused, as it travels from the agent to the satellite.
+/// Which gate closed.
+///
+/// Carried in the record rather than inferred at the drain, because the gate
+/// that refused is the only thing that knows, and an incident whose code was
+/// guessed from its message would be a code nobody could match on.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Kind {
+    /// The exec allowlist refused a command.
+    #[default]
+    CommandDenied,
+
+    /// The thread does not allow pushing.
+    PushDenied,
+
+    /// The push named a ref the thread protects.
+    BranchProtected,
+
+    /// The push carried one of the thread's secrets.
+    SecretInPush,
+}
+
+impl Kind {
+    /// The contract code this refusal is reported under.
+    #[must_use]
+    pub fn code(self) -> ErrorCode {
+        match self {
+            Self::CommandDenied => ErrorCode::PermissionCommandDenied,
+            Self::PushDenied => ErrorCode::PermissionPushDenied,
+            Self::BranchProtected => ErrorCode::PermissionBranchProtected,
+            Self::SecretInPush => ErrorCode::SecretInPushBlocked,
+        }
+    }
+
+    /// The code as an agent reads it in its own tool output.
+    ///
+    /// The contract's spelling without the enum's prefix, which is the form the
+    /// README's error tables use and the form somebody searching for a refusal
+    /// will have typed.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        self.code()
+            .as_str_name()
+            .strip_prefix("ERROR_CODE_")
+            .unwrap_or_default()
+    }
+}
+
+/// One thing a gate refused, as it travels from the agent to the satellite.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Denial {
     pub thread_id: String,
+
+    /// Which gate closed.
+    ///
+    /// Defaulted on the way in, so a record written before this field existed
+    /// still drains as what it was: a command the exec allowlist refused.
+    #[serde(default)]
+    pub kind: Kind,
 
     /// The command as it was invoked, without its arguments.
     pub name: String,
@@ -43,13 +100,18 @@ pub struct Denial {
     /// The whole invocation, the command first.
     ///
     /// This is what reaches `details.argv` on the incident, which is the field
-    /// the README promises and the one an operator widening an allowlist reads.
+    /// the README promises and the one an operator widening a policy reads.
     pub argv: Vec<String>,
 
-    /// Completes "the command was refused because it ...".
+    /// Completes "`<invocation>` ...".
     pub reason: String,
 
-    /// When the shim refused, split the way a `Timestamp` splits one.
+    /// Whatever else the incident should carry, such as the `ref` a protected
+    /// branch refusal matched.
+    #[serde(default)]
+    pub details: BTreeMap<String, String>,
+
+    /// When the gate refused, split the way a `Timestamp` splits one.
     pub occurred_at_seconds: i64,
     pub occurred_at_nanos: u32,
 }
@@ -57,19 +119,28 @@ pub struct Denial {
 impl Denial {
     /// Records a refusal as having happened now.
     #[must_use]
-    pub fn now(thread_id: &str, name: &str, argv: Vec<String>, reason: &str) -> Self {
+    pub fn now(thread_id: &str, kind: Kind, name: &str, argv: Vec<String>, reason: &str) -> Self {
         let since_epoch = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap_or(Duration::ZERO);
 
         Self {
             thread_id: thread_id.to_owned(),
+            kind,
             name: name.to_owned(),
             argv,
             reason: reason.to_owned(),
+            details: BTreeMap::new(),
             occurred_at_seconds: i64::try_from(since_epoch.as_secs()).unwrap_or(i64::MAX),
             occurred_at_nanos: since_epoch.subsec_nanos(),
         }
+    }
+
+    /// The same refusal, carrying what else the incident should say.
+    #[must_use]
+    pub fn with_details(mut self, details: BTreeMap<String, String>) -> Self {
+        self.details = details;
+        self
     }
 
     /// When the refusal happened, in the shape an incident carries.
@@ -176,10 +247,73 @@ mod tests {
     fn denial(name: &str, argv: &[&str]) -> Denial {
         Denial::now(
             "019fd32f-a25f-7611-a4fe-c93cc2a6d782",
+            Kind::CommandDenied,
             name,
             argv.iter().copied().map(str::to_owned).collect(),
             "is not on this thread's exec allowlist",
         )
+    }
+
+    #[test]
+    fn a_refusal_reports_the_code_for_the_gate_that_closed() {
+        // Matched on by a caller, so the mapping has to be the contract's and
+        // not a name invented here.
+        assert_eq!(Kind::PushDenied.code(), ErrorCode::PermissionPushDenied);
+        assert_eq!(
+            Kind::BranchProtected.code(),
+            ErrorCode::PermissionBranchProtected
+        );
+        assert_eq!(Kind::SecretInPush.code(), ErrorCode::SecretInPushBlocked);
+        assert_eq!(
+            Kind::CommandDenied.code(),
+            ErrorCode::PermissionCommandDenied
+        );
+
+        assert_eq!(Kind::PushDenied.name(), "PERMISSION_PUSH_DENIED");
+        assert_eq!(Kind::SecretInPush.name(), "SECRET_IN_PUSH_BLOCKED");
+    }
+
+    #[test]
+    fn a_record_from_before_the_push_gate_still_drains_as_what_it_was() {
+        // The spool survives a rebuild, so a refusal recorded by the previous
+        // satellite has to keep meaning what it meant.
+        let spool = spool();
+        std::fs::write(
+            spool.join("019fd32f.json"),
+            br#"{"thread_id":"t","name":"docker","argv":["docker"],"reason":"is not allowed",
+                 "occurred_at_seconds":1700000000,"occurred_at_nanos":0}"#,
+        )
+        .expect("should write");
+
+        let drained = drain(&spool);
+
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].kind, Kind::CommandDenied);
+        assert!(drained[0].details.is_empty());
+
+        drop(std::fs::remove_dir_all(&spool));
+    }
+
+    #[test]
+    fn a_refusal_carries_whatever_else_the_incident_should_say() {
+        let spool = spool();
+        let mut details = BTreeMap::new();
+        details.insert("ref".to_owned(), "refs/heads/main".to_owned());
+
+        let written = Denial::now(
+            "019fd32f-a25f-7611-a4fe-c93cc2a6d782",
+            Kind::BranchProtected,
+            "git",
+            vec!["git".to_owned(), "push".to_owned()],
+            "is refused because `refs/heads/main` is protected on this thread",
+        )
+        .with_details(details);
+
+        record(&spool, &written).expect("should record");
+
+        assert_eq!(drain(&spool), vec![written]);
+
+        drop(std::fs::remove_dir_all(&spool));
     }
 
     #[test]

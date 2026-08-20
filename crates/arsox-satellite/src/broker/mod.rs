@@ -1,17 +1,22 @@
 // Copyright © 2026 Jalapeno Labs
 
-//! The exec broker: what an agent's shell can reach, decided by the satellite.
+//! The broker: what an agent's shell and its pushes can reach.
 //!
-//! A thread that declares `exec: NONE` or `exec: CUSTOM` gets a **shim
-//! directory**, and that directory becomes the entire `PATH` of the harness
-//! process. Every name in it is a small root-owned file whose only content is a
-//! shebang pointing back at the satellite binary, so a command an agent types is
-//! resolved into the satellite, checked against the thread's allowlist, and
-//! either `exec`ed or refused.
+//! Two gates, one mechanism. Each is a small root-owned file whose only content
+//! is a shebang pointing back at the satellite binary, so the thing an agent
+//! runs is resolved into the satellite, checked against the thread's policy, and
+//! either allowed through or refused.
 //!
-//! A refusal writes one record into the thread's deny spool, which the runner
-//! drains after each session into a `PERMISSION_COMMAND_DENIED` incident with a
-//! `blocked` disposition. Nothing about being denied is silent.
+//! - **The exec broker.** A thread that declares `exec: NONE` or `exec: CUSTOM`
+//!   gets a **shim directory**, and that directory becomes the entire `PATH` of
+//!   the harness process. See [`shim`].
+//! - **The push gate.** A thread that denies pushing, protects a ref, or
+//!   declares a secret gets a **hooks directory** holding a `pre-push`, pointed
+//!   at by `core.hooksPath` from outside every worktree. See [`hook`].
+//!
+//! A refusal from either writes one record into the thread's deny spool, which
+//! the runner drains after each session into a `blocked` incident carrying the
+//! code for the gate that closed. Nothing about being denied is silent.
 //!
 //! # It is a gate, not a jail
 //!
@@ -25,13 +30,15 @@
 //!
 //! # It engages only where it can hold
 //!
-//! Installing a shim directory the agent could delete would be theatre, so the
-//! broker engages only on a satellite that separates privilege: root, with the
-//! agent account present. See [`crate::privilege`]. Off that, and for a thread
-//! that declared `PRESET` or declared nothing, the agent keeps the satellite's
-//! own `PATH` exactly as it does today.
+//! Installing a gate the agent could delete would be theatre, so the broker
+//! engages only on a satellite that separates privilege: root, with the agent
+//! account present. See [`crate::privilege`]. Off that, and for a thread that
+//! asked for neither gate, everything runs exactly as it does today.
 
+pub mod hook;
 mod install;
+pub mod push;
+pub mod scan;
 pub mod shim;
 pub mod spool;
 
@@ -196,86 +203,41 @@ pub const PRESET_COMMANDS: &[&str] = &[
     "ssh-keygen",
 ];
 
-/// One thread's brokered allowlist, as the shim reads it.
+/// Where one thread's brokered state lives on disk.
 ///
-/// Written to disk beside the shim directory and read on every invocation. It
-/// carries the resolved facts rather than the settings they came from, so the
-/// shim needs no view of the satellite's state and a policy file can be read by
-/// a human debugging what a thread was actually allowed.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct Policy {
-    pub thread_id: String,
+/// Grouped rather than passed as three more parameters, and resolved by the
+/// [`Broker`] rather than by a caller, because every one of them is a path
+/// derived from the broker root and a thread id. A caller that could name them
+/// itself would be a caller that could name them differently.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Locations {
+    /// Where a refusal is written down.
+    pub spool: PathBuf,
 
+    /// Where the satellite answers whether a push carries a secret.
+    pub scan: PathBuf,
+
+    /// Where a gate looks for a real binary, in order.
+    ///
+    /// Recorded rather than inherited, because both gates run with the agent's
+    /// `PATH`, which on a brokered thread is the shim directory and nothing
+    /// else. A shim that searched its own `PATH` would find itself, and the
+    /// `pre-push` hook needs a `git` that is not a shim it would first have to
+    /// be allowed to run.
+    pub search_path: Vec<PathBuf>,
+}
+
+/// One thread's exec allowlist, as the shim reads it.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ExecPolicy {
     /// The entries the thread declared, trimmed, exactly as it wrote them.
     pub allowed: Vec<String>,
 
     /// Names that resolve whatever `allowed` says. See [`HARNESS_RUNTIME`].
     pub runtime: Vec<String>,
-
-    /// Where the shim looks for the real binary, in order.
-    ///
-    /// Recorded rather than inherited, because the shim runs with the agent's
-    /// `PATH`, which is the shim directory and nothing else. A shim that
-    /// searched its own `PATH` would find itself.
-    pub search_path: Vec<PathBuf>,
-
-    /// Where a refusal is written down.
-    pub spool: PathBuf,
 }
 
-impl Policy {
-    /// Resolves a thread's policy, or `None` when the broker does not engage.
-    ///
-    /// Engagement is the whole of the behaviour change this feature makes:
-    /// `NONE` and `CUSTOM` are brokered, and an undeclared `exec` or a declared
-    /// `PRESET` keeps the satellite's own `PATH` exactly as it does today.
-    #[must_use]
-    pub fn for_thread(
-        thread_id: &str,
-        permissions: Option<&Permissions>,
-        spool: PathBuf,
-        search_path: Vec<PathBuf>,
-    ) -> Option<Self> {
-        let permissions = permissions?;
-        let exec = ExecAccess::try_from(permissions.exec).unwrap_or(ExecAccess::Unspecified);
-
-        let runtime = match exec {
-            // Unspecified means the documented default and the documented
-            // default is the preset. Neither is brokered, so neither can change
-            // behaviour for a thread that asked for nothing.
-            ExecAccess::Unspecified | ExecAccess::Preset => return None,
-
-            // No commands at all, so no shell on the floor either. What the
-            // harness needs to run is all that resolves.
-            ExecAccess::None => floor(&[]),
-
-            // The allowed commands run through a shell, so the shell is part of
-            // being able to run them.
-            ExecAccess::Custom => floor(&SHELLS),
-        };
-
-        // `allowed_commands` is additive on top of whatever base `exec` set,
-        // which is the contract's own rule, so a thread that turned the shell
-        // off and then named one command has named a grant rather than a
-        // contradiction. Trimmed and emptied exactly as the advisory layer
-        // trims them, so the two layers read one list the same way.
-        let allowed = permissions
-            .allowed_commands
-            .iter()
-            .map(|command| command.trim())
-            .filter(|command| !command.is_empty())
-            .map(str::to_owned)
-            .collect();
-
-        Some(Self {
-            thread_id: thread_id.to_owned(),
-            allowed,
-            runtime,
-            search_path,
-            spool,
-        })
-    }
-
+impl ExecPolicy {
     /// Whether this policy permits an invocation.
     ///
     /// `name` is the command as it was invoked and `arguments` is everything
@@ -288,6 +250,83 @@ impl Policy {
                 .iter()
                 .any(|entry| entry_permits(entry, name, arguments))
     }
+}
+
+/// One thread's brokered policy, as either gate reads it.
+///
+/// Written to disk beside the shim and hooks directories and read on every
+/// invocation of either. It carries the resolved facts rather than the settings
+/// they came from, so a gate needs no view of the satellite's state and a policy
+/// file can be read by a human debugging what a thread was actually allowed.
+///
+/// **Nothing in it is secret.** The agent may read it, which is deliberate: a
+/// policy it cannot read is a refusal it cannot understand. The secrets a push
+/// is scanned against are the one thing never written here. See [`scan`].
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Policy {
+    pub thread_id: String,
+
+    /// What the agent's shell may run, when the exec broker engages.
+    pub exec: Option<ExecPolicy>,
+
+    /// What the agent may push, when the push gate engages.
+    pub push: Option<push::PushPolicy>,
+
+    /// Where either gate looks for a real binary, in order.
+    pub search_path: Vec<PathBuf>,
+
+    /// Where a refusal is written down.
+    pub spool: PathBuf,
+}
+
+impl Policy {
+    /// Resolves a thread's policy, or `None` when neither gate engages.
+    ///
+    /// Engagement is the whole of the behaviour change this feature makes. The
+    /// exec broker takes `NONE` and `CUSTOM`; an undeclared `exec` or a declared
+    /// `PRESET` keeps the satellite's own `PATH` exactly as it does today. The
+    /// push gate takes a thread that denies pushing, protects a ref, or has a
+    /// secret to scan for; a thread with none of those pushes exactly as it does
+    /// today.
+    ///
+    /// `scans` is whether the thread has a secret worth scanning a push
+    /// against, which is a question for the redactor rather than for the
+    /// permissions.
+    #[must_use]
+    pub fn for_thread(
+        thread_id: &str,
+        permissions: Option<&Permissions>,
+        scans: bool,
+        locations: Locations,
+    ) -> Option<Self> {
+        let exec = exec_policy(permissions);
+        let push = push::PushPolicy::for_thread(permissions, Some(locations.scan), scans);
+
+        if exec.is_none() && push.is_none() {
+            return None;
+        }
+
+        Some(Self {
+            thread_id: thread_id.to_owned(),
+            exec,
+            push,
+            search_path: locations.search_path,
+            spool: locations.spool,
+        })
+    }
+
+    /// Whether this policy permits an invocation.
+    ///
+    /// Fails closed for a thread the exec broker does not engage for. Such a
+    /// thread has no shim directory, so nothing can reach this; the arm exists
+    /// so a shim left behind by settings that have since changed refuses rather
+    /// than waving everything through.
+    #[must_use]
+    pub fn permits(&self, name: &str, arguments: &[String]) -> bool {
+        self.exec
+            .as_ref()
+            .is_some_and(|exec| exec.permits(name, arguments))
+    }
 
     /// Every name the shim directory must carry for this policy.
     ///
@@ -297,13 +336,20 @@ impl Policy {
     /// point of a `blocked` incident is that an agent working around a denial is
     /// visible. The policy half covers an entry naming something this image does
     /// not carry, which is refused as not installed rather than silently absent.
+    ///
+    /// Empty for a thread the exec broker does not engage for, which is what
+    /// leaves that thread's `PATH` alone.
     #[must_use]
     pub fn shim_names(&self, image_commands: &BTreeSet<String>) -> BTreeSet<String> {
+        let Some(exec) = self.exec.as_ref() else {
+            return BTreeSet::new();
+        };
+
         let mut names = image_commands.clone();
 
-        names.extend(self.runtime.iter().cloned());
+        names.extend(exec.runtime.iter().cloned());
         names.extend(
-            self.allowed
+            exec.allowed
                 .iter()
                 .filter_map(|entry| entry.split_whitespace().next())
                 .map(str::to_owned),
@@ -311,6 +357,42 @@ impl Policy {
 
         names
     }
+}
+
+/// Resolves the exec half of a thread's policy, or `None` when it is unbrokered.
+fn exec_policy(permissions: Option<&Permissions>) -> Option<ExecPolicy> {
+    let permissions = permissions?;
+    let exec = ExecAccess::try_from(permissions.exec).unwrap_or(ExecAccess::Unspecified);
+
+    let runtime = match exec {
+        // Unspecified means the documented default and the documented default
+        // is the preset. Neither is brokered, so neither can change behaviour
+        // for a thread that asked for nothing.
+        ExecAccess::Unspecified | ExecAccess::Preset => return None,
+
+        // No commands at all, so no shell on the floor either. What the harness
+        // needs to run is all that resolves.
+        ExecAccess::None => floor(&[]),
+
+        // The allowed commands run through a shell, so the shell is part of
+        // being able to run them.
+        ExecAccess::Custom => floor(&SHELLS),
+    };
+
+    // `allowed_commands` is additive on top of whatever base `exec` set, which
+    // is the contract's own rule, so a thread that turned the shell off and then
+    // named one command has named a grant rather than a contradiction. Trimmed
+    // and emptied exactly as the advisory layer trims them, so the two layers
+    // read one list the same way.
+    let allowed = permissions
+        .allowed_commands
+        .iter()
+        .map(|command| command.trim())
+        .filter(|command| !command.is_empty())
+        .map(str::to_owned)
+        .collect();
+
+    Some(ExecPolicy { allowed, runtime })
 }
 
 /// The names that resolve whatever a policy says, plus `also`.
@@ -365,11 +447,33 @@ fn entry_permits(entry: &str, name: &str, arguments: &[String]) -> bool {
             .all(|(want, got)| *want == got.as_str())
 }
 
-/// The satellite's exec broker: the shim directories and the deny spools.
+/// What one install left on disk for a thread.
 ///
-/// Cheap to clone: it holds one path. Held by the provisioner, which installs a
-/// thread's directory, the runner, which points a harness at it and drains its
-/// spool, and the collector, which removes it with the workspace.
+/// Every field is absent for a satellite that cannot separate privilege, and
+/// each is absent on its own for a thread that asked for that gate and no
+/// other. Absent means the thread runs exactly as it did before either gate
+/// existed, which is what makes both of them opt in.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Installed {
+    /// The shim directory that becomes a brokered agent's whole `PATH`.
+    pub shims: Option<PathBuf>,
+
+    /// The hooks directory `core.hooksPath` points every checkout at.
+    pub hooks: Option<PathBuf>,
+
+    /// Where the satellite must answer whether a push carries a secret.
+    ///
+    /// Present only when the thread has a secret to scan for. The caller binds
+    /// it, because the secrets live with the turn rather than with the broker.
+    pub scan: Option<PathBuf>,
+}
+
+/// The satellite's broker: the shim directories, the hooks, and the deny spools.
+///
+/// Cheap to clone: it holds one path. Held by the provisioner, which points new
+/// checkouts at a thread's hooks, the runner, which installs a thread's
+/// directory and drains its spool, and the collector, which removes it with the
+/// workspace.
 #[derive(Debug, Clone)]
 pub struct Broker {
     root: PathBuf,
@@ -397,22 +501,83 @@ impl Broker {
         self.thread_directory(thread_id).join("bin")
     }
 
+    /// Where one thread's git hooks live, whether or not any are installed.
+    ///
+    /// Outside every worktree, deliberately. A hook inside `.git/hooks` sits in
+    /// a directory the agent owns, so an agent could delete the gate before the
+    /// push that would have met it.
+    #[must_use]
+    pub fn hooks_directory(&self, thread_id: &str) -> PathBuf {
+        self.thread_directory(thread_id).join("hooks")
+    }
+
     /// Where one thread's refusals are written down.
     #[must_use]
     pub fn spool_directory(&self, thread_id: &str) -> PathBuf {
         self.thread_directory(thread_id).join("denied")
     }
 
+    /// Where the satellite answers one thread's push scans.
+    #[must_use]
+    pub fn scan_socket(&self, thread_id: &str) -> PathBuf {
+        self.thread_directory(thread_id).join("scan.sock")
+    }
+
     fn thread_directory(&self, thread_id: &str) -> PathBuf {
         self.root.join(thread_id)
     }
 
-    /// Installs a thread's shim directory, and reports whether one was needed.
+    /// The policy this thread would run under, without touching the disk.
+    fn policy_for(
+        &self,
+        thread_id: &str,
+        permissions: Option<&Permissions>,
+        scans: bool,
+    ) -> Option<Policy> {
+        Policy::for_thread(
+            thread_id,
+            permissions,
+            scans,
+            Locations {
+                spool: self.spool_directory(thread_id),
+                scan: self.scan_socket(thread_id),
+                // The satellite's own, which is unrestricted. Resolved here
+                // rather than at invocation because a gate runs with the
+                // agent's `PATH`, which on a brokered thread is the shim
+                // directory alone.
+                search_path: search_path(&self.shim_directory(thread_id)),
+            },
+        )
+    }
+
+    /// Where a new checkout's `core.hooksPath` should point, if anywhere.
     ///
-    /// Returns the directory that becomes the agent's `PATH`, or `None` when
-    /// this thread is not brokered: either it declared no policy the broker
-    /// engages for, or this satellite cannot separate privilege and therefore
-    /// cannot hold a gate. Both are ordinary outcomes rather than failures.
+    /// Answered before a turn has ever run, so the clone a thread is
+    /// provisioned with is already pointed at the gate. Returns `None` for a
+    /// thread with nothing to enforce about pushing, which leaves that repo's
+    /// own hooks exactly where they were.
+    #[must_use]
+    pub fn hooks_for(
+        &self,
+        thread_id: &str,
+        permissions: Option<&Permissions>,
+        scans: bool,
+    ) -> Option<PathBuf> {
+        if !crate::privilege::descent().enforces() {
+            return None;
+        }
+
+        self.policy_for(thread_id, permissions, scans)?.push?;
+
+        Some(self.hooks_directory(thread_id))
+    }
+
+    /// Installs a thread's gates, and reports which of them were needed.
+    ///
+    /// Everything is absent when this satellite cannot separate privilege and
+    /// therefore cannot hold a gate at all, and each gate is absent on its own
+    /// when the thread asked for the other one. Both are ordinary outcomes
+    /// rather than failures.
     ///
     /// Idempotent. A thread reprovisioned after a restart gets a directory built
     /// from its current settings rather than merged onto whatever was there.
@@ -425,34 +590,37 @@ impl Broker {
     /// # Errors
     ///
     /// Returns the underlying I/O error when the directory cannot be built. The
-    /// caller reports it and leaves the thread unbrokered rather than
-    /// half-brokered.
+    /// caller reports it and leaves the thread ungated rather than half-gated.
     pub async fn install(
         &self,
         thread_id: &str,
         permissions: Option<&Permissions>,
-    ) -> std::io::Result<Option<PathBuf>> {
+        scans: bool,
+    ) -> std::io::Result<Installed> {
         if !crate::privilege::descent().enforces() {
-            return Ok(None);
+            return Ok(Installed::default());
         }
 
-        let shims = self.shim_directory(thread_id);
-        let Some(policy) = Policy::for_thread(
-            thread_id,
-            permissions,
-            self.spool_directory(thread_id),
-            // The satellite's own, which is unrestricted. Resolved at install
-            // rather than at invocation because the shim runs with the agent's
-            // `PATH`, and that is the shim directory alone.
-            search_path(&shims),
-        ) else {
-            return Ok(None);
+        let Some(policy) = self.policy_for(thread_id, permissions, scans) else {
+            return Ok(Installed::default());
+        };
+
+        let installed = Installed {
+            shims: policy
+                .exec
+                .as_ref()
+                .map(|_gated| self.shim_directory(thread_id)),
+            hooks: policy
+                .push
+                .as_ref()
+                .map(|_gated| self.hooks_directory(thread_id)),
+            scan: policy.push.as_ref().and_then(|push| push.scan.clone()),
         };
 
         let thread_root = self.thread_directory(thread_id);
         blocking(move || install::install(&thread_root, &policy)).await?;
 
-        Ok(Some(shims))
+        Ok(installed)
     }
 
     /// Removes a thread's shim directory, spool and all.
@@ -565,13 +733,22 @@ mod tests {
         }
     }
 
+    /// Where a test thread's brokered state would live.
+    fn locations() -> Locations {
+        Locations {
+            spool: PathBuf::from("/opt/arsox/threads/x/denied"),
+            scan: PathBuf::from("/opt/arsox/threads/x/scan.sock"),
+            search_path: vec![PathBuf::from("/usr/bin")],
+        }
+    }
+
     /// The policy a thread with these permissions runs under.
     fn policy(exec: ExecAccess, allowed: &[&str]) -> Option<Policy> {
         Policy::for_thread(
             "019fd32f-a25f-7611-a4fe-c93cc2a6d782",
             Some(&permissions(exec, allowed)),
-            PathBuf::from("/opt/arsox/threads/x/denied"),
-            vec![PathBuf::from("/usr/bin")],
+            false,
+            locations(),
         )
     }
 
@@ -583,17 +760,69 @@ mod tests {
     #[test]
     fn a_thread_that_declared_nothing_is_not_brokered() {
         // The whole opt-in claim. A thread that asked for no policy keeps the
-        // satellite's own PATH, exactly as it does today.
+        // satellite's own PATH and pushes as it always has.
         assert!(
             Policy::for_thread(
                 "019fd32f-a25f-7611-a4fe-c93cc2a6d782",
                 None,
-                PathBuf::new(),
-                Vec::new()
+                false,
+                locations(),
             )
             .is_none()
         );
         assert!(policy(ExecAccess::Unspecified, &[]).is_none());
+    }
+
+    #[test]
+    fn a_thread_gated_only_on_pushing_gets_a_policy_and_no_shims() {
+        // The two gates are independent. A thread that protects a branch and
+        // said nothing about `exec` must keep the satellite's own PATH, and a
+        // thread that named its commands must not be handed a push gate it
+        // never asked for.
+        let guarded = Policy::for_thread(
+            "019fd32f-a25f-7611-a4fe-c93cc2a6d782",
+            Some(&Permissions {
+                protected_branches: vec!["main".to_owned()],
+                ..Permissions::default()
+            }),
+            false,
+            locations(),
+        )
+        .expect("a protected branch is a gate");
+
+        assert!(guarded.exec.is_none());
+        assert!(guarded.push.is_some());
+        assert!(guarded.shim_names(&BTreeSet::new()).is_empty());
+        assert!(
+            !guarded.permits("node", &[]),
+            "a thread with no exec policy has no shim to permit anything through"
+        );
+
+        assert!(
+            policy(ExecAccess::Custom, &["yarn install"])
+                .expect("brokered")
+                .push
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_thread_with_a_secret_is_given_somewhere_to_have_a_push_scanned() {
+        // The socket is in the policy rather than assumed by the hook, so a
+        // thread with nothing to scan for never pays for a round trip that
+        // could only answer "nothing found".
+        let scanned = Policy::for_thread(
+            "019fd32f-a25f-7611-a4fe-c93cc2a6d782",
+            None,
+            true,
+            locations(),
+        )
+        .expect("a secret is a gate")
+        .push
+        .expect("gated on pushing");
+
+        assert_eq!(scanned.scan, Some(locations().scan));
+        assert!(scanned.allowed, "having a secret does not deny pushing");
     }
 
     #[test]
@@ -655,7 +884,10 @@ mod tests {
         let policy =
             policy(ExecAccess::Custom, &["  yarn   install  ", "", "   "]).expect("brokered");
 
-        assert_eq!(policy.allowed, vec!["yarn   install"]);
+        assert_eq!(
+            policy.exec.as_ref().expect("brokered").allowed,
+            vec!["yarn   install"]
+        );
         assert!(policy.permits("yarn", &arguments(&["install"])));
     }
 
@@ -792,7 +1024,30 @@ mod tests {
         let broker = Broker::at(PathBuf::from("/opt/arsox/threads"));
 
         assert!(broker.shim_directory("abc").ends_with("abc/bin"));
+        assert!(broker.hooks_directory("abc").ends_with("abc/hooks"));
         assert!(broker.spool_directory("abc").ends_with("abc/denied"));
+        assert!(broker.scan_socket("abc").ends_with("abc/scan.sock"));
+    }
+
+    #[test]
+    fn an_unenforcing_satellite_points_no_checkout_at_a_hook() {
+        // Pointing `core.hooksPath` at a directory nothing owns would take a
+        // repo's own hooks away and put nothing in their place.
+        assert!(!crate::privilege::descent().enforces());
+
+        let broker = Broker::at(PathBuf::from("/opt/arsox/threads"));
+
+        assert_eq!(
+            broker.hooks_for(
+                "019fd32f-a25f-7611-a4fe-c93cc2a6d782",
+                Some(&Permissions {
+                    allow_git_push: Some(false),
+                    ..Permissions::default()
+                }),
+                true,
+            ),
+            None
+        );
     }
 
     #[tokio::test]
@@ -824,11 +1079,12 @@ mod tests {
             .install(
                 "019fd32f-a25f-7611-a4fe-c93cc2a6d782",
                 Some(&permissions(ExecAccess::Custom, &["yarn install"])),
+                true,
             )
             .await
             .expect("declining to install is not a failure");
 
-        assert_eq!(installed, None);
+        assert_eq!(installed, Installed::default());
     }
 
     #[test]

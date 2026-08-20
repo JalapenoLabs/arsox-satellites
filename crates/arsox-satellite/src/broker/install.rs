@@ -1,6 +1,6 @@
 // Copyright © 2026 Jalapeno Labs
 
-//! Building one thread's shim directory on disk.
+//! Building one thread's gates on disk: the shim directory and the git hooks.
 //!
 //! Everything here is owned by the satellite, which inside the image means root,
 //! and none of it is writable by the agent. What the modes buy is stated with
@@ -28,13 +28,18 @@ const APPEND_ONLY: u32 = 0o1733;
 /// The policy file, which the agent may read and may not write.
 const READ_ONLY: u32 = 0o644;
 
-/// Builds `thread_root` into a shim directory for `policy`.
+/// Builds `thread_root` into the gates `policy` calls for.
 ///
 /// Idempotent, and cheap when nothing changed: a directory already holding
 /// exactly this policy is left alone. Otherwise it is **rebuilt rather than
 /// merged**, so a name allowed by the settings a change replaced cannot survive
 /// into the settings that replaced them. The spool is left alone either way,
 /// because a refusal recorded a moment ago is evidence and not stale state.
+///
+/// A gate the policy no longer calls for is removed rather than left behind:
+/// a thread whose settings stopped protecting a branch should stop paying for
+/// a hook, and a shim directory nothing points at is a name resolution waiting
+/// to surprise somebody.
 ///
 /// # Errors
 ///
@@ -66,49 +71,76 @@ pub(super) fn install(thread_root: &Path, policy: &Policy) -> io::Result<()> {
     }
 
     let shims = thread_root.join("bin");
+    let hooks = thread_root.join("hooks");
 
-    match std::fs::remove_dir_all(&shims) {
-        Ok(()) => {}
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        Err(error) => return Err(error),
-    }
+    remove(&shims)?;
+    remove(&hooks)?;
 
     create_directory(thread_root, READABLE)?;
-    create_directory(&shims, READABLE)?;
     create_directory(&policy.spool, APPEND_ONLY)?;
 
     write_file(
         &thread_root.join(super::POLICY_FILE),
         // Pretty rather than compact. It is read by a human debugging what a
-        // thread was actually allowed far more often than by the shim, and the
-        // shim does not care either way.
+        // thread was actually allowed far more often than by a gate, and no
+        // gate cares either way.
         &serde_json::to_string_pretty(policy).map_err(io::Error::other)?,
         READ_ONLY,
     )?;
 
-    // Two lines: the shebang the kernel acts on, and a sentence for whoever
-    // opens one of these wondering what it is.
-    let shim = format!(
-        "#!{interpreter} {}\n# An Arsox exec shim. See docs/enforcement.md.\n",
-        super::shim::SHIM_FLAG
-    );
+    if policy.exec.is_some() {
+        create_directory(&shims, READABLE)?;
 
-    for name in policy.shim_names(&super::image_commands(&policy.search_path)) {
-        write_file(&shims.join(name), &shim, READABLE)?;
+        // Two lines: the shebang the kernel acts on, and a sentence for whoever
+        // opens one of these wondering what it is.
+        let shim = entrypoint(interpreter, super::shim::SHIM_FLAG, "exec shim");
+
+        for name in policy.shim_names(&super::image_commands(&policy.search_path)) {
+            write_file(&shims.join(name), &shim, READABLE)?;
+        }
+    }
+
+    if policy.push.is_some() {
+        create_directory(&hooks, READABLE)?;
+
+        write_file(
+            &super::hook::path_in(&hooks),
+            &entrypoint(interpreter, super::hook::HOOK_FLAG, "pre-push hook"),
+            READABLE,
+        )?;
     }
 
     Ok(())
 }
 
-/// Whether the directory already holds exactly this policy.
+/// One gate's file: the shebang the kernel acts on, and a line saying what it is.
+fn entrypoint(interpreter: &str, flag: &str, what: &str) -> String {
+    format!("#!{interpreter} {flag}\n# An Arsox {what}. See docs/enforcement.md.\n")
+}
+
+/// Removes a directory, treating one that is already gone as removed.
+fn remove(path: &Path) -> io::Result<()> {
+    match std::fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+/// Whether the directory already holds exactly this policy, gates and all.
 ///
 /// Compared against the policy that was written rather than against a
 /// timestamp, so a settings change is what earns a rebuild and nothing else
-/// does. A missing shim directory always earns one: the broker root is not a
-/// volume, so a container replacement leaves a policy file with nothing beside
-/// it, and a thread resumed there must not silently lose its gate.
+/// does. A gate the policy calls for and the disk does not have always earns
+/// one: the broker root is not a volume, so a container replacement leaves a
+/// policy file with nothing beside it, and a thread resumed there must not
+/// silently lose its gate.
 fn already_installed(thread_root: &Path, policy: &Policy) -> bool {
-    thread_root.join("bin").is_dir()
+    let shims = policy.exec.is_none() || thread_root.join("bin").is_dir();
+    let hooks = policy.push.is_none() || super::hook::path_in(&thread_root.join("hooks")).is_file();
+
+    shims
+        && hooks
         && std::fs::read(thread_root.join(super::POLICY_FILE))
             .ok()
             .and_then(|body| serde_json::from_slice::<Policy>(&body).ok())
@@ -185,13 +217,28 @@ mod tests {
 
         let policy = Policy {
             thread_id: "019fd32f-a25f-7611-a4fe-c93cc2a6d782".to_owned(),
-            allowed: allowed.iter().copied().map(str::to_owned).collect(),
-            runtime: vec!["node".to_owned(), "env".to_owned(), "sh".to_owned()],
+            exec: Some(super::super::ExecPolicy {
+                allowed: allowed.iter().copied().map(str::to_owned).collect(),
+                runtime: vec!["node".to_owned(), "env".to_owned(), "sh".to_owned()],
+            }),
+            push: None,
             search_path: vec![image(commands)],
             spool: root.join("denied"),
         };
 
         (root, policy)
+    }
+
+    /// The same thread, gated on pushing as well.
+    fn also_gated_on_pushing(policy: &Policy) -> Policy {
+        Policy {
+            push: Some(super::super::push::PushPolicy {
+                allowed: false,
+                protected: vec!["main".to_owned()],
+                scan: None,
+            }),
+            ..policy.clone()
+        }
     }
 
     fn mode_of(path: &Path) -> u32 {
@@ -287,7 +334,7 @@ mod tests {
         install(&root, &policy).expect("should build");
         assert!(root.join("bin/docker").is_file());
 
-        policy.allowed = vec!["gh".to_owned()];
+        policy.exec.as_mut().expect("brokered").allowed = vec!["gh".to_owned()];
         install(&root, &policy).expect("should rebuild");
 
         assert!(root.join("bin/gh").is_file());
@@ -330,6 +377,89 @@ mod tests {
         install(&root, &policy).expect("should rebuild");
 
         assert!(root.join("bin/gh").is_file());
+
+        drop(std::fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn a_thread_gated_on_pushing_gets_a_hook_git_will_run() {
+        // Executable, outside every worktree, and pointing back at the
+        // satellite. A hook that was not executable would be skipped by git
+        // with no error at all, which is the worst way for a gate to fail.
+        let (root, policy) = thread(&[], &[]);
+        let policy = also_gated_on_pushing(&policy);
+
+        install(&root, &policy).expect("should build");
+
+        let hook = root.join("hooks/pre-push");
+        let written = std::fs::read_to_string(&hook).expect("should read");
+
+        assert_eq!(mode_of(&hook), READABLE);
+        assert!(written.starts_with("#!"), "{written}");
+        assert!(written.contains(super::super::hook::HOOK_FLAG), "{written}");
+        assert!(
+            !root.join("hooks").join(super::super::POLICY_FILE).exists(),
+            "the policy must not sit where git would try to run it as a hook"
+        );
+
+        drop(std::fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn a_thread_gated_on_only_one_thing_pays_for_only_that_gate() {
+        let (exec_only, policy) = thread(&["gh"], &[]);
+        install(&exec_only, &policy).expect("should build");
+
+        assert!(exec_only.join("bin/gh").is_file());
+        assert!(!exec_only.join("hooks").exists());
+
+        let (push_only, policy) = thread(&[], &[]);
+        let policy = Policy {
+            exec: None,
+            ..also_gated_on_pushing(&policy)
+        };
+        install(&push_only, &policy).expect("should build");
+
+        assert!(push_only.join("hooks/pre-push").is_file());
+        assert!(
+            !push_only.join("bin").exists(),
+            "a thread that named no exec policy keeps the satellite's own PATH"
+        );
+
+        drop(std::fs::remove_dir_all(&exec_only));
+        drop(std::fs::remove_dir_all(&push_only));
+    }
+
+    #[test]
+    fn a_gate_the_settings_dropped_does_not_survive_the_rebuild() {
+        // A thread that stopped protecting a branch should stop paying for a
+        // hook, and one whose hook outlived its policy would refuse pushes
+        // nothing asked it to refuse.
+        let (root, policy) = thread(&[], &[]);
+        let gated = also_gated_on_pushing(&policy);
+
+        install(&root, &gated).expect("should build");
+        assert!(root.join("hooks/pre-push").is_file());
+
+        install(&root, &policy).expect("should rebuild");
+        assert!(!root.join("hooks/pre-push").exists());
+
+        drop(std::fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn a_hook_that_went_missing_is_written_again() {
+        // The broker root is not a volume. A thread resumed on a new container
+        // finds its policy file and nothing beside it.
+        let (root, policy) = thread(&[], &[]);
+        let policy = also_gated_on_pushing(&policy);
+
+        install(&root, &policy).expect("should build");
+        std::fs::remove_dir_all(root.join("hooks")).expect("should remove");
+
+        install(&root, &policy).expect("should rebuild");
+
+        assert!(root.join("hooks/pre-push").is_file());
 
         drop(std::fs::remove_dir_all(&root));
     }
