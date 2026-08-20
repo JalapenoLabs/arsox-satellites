@@ -218,6 +218,52 @@ struct Consumed {
     /// a preamble announcing what the agent is about to do and closes with the
     /// answer, so taking the first would report the plan as the result.
     last_agent_message: Option<String>,
+
+    /// The harness session id this session has already written down.
+    ///
+    /// A harness names its session on more lines than one: Claude 2.1.237
+    /// repeats it on every `thinking_tokens` progress line, and writing each
+    /// sighting would be a database write per line, all storing the value the
+    /// one before it stored.
+    ///
+    /// Held on the session rather than on the turn, because a restart is a new
+    /// process and a restarted Codex process mints a fresh id that has to be
+    /// recorded. A turn-scoped memory would keep the dead session's id and leave
+    /// the thread unable to resume the live one.
+    recorded_session_id: Option<String>,
+}
+
+impl Consumed {
+    /// Whether this session id is news, saying so when it is a rename.
+    ///
+    /// The first sighting is what gets written. Every one after it repeats what
+    /// the thread already knows, which is the common case: a harness reporting
+    /// progress names its session on every line of it.
+    ///
+    /// **A sighting carrying a *different* id is not a correction to apply.**
+    /// The id the thread is already resuming into is the one its events belong
+    /// to, so a session that renamed itself mid-run is warned about and the
+    /// first id stands. A rename nobody can see would be the worse of the two.
+    fn first_sighting_of(&self, session_id: &str, at: Attribution<'_>) -> bool {
+        let Some(recorded) = self.recorded_session_id.as_deref() else {
+            return true;
+        };
+
+        if recorded != session_id {
+            tracing::warn!(
+                event.name = "turn.session.changed",
+                thread.id = at.thread_id,
+                turn.id = at.turn_id,
+                harness.session_id = recorded,
+                harness.reported_session_id = session_id,
+                "the harness reported {{harness.reported_session_id}} after \
+                 opening {{harness.session_id}}, and the session it opened is \
+                 the one being kept",
+            );
+        }
+
+        false
+    }
 }
 
 /// A harness process that ended by dying rather than by finishing.
@@ -543,7 +589,13 @@ impl Runner {
                 Ok(Some(claimed)) => {
                     let runner = self.clone();
                     tokio::spawn(async move {
-                        runner.run(claimed).await;
+                        // A turn's future is large by nature: it holds the
+                        // turn's context, its reading loop, and its checker
+                        // stage at once. Exactly one is created per turn,
+                        // beside a process spawn, so putting it on the heap
+                        // costs nothing measurable and keeps a turn's whole
+                        // state off this task's stack.
+                        Box::pin(runner.run(claimed)).await;
                         drop(permit);
                     });
                 }
@@ -1506,16 +1558,28 @@ impl Runner {
     ) {
         let mapping = map_line(harness, line);
 
+        // Written down the moment it first arrives, so a process that dies
+        // mid-turn still leaves the thread able to resume what it opened, and
+        // only then: a harness naming its session on every progress line would
+        // otherwise be a database write per line, each storing what the one
+        // before it stored.
         if let Some(session_id) = mapping.harness_session_id
-            && let Err(error) = self
+            && consumed.first_sighting_of(&session_id, at)
+        {
+            match self
                 .store
                 .set_harness_session(at.thread_id, &session_id)
                 .await
-        {
-            tracing::warn!(
-                event.name = "turn.session.unrecorded",
-                "could not record the harness session id: {error}",
-            );
+            {
+                // Marked only once the write landed, so a line naming the
+                // session again retries what a transient failure lost.
+                Ok(()) => consumed.recorded_session_id = Some(session_id),
+                Err(error) => tracing::warn!(
+                    event.name = "turn.session.unrecorded",
+                    thread.id = at.thread_id,
+                    "could not record the harness session id: {error}",
+                ),
+            }
         }
 
         for event in mapping.events {

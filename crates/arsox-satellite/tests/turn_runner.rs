@@ -52,6 +52,19 @@ const ERROR_RESULT_TRANSCRIPT: &str = concat!(
     "/../arsox-harness/fixtures/claude/2.1.237/error-result.stdout.jsonl"
 );
 
+/// A recording that names its session on four lines rather than one.
+///
+/// 2.1.237 reports reasoning progress as `system` lines and repeats the session
+/// id on every one, which is what makes "record it once" a claim worth testing
+/// against a real transcript rather than a constructed one.
+const REPEATED_SESSION_TRANSCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../arsox-harness/fixtures/claude/2.1.237/multi-message.stdout.jsonl"
+);
+
+/// The session id that recording announces, on each of those lines.
+const REPEATED_SESSION_ID: &str = "83526033-2860-40a4-a7cc-a84a263dbe5e";
+
 /// The session id that recording's `thread.started` announces.
 ///
 /// Minted by the CLI rather than chosen by the satellite, which is the whole
@@ -317,6 +330,108 @@ async fn the_harness_session_id_is_recorded_on_the_thread() {
         thread.harness_session_id.as_deref(),
         Some("0199c0de-1111-7000-8000-000000000001")
     );
+}
+
+#[tokio::test]
+async fn a_session_id_repeated_on_every_line_is_recorded_once() {
+    // 2.1.237 names its session on every progress line, and a write per line
+    // would be a write per line storing what the one before it stored. The count
+    // is the only thing that can tell one write from four: the row holds the
+    // same id either way.
+    let (harness, thread_id, turn_id) = start(&format!(
+        "run the probe [[transcript={REPEATED_SESSION_TRANSCRIPT}]]"
+    ))
+    .await;
+
+    settle(&harness.store, &thread_id, &turn_id).await;
+
+    assert_eq!(
+        harness.store.harness_session_writes(),
+        1,
+        "the transcript names its session four times"
+    );
+
+    let thread = harness.store.thread(&thread_id).await.expect("should read");
+    assert_eq!(
+        thread.harness_session_id.as_deref(),
+        Some(REPEATED_SESSION_ID),
+        "recording it once still has to record it"
+    );
+}
+
+#[tokio::test]
+async fn a_restarted_session_records_the_id_it_announces() {
+    // The memory belongs to the session rather than to the turn. A restarted
+    // Codex process mints a fresh id, and a turn-scoped memory would keep the
+    // dead session's and leave the thread resuming a conversation that no longer
+    // exists.
+    //
+    // `truncate` is the ending that reaches this: the harness announces its
+    // session and then stops without reporting a result, which is a restart, and
+    // the session that replaces it announces itself in turn. Both replay one
+    // recording here, so the proof is the second write happening at all.
+    let (harness, thread_id, turn_id) = start("run the probe [[truncate=3]]").await;
+
+    settle(&harness.store, &thread_id, &turn_id).await;
+
+    assert_eq!(
+        harness.store.harness_session_writes(),
+        2,
+        "one session announced itself, was restarted, and the new one announced \
+         itself too"
+    );
+}
+
+#[tokio::test]
+async fn a_session_id_that_changes_mid_session_keeps_the_one_it_opened() {
+    // A recording with one field changed, because no CLI is known to rename a
+    // session mid-run and a fixture must stay a recording. The id a thread
+    // resumes into is the one its events belong to, so a later, different id is
+    // warned about rather than obeyed.
+    let scratch = tempdir::TempDir::new("renamed-session");
+    let renamed = scratch.path().join("renamed.stdout.jsonl");
+    std::fs::write(&renamed, transcript_renaming_its_session()).expect("should write");
+
+    let (harness, thread_id, turn_id) = start(&format!(
+        "run the probe [[transcript={}]]",
+        renamed.display()
+    ))
+    .await;
+
+    settle(&harness.store, &thread_id, &turn_id).await;
+
+    let thread = harness.store.thread(&thread_id).await.expect("should read");
+    assert_eq!(
+        thread.harness_session_id.as_deref(),
+        Some(REPEATED_SESSION_ID),
+        "the first sighting is the session the turn opened"
+    );
+    assert_eq!(
+        harness.store.harness_session_writes(),
+        1,
+        "a rename is reported, not written"
+    );
+}
+
+/// The repeated-session recording, with its last progress line renamed.
+///
+/// One field of one line, so everything else about the transcript is still the
+/// bytes a CLI produced.
+fn transcript_renaming_its_session() -> String {
+    let recorded = std::fs::read_to_string(REPEATED_SESSION_TRANSCRIPT).expect("should read");
+
+    let renamed: Vec<String> = recorded
+        .lines()
+        .map(|line| {
+            if line.contains(r#""subtype":"thinking_tokens""#) {
+                line.replace(REPEATED_SESSION_ID, "00000000-dead-4000-8000-000000000000")
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect();
+
+    renamed.join("\n")
 }
 
 #[tokio::test]

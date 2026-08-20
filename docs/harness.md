@@ -203,6 +203,23 @@ absorbed in the spawn rather than in the runner:
 Either way the thread's second turn continues the session its first turn opened,
 which is the only part of this the rest of the satellite is written against.
 
+**The id is written down once per session, not once per line naming it.** A
+harness names its session on more lines than one: Claude 2.1.237 repeats it on
+every `thinking_tokens` progress line, and a write per sighting is a database
+write per line, each storing what the one before it stored. The first sighting
+wins, and it is written the moment it arrives rather than at the end, so a
+process that dies mid-turn still leaves the thread able to resume what it opened.
+
+A later sighting carrying a **different** id is warned about rather than obeyed.
+The id a thread is already resuming into is the one its events belong to, and a
+session that renamed itself mid-run is a fact worth seeing rather than a
+correction to apply.
+
+The memory is per session, so a restart records the id its new process
+announces. A turn-scoped one would keep the dead session's id, which for Codex,
+where a restarted CLI mints a fresh one, would leave the thread resuming a
+conversation that no longer exists.
+
 **Cancellation is a database write, not a signal.** It arrives as an ordinary
 HTTP request, so the runner learns about it by asking every so often rather than
 being interrupted. Checking every line would be a query per line of output.
