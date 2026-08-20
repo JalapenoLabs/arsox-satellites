@@ -143,7 +143,7 @@ What is recorded today:
 |---|---|---|
 | Claude | 2.1.221 | `tool-call` |
 | Claude | 2.1.237 | `plain-text`, `tool-call`, `error-result`, `multi-message` |
-| Codex | 0.147.0 | `tool-call`, `auth-failure` |
+| Codex | 0.147.0 | `plain-text`, `tool-call`, `command-declined`, `auth-failure` |
 
 **Both Claude versions stay.** A recording proves the version that produced it
 and nothing else, so a newer CLI earns a new directory rather than an edit to the

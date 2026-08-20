@@ -34,6 +34,8 @@ transcript nobody recorded is a guess wearing evidence's clothes.
 | `claude/2.1.237/multi-message` | Recorded live from Claude CLI 2.1.237, ten lines, `system` init line scrubbed. |
 | `codex/0.147.0/auth-failure` | Recorded from Codex 0.147.0 in full, four lines, scrubbed of the thread id and the transport detail in the message. |
 | `codex/0.147.0/tool-call` | Recorded from Codex 0.147.0 in full, nine lines, live run, unscrubbed. See below. |
+| `codex/0.147.0/plain-text` | Recorded live from Codex 0.147.0 in full, four lines, unscrubbed. |
+| `codex/0.147.0/command-declined` | Recorded live from Codex 0.147.0 in full, seven lines, unscrubbed. See below. |
 
 `claude/2.1.221` is named for the `claude_code_version` the transcript itself
 reports. `docs/core-crates.md` records a measurement against 2.1.226, a later
@@ -94,7 +96,7 @@ Everything else is the bytes the CLI wrote, `error-result` included, which is
 unscrubbed in full. The session ids, the scratch `cwd`, the message ids, and the
 thinking signature are all about the run rather than about a person.
 
-### The recorded Codex fixture
+### The recorded Codex fixtures
 
 `codex/0.147.0/tool-call.stdout.jsonl` is nine lines of stdout from a live
 `codex exec --json` run, driven by the 0.147.0 binary against a throwaway git
@@ -119,10 +121,31 @@ recording:
   answer, which is what makes "the last one is the summary" load-bearing rather
   than incidental.
 
-Two shapes the mapper handles are absent from this recording, and each is
+Two shapes the mapper handles are absent from every Codex recording, and each is
 asserted instead as a unit test in `codex.rs` that says which of the two it is:
-a `reasoning` item, because the turn reasoned nothing, and an `item.updated`. A
-fixture is not staged into producing a shape a real run did not produce.
+a `reasoning` item, because no captured turn emitted one, and an `item.updated`.
+A fixture is not staged into producing a shape a real run did not produce.
+
+`plain-text.stdout.jsonl` is the same run with the tools taken away: four lines,
+three of them lifecycle, and one `agent_message`. It is the shortest complete
+turn the CLI produces, and it is also the case where "the last agent message is
+the summary" and "the first one is" agree, which is exactly why the tool-call
+recording is what carries that rule.
+
+`command-declined.stdout.jsonl` is seven lines from a run whose shell command the
+sandbox refused. It is worth its place for two reasons:
+
+- **A refusal is a tool call that failed, not a turn that failed.** The agent was
+  told the command was `rejected: blocked by policy`, answered anyway, and the
+  turn completed. A mapper that ended the run here would fail turns that
+  finished.
+- **It carries a status the other recordings do not.** The item completes with
+  `"status": "declined"` and `"exit_code": -1`. The mapper's exit code check
+  happens to catch that, so the status is now named outright rather than left to
+  luck, and a declined item with no exit code would still be a failed call.
+
+It also reports `reasoning_output_tokens: 10`, which is what makes the zero in
+the tool-call recording a measurement rather than a mapper's default.
 
 Two usage fields are worth naming, because they are zero for opposite reasons.
 The run reported `cache_write_input_tokens: 0`, and the mapper maps that zero to
@@ -178,6 +201,12 @@ Every flag there is load-bearing:
   Under the defaults a write is refused, and the transcript records the refusal
   rather than the tool call you wanted. Point it at a throwaway directory.
 - `< /dev/null`. Otherwise `exec` waits on stdin for a prompt it already has.
+
+**The sandbox is part of the scenario, not boilerplate.** `-s read-only` is
+enough for a prompt that asks for no tool and keeps the run from touching
+anything; `-s workspace-write` is what recorded the declined command, since a
+refusal needs a policy that actually refuses. Widen it only as far as the
+scenario needs.
 
 Scrub what is about the person capturing rather than about the harness:
 credentials, home directory paths, and their installed tooling. A scratch path
