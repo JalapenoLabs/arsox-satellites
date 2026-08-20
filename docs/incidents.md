@@ -62,12 +62,65 @@ is encoded, and `record_incident` masks the row. A thread's secrets are therefor
 absent from the frame and from the row, and the two cannot disagree about what a
 consumer was allowed to see. See [redaction](./redaction.md).
 
+## Reading them back
+
+| Surface | What it answers |
+|---|---|
+| the `incident` event on the thread socket | what is going wrong right now |
+| `TurnResult.incident_counts` | how much went wrong in this turn, by disposition |
+| `GET /v1/threads/{id}/incidents` | what went wrong on this thread |
+| `GET /v1/incidents` | what went wrong anywhere on this satellite |
+
+Both listings take the contract's filters: thread, turn, member, code,
+disposition, and a time range. Every filter is "match any of these", and an empty
+one does not filter rather than matching nothing, so the request a caller sends
+first returns everything instead of nothing.
+
+The thread-scoped route pins the thread to the path rather than reading it from
+the body, so the URL says what it looks like it says. A caller wanting several
+threads at once has the wide endpoint.
+
+In the Rust SDK both are `incidents(IncidentQuery)`, on the satellite and on a
+thread handle. The query takes codes and dispositions as typed enums and defaults
+to asking for everything.
+
+**The counts are a query, not a tally.** Incidents reach the database from the
+runner, the harness mappers, and the LLM proxy, so a counter kept beside them
+would report the subset one of the three happened to see. They are counted at the
+one point every ending of a turn passes through, past the last incident any path
+records, which is why a turn stopped by a ceiling and a turn whose harness never
+launched both report what actually happened.
+
+**Every report carries counts, including zeroes.** "Not counted" and "nothing
+went wrong" are different facts, and an absent message would collapse them into
+the first.
+
+### Paging
+
+Oldest first, with the sort key travelling in the cursor. Incidents order by when
+they happened and a timestamp is not unique, so a cursor carrying only the time
+would repeat or skip whatever shares a nanosecond with the row at a page
+boundary. The pair is what makes paging total, and it is the same format thread
+listings use.
+
+Time windows are half-open: at or after `occurred_after`, strictly before
+`occurred_before`. An operator walking a log an hour at a time then sees every
+incident exactly once rather than seeing the boundary ones in both windows.
+
+There is deliberately no sort order to choose. The contract defines none, and
+inventing one on the satellite would be a field no SDK could name.
+
 ## Incidents outlive their thread
 
 The table carries no foreign key to `threads` and collection never touches it.
 This is the one thing in a thread's life that is deliberately not ephemeral: the
 workspace, the turns, and the event log all go when the thread is collected, and
 the evidence stays.
+
+**No listing asks whether a thread is alive**, and that is the point rather than
+an oversight. Filtering on an expired or destroyed thread returns its incidents
+rather than `THREAD_EXPIRED`, because "why did last night's run go wrong" is
+asked precisely when the workspace is already gone.
 
 ## Roadmap
 
@@ -78,3 +131,5 @@ the evidence stays.
 - **`details` on more incidents.** Provisioning failures carry the repo, the
   command, its exit code, and its output. The runner's own incidents carry a
   message and nothing structured.
+- **`total` on a listing page**, which is absent today because counting every
+  match would mean a second scan on every page.

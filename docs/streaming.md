@@ -69,6 +69,16 @@ The store owns the publish rather than leaving it to callers, because a publish
 that can be forgotten at one call site is a subscriber that silently misses
 events.
 
+## Incidents ride the same append
+
+Every incident is written to the database and put on its thread's stream by one
+store call, so a failure cannot land in one and miss the other. The event goes
+first, which is what lets the row carry the sequence its frame landed at.
+
+Satellite-scoped incidents reach no thread socket, because they belong to no
+thread and these sockets carry thread content only. See
+[incidents](./incidents.md).
+
 ## JSON frames
 
 Documented in the README as a debugging affordance for hand-driven clients, and
