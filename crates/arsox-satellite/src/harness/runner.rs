@@ -43,7 +43,9 @@
 //! place, so the second ending fails the turn with `HARNESS_IDLE_TIMEOUT` or
 //! `HARNESS_CRASHED`, whichever it was.
 
-use crate::harness::spawn::{HarnessCommand, ModelAccess, Session, command_for, process_for};
+use crate::harness::spawn::{
+    Grants, HarnessCommand, ModelAccess, Session, command_for, process_for,
+};
 use crate::harness::{HarnessResult, Mapping, accounting, checkers, claude, codex};
 use crate::proxy::budget::{Ceilings, Crossing, Meter};
 use crate::redaction::Redactor;
@@ -470,10 +472,27 @@ impl WallClock {
 /// same object it already was. A second grant would spend outside the ceiling, a
 /// second meter would restart the count, and a second wall clock would extend
 /// the deadline. Passing one value makes that structural instead of remembered.
+/// What a turn needs on disk before its first session starts.
+#[derive(Debug)]
+struct Prepared {
+    /// Where every session in the turn runs.
+    working_dir: PathBuf,
+
+    /// The thread's shim directory, when the exec broker engaged for it.
+    shims: Option<PathBuf>,
+}
+
 #[derive(Debug)]
 struct TurnContext {
     harness: Harness,
     working_dir: PathBuf,
+
+    /// The thread's shim directory, when the exec broker engaged for it.
+    ///
+    /// Becomes the agent's whole `PATH`. Absent for a thread that declared no
+    /// exec policy and for every satellite that cannot separate privilege, both
+    /// of which keep the satellite's own `PATH` exactly as they always have.
+    shims: Option<PathBuf>,
 
     /// The turn's admission to the model, minted once and revoked once.
     access: ModelAccess,
@@ -585,6 +604,9 @@ pub struct Runner {
 
     /// The chokepoint every model request traverses.
     proxy: crate::proxy::LlmProxy,
+
+    /// The shim directories that decide what a brokered agent's shell reaches.
+    broker: crate::broker::Broker,
 }
 
 impl Runner {
@@ -597,6 +619,7 @@ impl Runner {
         max_concurrent_threads: u32,
         collector: Arc<crate::collector::Collector>,
         proxy: crate::proxy::LlmProxy,
+        broker: crate::broker::Broker,
     ) -> Self {
         Self {
             store,
@@ -605,6 +628,7 @@ impl Runner {
             capacity: Arc::new(Semaphore::new(max_concurrent_threads as usize)),
             collector,
             proxy,
+            broker,
         }
     }
 
@@ -781,12 +805,12 @@ impl Runner {
     /// wearing the first one's name, spending past the ceiling the first one set.
     async fn drive(&self, claimed: &ClaimedTurn) -> Result<(TurnStatus, TurnResult), Failure> {
         let ceilings = Ceilings::from_budget(claimed.settings.budget.as_ref());
-        let working_dir = self.prepare(claimed, &ceilings).await?;
+        let prepared = self.prepare(claimed, &ceilings).await?;
 
         // The guard is held here rather than inside `open`, because the grant
         // has to outlive every session in the turn, the checker fix cycle
         // included, and be withdrawn however the turn ends.
-        let (mut context, _grant) = self.open(claimed, &ceilings, working_dir).await;
+        let (mut context, _grant) = self.open(claimed, &ceilings, prepared).await;
 
         let consumed = self
             .session_with_restart(claimed, &mut context, &claimed.turn.prompt)
@@ -879,12 +903,12 @@ impl Runner {
     /// Everything that has to hold before a harness is spawned.
     ///
     /// Returns the thread's working directory, which is where every session in
-    /// the turn runs.
+    /// the turn runs, and its shim directory when the exec broker engaged.
     async fn prepare(
         &self,
         claimed: &ClaimedTurn,
         ceilings: &Ceilings,
-    ) -> Result<PathBuf, Failure> {
+    ) -> Result<Prepared, Failure> {
         let thread_id = &claimed.turn.thread_id;
 
         // Checked before anything is spawned. A thread that has already spent
@@ -912,7 +936,56 @@ impl Runner {
                 )
             })?;
 
-        Ok(working_dir)
+        Ok(Prepared {
+            shims: self.install_broker(claimed).await,
+            working_dir,
+        })
+    }
+
+    /// Rebuilds the thread's shim directory from the settings it holds now.
+    ///
+    /// **Per turn rather than once at thread creation**, which is the one place
+    /// that cannot be wrong. The shim directories live outside both volumes, so
+    /// they do not survive a container replacement, and a thread resumed on a
+    /// new container must not silently lose its gate. Re-asserting also means a
+    /// thread runs under its current allowlist rather than the one it was
+    /// created with. It is idempotent and rebuilds only when the policy changed
+    /// or the directory is gone.
+    ///
+    /// A directory that will not build leaves the thread unbrokered, and says so
+    /// as a `degraded` incident. Failing the turn instead would take a thread
+    /// out over a gate the satellite could not raise, and running it silently
+    /// unbrokered is exactly the quiet loss of enforcement this records against.
+    async fn install_broker(&self, claimed: &ClaimedTurn) -> Option<PathBuf> {
+        let thread_id = &claimed.turn.thread_id;
+
+        match self
+            .broker
+            .install(thread_id, claimed.settings.permissions.as_ref())
+            .await
+        {
+            Ok(shims) => shims,
+            Err(error) => {
+                tracing::error!(
+                    event.name = "broker.install.failed",
+                    thread.id = %thread_id,
+                    "could not build the thread's exec shim directory: {error}",
+                );
+
+                self.record_incident(
+                    Attribution::of(claimed),
+                    ErrorCode::Internal,
+                    Disposition::Degraded,
+                    false,
+                    &format!(
+                        "the exec broker could not be installed, so this turn runs with the                          satellite's own PATH and its exec policy is advisory only: {error}"
+                    ),
+                )
+                .await;
+
+                None
+            }
+        }
     }
 
     /// Mints the turn's admission to the model, and the context its sessions
@@ -930,7 +1003,7 @@ impl Runner {
         &self,
         claimed: &ClaimedTurn,
         ceilings: &Ceilings,
-        working_dir: PathBuf,
+        prepared: Prepared,
     ) -> (TurnContext, RevokeOnDrop) {
         let (crossings, reported) = mpsc::unbounded_channel();
         let (incidents, reported_incidents) = mpsc::unbounded_channel();
@@ -957,7 +1030,8 @@ impl Runner {
 
         let context = TurnContext {
             harness: Harness::try_from(claimed.settings.harness).unwrap_or(Harness::Claude),
-            working_dir,
+            working_dir: prepared.working_dir,
+            shims: prepared.shims,
             access: ModelAccess {
                 base_url: self.proxy.base_url_for(&token),
                 token: token.clone(),
@@ -1023,7 +1097,16 @@ impl Runner {
             let command = self.command_for_turn(claimed, context, prompt).await;
             let consumed = self
                 .run_session(&command, thread_id, turn_id, context)
-                .await?;
+                .await;
+
+            // Before the `?`, because a session that ended in a failure is
+            // exactly the one whose refusals explain why. Draining here rather
+            // than on a timer is what attributes each of them to this turn: a
+            // refusal carries no turn id of its own, and this is the one place
+            // that knows which turn was running when it happened.
+            self.report_denials(claimed, context).await;
+
+            let consumed = consumed?;
 
             let Some(wedged) = Wedged::of(&consumed) else {
                 return Ok(consumed);
@@ -1141,7 +1224,10 @@ impl Runner {
             prompt,
             &session,
             context.working_dir.clone(),
-            Some(context.access.clone()),
+            &Grants {
+                model: Some(context.access.clone()),
+                exec_broker: context.shims.clone(),
+            },
             &claimed.settings.env,
             // Read per turn rather than held on the runner, so a thread's
             // posture is whatever its settings say now.
@@ -1958,6 +2044,64 @@ impl Runner {
             at.redactor,
         )
         .await;
+    }
+
+    /// Turns every refusal the thread's shims recorded into a blocked incident.
+    ///
+    /// **`blocked` rather than `degraded`**, because a permission gate closing
+    /// is the system working as designed. It is still worth an incident: an
+    /// agent that reached for `docker build`, was refused, and quietly worked
+    /// around it is almost always telling you the allowlist or the setup script
+    /// is wrong, and that is the evidence a suggestion is later built on.
+    ///
+    /// Not retryable. The same argv meets the same allowlist next time, and a
+    /// caller told to retry would be told to retry forever.
+    async fn report_denials(&self, claimed: &ClaimedTurn, context: &TurnContext) {
+        // A thread with no shim directory has no spool, so this costs it one
+        // absent-path read that the drain already answers with nothing.
+        if context.shims.is_none() {
+            return;
+        }
+
+        for denial in self.broker.drain_denials(&claimed.turn.thread_id).await {
+            let mut fields = std::collections::BTreeMap::new();
+            fields.insert(
+                "argv".to_owned(),
+                prost_types::Value {
+                    kind: Some(prost_types::value::Kind::ListValue(
+                        prost_types::ListValue {
+                            values: denial.argv.iter().cloned().map(text).collect(),
+                        },
+                    )),
+                },
+            );
+            fields.insert("command".to_owned(), text(denial.name.clone()));
+
+            self.report_incident(
+                Incident {
+                    incident_id: uuid::Uuid::now_v7().to_string(),
+                    sequence: None,
+                    thread_id: Some(claimed.turn.thread_id.clone()),
+                    turn_id: Some(claimed.turn.turn_id.clone()),
+                    // The exec broker is per thread. Attributing a refusal to a
+                    // member waits for members to exist and for a shim to be
+                    // able to tell which one invoked it.
+                    member_id: None,
+                    code: ErrorCode::PermissionCommandDenied.into(),
+                    disposition: Disposition::Blocked.into(),
+                    retryable: false,
+                    message: format!("`{}` {}", denial.invocation(), denial.reason),
+                    details: Some(prost_types::Struct {
+                        fields: fields.into_iter().collect(),
+                    }),
+                    // The shim's clock rather than this drain's, so a refusal
+                    // is not reported as having happened when its session ended.
+                    occurred_at: Some(denial.occurred_at()),
+                },
+                &claimed.redactor,
+            )
+            .await;
+        }
     }
 
     /// Counts a turn's incidents by disposition, for its report.

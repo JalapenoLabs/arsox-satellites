@@ -89,6 +89,9 @@ async fn start() -> String {
         allow_insecure: false,
         database_path: directory.join("arsox.db").to_string_lossy().into_owned(),
         workspace_root: directory.to_string_lossy().into_owned(),
+        // Under the test's scratch root. Nothing is installed into it: a test
+        // process is not a root satellite, so the broker declines to engage.
+        broker_root: directory.join("broker").to_string_lossy().into_owned(),
         max_concurrent_threads: 2,
         // Inert here: this test assembles the router and binds its own ephemeral
         // listener below rather than calling `serve`.

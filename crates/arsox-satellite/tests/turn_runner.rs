@@ -194,10 +194,16 @@ async fn start_prepared(
         .expect("should queue a turn")
         .turn;
 
+    // Under this test's own root rather than the image's. Nothing is installed
+    // into it: a test process is not a root satellite, so the broker declines to
+    // engage and the harness runs with the satellite's own PATH.
+    let broker = arsox_satellite::broker::Broker::at(workspace.path().join("broker"));
+
     let collector = Arc::new(Collector::new(
         store.clone(),
         workspace.path().to_path_buf(),
         EventBus::new(),
+        broker.clone(),
     ));
 
     let runner = Runner::new(
@@ -209,6 +215,7 @@ async fn start_prepared(
         arsox_satellite::proxy::LlmProxy::start()
             .await
             .expect("should start the proxy"),
+        broker,
     );
     tokio::spawn(runner.dispatch());
 

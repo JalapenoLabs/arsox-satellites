@@ -85,6 +85,15 @@ const DEFAULT_MAX_CONCURRENT_THREADS: u32 = 4;
 /// replacement otherwise, which silently breaks thread resumption.
 const DEFAULT_WORKSPACE_ROOT: &str = "/workspace";
 
+/// Where the exec broker keeps its shim directories when `ARSOX_BROKER_ROOT` is
+/// unset.
+///
+/// Deliberately not a volume. A shim directory is rebuilt from the thread's
+/// settings at the start of every turn, so nothing in it is worth surviving a
+/// container replacement, and putting it on the workspace volume would put the
+/// gate inside the one tree the agent owns.
+const DEFAULT_BROKER_ROOT: &str = broker::DEFAULT_BROKER_ROOT;
+
 /// Where the embedded database lives when `ARSOX_DB_PATH` is unset.
 ///
 /// Inside the container this directory is expected to be a named volume.
@@ -478,6 +487,10 @@ pub struct ServeOptions {
     pub allow_insecure: bool,
     pub database_path: String,
     pub workspace_root: String,
+
+    /// Where the exec broker keeps its per-thread shim directories.
+    pub broker_root: String,
+
     pub max_concurrent_threads: u32,
 
     /// TCP port to listen on, defaulting to 8080.
@@ -503,6 +516,8 @@ impl ServeOptions {
                 .unwrap_or_else(|_ignored| DEFAULT_DB_PATH.to_owned()),
             workspace_root: std::env::var("ARSOX_WORKSPACE_ROOT")
                 .unwrap_or_else(|_ignored| DEFAULT_WORKSPACE_ROOT.to_owned()),
+            broker_root: std::env::var("ARSOX_BROKER_ROOT")
+                .unwrap_or_else(|_ignored| DEFAULT_BROKER_ROOT.to_owned()),
             max_concurrent_threads: env_u32(
                 "ARSOX_MAX_CONCURRENT_THREADS",
                 DEFAULT_MAX_CONCURRENT_THREADS,
@@ -560,6 +575,7 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
     privilege::announce();
 
     let bus = stream::EventBus::new();
+    let broker = broker::Broker::at(std::path::PathBuf::from(&options.broker_root));
 
     let store = store::Store::open(&options.database_path)
         .await
@@ -601,6 +617,7 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
         store.clone(),
         std::path::PathBuf::from(&options.workspace_root),
         bus.clone(),
+        broker.clone(),
     ));
     tokio::spawn(Arc::clone(&collector).sweep_forever(options.collect_interval));
 
@@ -615,6 +632,7 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
         options.max_concurrent_threads,
         Arc::clone(&collector),
         proxy,
+        broker.clone(),
     );
     tokio::spawn(runner.dispatch());
 

@@ -30,11 +30,11 @@ const READ_ONLY: u32 = 0o644;
 
 /// Builds `thread_root` into a shim directory for `policy`.
 ///
-/// Idempotent by rebuilding: the shim directory is removed and written again, so
-/// a thread reprovisioned after a restart runs under its current settings rather
-/// than under those settings merged onto whatever was there. The spool is left
-/// alone, because a refusal recorded a moment ago is evidence and not stale
-/// state.
+/// Idempotent, and cheap when nothing changed: a directory already holding
+/// exactly this policy is left alone. Otherwise it is **rebuilt rather than
+/// merged**, so a name allowed by the settings a change replaced cannot survive
+/// into the settings that replaced them. The spool is left alone either way,
+/// because a refusal recorded a moment ago is evidence and not stale state.
 ///
 /// # Errors
 ///
@@ -58,10 +58,15 @@ pub(super) fn install(thread_root: &Path, policy: &Policy) -> io::Result<()> {
         )));
     }
 
+    // Every turn re-asserts its thread's policy, and a rebuild is a file per
+    // command name the image carries. A thread whose settings have not moved
+    // should not pay for one on every turn it runs.
+    if already_installed(thread_root, policy) {
+        return Ok(());
+    }
+
     let shims = thread_root.join("bin");
 
-    // Rebuilt rather than merged. A name allowed by the settings a restart
-    // replaced must not survive into the settings that replaced them.
     match std::fs::remove_dir_all(&shims) {
         Ok(()) => {}
         Err(error) if error.kind() == io::ErrorKind::NotFound => {}
@@ -93,6 +98,21 @@ pub(super) fn install(thread_root: &Path, policy: &Policy) -> io::Result<()> {
     }
 
     Ok(())
+}
+
+/// Whether the directory already holds exactly this policy.
+///
+/// Compared against the policy that was written rather than against a
+/// timestamp, so a settings change is what earns a rebuild and nothing else
+/// does. A missing shim directory always earns one: the broker root is not a
+/// volume, so a container replacement leaves a policy file with nothing beside
+/// it, and a thread resumed there must not silently lose its gate.
+fn already_installed(thread_root: &Path, policy: &Policy) -> bool {
+    thread_root.join("bin").is_dir()
+        && std::fs::read(thread_root.join(super::POLICY_FILE))
+            .ok()
+            .and_then(|body| serde_json::from_slice::<Policy>(&body).ok())
+            .is_some_and(|written| &written == policy)
 }
 
 /// Creates a directory at exactly `mode`, whatever the umask says.
@@ -275,6 +295,41 @@ mod tests {
             !root.join("bin/docker").is_file(),
             "a shim from the previous settings survived the rebuild"
         );
+
+        drop(std::fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn an_unchanged_thread_does_not_pay_for_a_rebuild_every_turn() {
+        // Every turn re-asserts its policy, and a rebuild is a file per command
+        // name the image carries.
+        let (root, policy) = thread(&["gh"], &[]);
+        install(&root, &policy).expect("should build");
+
+        let marker = root.join("bin/left-behind-by-the-test");
+        std::fs::write(&marker, b"").expect("should write");
+        install(&root, &policy).expect("should decline to rebuild");
+
+        assert!(
+            marker.is_file(),
+            "the directory was rebuilt for a policy that had not changed"
+        );
+
+        drop(std::fs::remove_dir_all(&root));
+    }
+
+    #[test]
+    fn a_shim_directory_that_went_missing_is_built_again() {
+        // The broker root is not a volume, so a container replacement leaves a
+        // policy file with nothing beside it. A thread resumed there must not
+        // silently lose its gate.
+        let (root, policy) = thread(&["gh"], &[]);
+        install(&root, &policy).expect("should build");
+        std::fs::remove_dir_all(root.join("bin")).expect("should remove");
+
+        install(&root, &policy).expect("should rebuild");
+
+        assert!(root.join("bin/gh").is_file());
 
         drop(std::fs::remove_dir_all(&root));
     }
