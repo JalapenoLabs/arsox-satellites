@@ -450,24 +450,68 @@ async fn a_thread_returns_to_idle_once_its_turn_finishes() {
 }
 
 #[tokio::test]
-async fn a_harness_that_exits_nonzero_fails_the_turn_with_a_reason() {
+async fn a_harness_that_reports_its_result_and_then_exits_nonzero_keeps_the_result() {
+    // A reported result is a statement about the work. Discarding it because the
+    // process that made it then exited badly would throw away the answer the
+    // satellite was given and charge a session to hear it again.
     let (harness, thread_id, turn_id) = start("run the probe [[exit=3]]").await;
 
-    let status = settle(&harness.store, &thread_id, &turn_id).await;
-    assert_eq!(status, TurnStatus::Failed);
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Completed,
+        "the harness said what it did, and the turn reports it"
+    );
 
-    let (_turn, result) = harness
-        .store
-        .turn(&thread_id, &turn_id)
-        .await
-        .expect("should read");
-    let result = result.expect("even a failed turn carries a result");
-    let error = result.error.expect("a failed turn says why");
+    let result = result_of(&harness.store, &thread_id, &turn_id).await;
+    assert!(
+        result.error.is_none(),
+        "the result stands: {:?}",
+        result.error
+    );
+    assert!(
+        !result.summary.is_empty(),
+        "the summary the harness reported survives its exit"
+    );
+
+    // The messy ending is a fact worth seeing rather than a reason to redo the
+    // work, so it is recorded with the evidence a crash carries.
+    let recorded = incidents_coded(&harness.store, &thread_id, ErrorCode::HarnessCrashed).await;
+    assert_eq!(recorded.len(), 1, "one bad exit, one incident");
+    assert_eq!(
+        recorded[0].disposition,
+        i32::from(arsox_sdk::proto::incident::v1::Disposition::Degraded),
+        "the work happened; what is missing is a clean shutdown"
+    );
+    assert!(
+        !recorded[0].retryable,
+        "the work is done and reported, so a second turn would redo it"
+    );
+
+    let evidence = recorded[0]
+        .details
+        .as_ref()
+        .expect("the exit is only readable afterwards if it was captured");
+    assert_eq!(number_field(evidence, "exit_code"), Some(3.0));
+}
+
+#[tokio::test]
+async fn a_harness_that_exits_nonzero_without_a_result_still_fails_the_turn() {
+    // The other side of the boundary, and the one a restart is for. A process
+    // that died before saying what it did left nothing to honor, so it is
+    // replaced, and a second death ends the turn.
+    let (harness, thread_id, turn_id) = start("run the probe [[truncate=3]] [[exit=3]]").await;
 
     assert_eq!(
-        error.code,
-        i32::from(arsox_sdk::proto::error::v1::ErrorCode::HarnessCrashed)
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Failed
     );
+
+    let error = result_of(&harness.store, &thread_id, &turn_id)
+        .await
+        .error
+        .expect("a failed turn says why");
+
+    assert_eq!(error.code, i32::from(ErrorCode::HarnessCrashed));
     // A crashed harness is worth retrying; a malformed request is not.
     assert!(error.retryable);
 }
@@ -1107,10 +1151,12 @@ async fn a_restarted_crash_records_the_recovery_with_the_code_it_died_on() {
 
 #[tokio::test]
 async fn a_harness_that_crashes_every_time_fails_the_turn_and_says_what_it_died_of() {
-    // One restart, never two. `exit` dies on every run, so the second death is
-    // the turn's ending, and it carries the evidence somebody needs to act on it
-    // without reproducing the run.
-    let (harness, thread_id, turn_id) = start("run the probe [[exit=3]]").await;
+    // One restart, never two. `truncate` with `exit` dies before reporting a
+    // result on every run, so the second death is the turn's ending, and it
+    // carries the evidence somebody needs to act on it without reproducing the
+    // run. Truncated on purpose: a death after a result is honored rather than
+    // restarted, which is a different ending entirely.
+    let (harness, thread_id, turn_id) = start("run the probe [[truncate=3]] [[exit=3]]").await;
 
     assert_eq!(
         settle(&harness.store, &thread_id, &turn_id).await,
@@ -1151,8 +1197,9 @@ async fn a_harness_that_crashes_every_time_fails_the_turn_and_says_what_it_died_
         .expect("the fatal incident carries the exit code and the last output");
     assert_eq!(number_field(evidence, "exit_code"), Some(3.0));
     assert!(
-        text_field(evidence, "output_tail").is_some_and(|tail| tail.contains("result")),
-        "the tail should hold what the process said last: {:?}",
+        text_field(evidence, "output_tail").is_some_and(|tail| tail.contains("assistant")),
+        "the tail should hold what the process said last, which is the third \
+         line of the recording: {:?}",
         text_field(evidence, "output_tail")
     );
 }
@@ -1194,8 +1241,11 @@ async fn an_idle_restart_and_a_crash_spend_one_budget_between_them() {
     // One budget for the turn, across both causes. What it bounds is process
     // instability inside a turn, and a harness that hung, was restarted, and
     // then died is unstable twice however differently the two endings read.
+    //
+    // The second session dies before reporting a result, since a death after one
+    // is honored rather than restarted and would prove nothing about the budget.
     let (harness, thread_id, turn_id) = start_with(
-        "run the probe [[hang_once=5000]] [[exit=4]]",
+        "run the probe [[hang_once=5000]] [[truncate=3]] [[exit=4]]",
         idle_bound_of(300),
     )
     .await;
@@ -1233,6 +1283,66 @@ async fn an_idle_restart_and_a_crash_spend_one_budget_between_them() {
         )],
         "a second restart would be a third session proving the second one"
     );
+}
+
+#[tokio::test]
+async fn a_result_that_survived_a_bad_exit_leaves_the_restart_budget_alone() {
+    // The reason honoring the result is not just tidier. A session spent on an
+    // answer already given is a session the turn does not have when a later one
+    // wedges for a reason a restart actually fixes.
+    //
+    // The work session reports its result and exits nonzero. Its checker then
+    // fails, which resumes the agent, and that second session hangs: if the bad
+    // exit had cost the restart there would be none left for it, and the fix
+    // would have died with the hang instead of finishing.
+    //
+    // The hang directive rides on the checker command, because a fix session's
+    // prompt is written by the runner out of the failing command and that
+    // command is therefore the only text a test can put in front of the session
+    // it resumes. The work session never reads it, which is what this needs: the
+    // session that wedges has to be a later one.
+    let (harness, thread_id, turn_id) = start_prepared(
+        "run the probe [[exit=3]]",
+        ThreadSettings {
+            timeouts: idle_bound_of(300).timeouts,
+            ..with_checker("echo [[hang_once=5000]] && mkdir stamp && exit 1 || exit 0")
+        },
+        make_checkout,
+    )
+    .await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Completed
+    );
+
+    // The restart was there for the hang, and was spent on it.
+    let hung = incidents_coded(&harness.store, &thread_id, ErrorCode::HarnessIdleTimeout).await;
+    assert_eq!(
+        hung.iter()
+            .map(|incident| incident.disposition)
+            .collect::<Vec<i32>>(),
+        vec![i32::from(
+            arsox_sdk::proto::incident::v1::Disposition::Recovered
+        )],
+        "the fix session hung once and was restarted"
+    );
+
+    // Every bad exit was honored rather than restarted, so none of them is
+    // recorded as a recovery or as an ending.
+    let died = incidents_coded(&harness.store, &thread_id, ErrorCode::HarnessCrashed).await;
+    assert!(!died.is_empty(), "a bad exit is still written down");
+    assert!(
+        died.iter().all(|incident| incident.disposition
+            == i32::from(arsox_sdk::proto::incident::v1::Disposition::Degraded)),
+        "a result that stands is neither a recovery nor a fatal ending: {died:?}"
+    );
+
+    // And the checkers finished, which is what a fix session that survived its
+    // restart looks like from the outside.
+    let reported = checker_events(&harness.store, &thread_id).await;
+    assert_eq!(reported.len(), 2, "the checker should have run twice");
+    assert_eq!(reported[1].exit_code, 0);
 }
 
 #[tokio::test]

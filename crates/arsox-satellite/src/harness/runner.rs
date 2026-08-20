@@ -27,9 +27,15 @@
 //! is started again on the same session, under the same grant, meter, and wall
 //! clock.
 //!
-//! A clean exit that **did** report a result is none of those, however badly the
-//! result reads. The harness made a statement, and restarting it would repeat
-//! the turn against the same answer.
+//! A session that **did** report a result is none of those, however badly the
+//! result reads and however badly its process then ended. The harness made a
+//! statement, and restarting it would repeat the turn against the same answer.
+//! So a harness that reports its result and then exits nonzero, or has to be
+//! torn down, keeps its result: the messy ending is recorded as a `degraded`
+//! incident carrying the exit status and the last output, and the restart stays
+//! available for a session that has said nothing to lose. The boundary is the
+//! result, not the exit status: a process that died before reporting one is
+//! still replaced.
 //!
 //! **Once, never twice, and once for the whole turn.** A restart recovers a
 //! process that wedged; it does not recover a prompt that wedges every process
@@ -311,12 +317,16 @@ impl Tail {
     }
 }
 
-/// A session ending that a restart could plausibly recover.
+/// A session ending that says the process stopped rather than what the work did.
 ///
 /// Every variant is a fact about the process rather than about the work, which
-/// is the line that decides what restarts. A clean exit carrying a result is
-/// absent from this enum on purpose: the harness said what happened, and running
-/// it again would reach the same answer by the same route.
+/// is the line that decides what a restart is for. Whether one is spent is the
+/// caller's to decide and turns on a second question: a session that already
+/// reported its result is honored rather than repeated, however badly its
+/// process then ended. See [`Runner::session_with_restart`].
+///
+/// A clean exit carrying a result is absent from this enum on purpose. The
+/// harness said what happened and the process did what it was asked to.
 #[derive(Debug, Clone, Copy)]
 enum Wedged<'a> {
     /// No output at all inside the idle bound.
@@ -330,7 +340,7 @@ enum Wedged<'a> {
 }
 
 impl<'a> Wedged<'a> {
-    /// What a finished session amounts to, when a restart could recover it.
+    /// How a finished session's process ended, when it ended badly.
     fn of(consumed: &'a Consumed) -> Option<Self> {
         // An ending the runner chose is not a wedged process. Checked first,
         // because a harness killed mid-word exits like one that died on its own
@@ -375,6 +385,28 @@ impl<'a> Wedged<'a> {
                 "the harness exited cleanly without reporting a result and was restarted".to_owned()
             }
         }
+    }
+
+    /// What happened, for the incident beside a result that stands anyway.
+    ///
+    /// `None` for [`Self::Speechless`], which is by construction never an ending
+    /// a result survived: it *is* the absence of one.
+    fn despite_a_result(self, bounds: &Bounds) -> Option<String> {
+        let message = match self {
+            Self::Idle => format!(
+                "the harness reported its result and then produced no output for \
+                 {:?}, so it was torn down and its result kept",
+                bounds.harness_idle
+            ),
+            Self::Crashed(died) => format!(
+                "the harness reported its result and then exited with {}, and the \
+                 result it reported stands",
+                died.status
+            ),
+            Self::Speechless => return None,
+        };
+
+        Some(message)
     }
 
     /// How the turn ends when this ending arrives with the restart budget spent.
@@ -958,6 +990,14 @@ impl Runner {
     /// which are retryable: the turn is worth running again, just not inside
     /// this one.
     ///
+    /// **A session that already reported its result is honored, not repeated.**
+    /// The harness made a statement about the work, and a second session would
+    /// reach the same answer by the same route, so a process that then exits
+    /// nonzero or has to be torn down is recorded as `degraded` and costs the
+    /// turn nothing. Spending the restart there would discard an answer the
+    /// satellite was given and leave the next session with no budget for an
+    /// ending that a restart can actually recover.
+    ///
     /// [`Wedged::Speechless`] is the one ending that leaves through the happy
     /// path rather than as a failure. `drive` reads a missing result and fails
     /// the turn with the reason it has always given, and returning a failure
@@ -986,6 +1026,16 @@ impl Runner {
             let Some(wedged) = Wedged::of(&consumed) else {
                 return Ok(consumed);
             };
+
+            // A result already reported is an answer, and how the process
+            // carrying it then stopped is a fact about the process. The answer
+            // is kept, the ending is written down, and the restart stays
+            // available for a session that has said nothing to lose.
+            if consumed.result.is_some() {
+                self.note_messy_exit(claimed, &context.bounds, wedged, &consumed)
+                    .await;
+                return Ok(consumed);
+            }
 
             // The exit code and the last output, captured whichever way this
             // ends, so the incident carries the same evidence whether the
@@ -1025,6 +1075,50 @@ impl Runner {
             )
             .await;
         }
+    }
+
+    /// Records a session that reported its result and then ended badly anyway.
+    ///
+    /// **Degraded**, which is the disposition for work that happened with
+    /// something about it missing. It is not `fatal`, because the turn keeps the
+    /// answer and goes on to its checkers; it is not `recovered`, because
+    /// nothing was recovered and no session was spent trying.
+    ///
+    /// It carries the evidence a crash carries, through the same plumbing: "the
+    /// harness answered and then died on the way out" is a diagnosis nobody
+    /// reaches from an event log that simply stops, and the exit status and the
+    /// tail are the only place the answer to "died of what" survives.
+    async fn note_messy_exit(
+        &self,
+        claimed: &ClaimedTurn,
+        bounds: &Bounds,
+        wedged: Wedged<'_>,
+        consumed: &Consumed,
+    ) {
+        let Some(message) = wedged.despite_a_result(bounds) else {
+            return;
+        };
+
+        tracing::warn!(
+            event.name = "turn.harness.exited_badly",
+            thread.id = %claimed.turn.thread_id,
+            turn.id = %claimed.turn.turn_id,
+            harness.ending = wedged.code().as_str_name(),
+            "keeping the result of a harness session that ended with \
+             {{harness.ending}}: {message}",
+        );
+
+        self.record_incident_with(
+            Attribution::of(claimed),
+            wedged.code(),
+            Disposition::Degraded,
+            // Not worth submitting again: the work is done and reported, so a
+            // second turn would redo it rather than fix anything.
+            false,
+            &message,
+            evidence_of(consumed),
+        )
+        .await;
     }
 
     /// Builds the command one session of this turn runs.
