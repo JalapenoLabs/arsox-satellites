@@ -13,6 +13,7 @@ sys.path.insert(0, "gen/python")
 
 from arsox.common.v1 import common_pb2
 from arsox.error.v1 import error_pb2
+from arsox.incident.v1 import incident_pb2
 from arsox.settings.v1 import budget_pb2, settings_pb2
 from arsox.thread.v1 import thread_pb2
 from arsox.event.v1 import event_pb2
@@ -80,6 +81,19 @@ def create_thread(key: str) -> str:
     response = thread_pb2.CreateThreadResponse()
     response.ParseFromString(payload)
     return response.thread.thread_id
+
+
+def await_turn(thread_id: str, turn_id: str, timeout_seconds: int = 30):
+    """Polls one turn until it leaves the queue, returning its final response."""
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        status, payload = call("GET", f"/v1/threads/{thread_id}/turns/{turn_id}")
+        fetched = result_pb2.GetTurnResponse()
+        fetched.ParseFromString(payload)
+        if fetched.turn.status not in (turn_pb2.TURN_STATUS_QUEUED, turn_pb2.TURN_STATUS_RUNNING):
+            return fetched
+        time.sleep(0.5)
+    return None
 
 
 print("== thread lifecycle ==")
@@ -163,16 +177,7 @@ check("cancelling twice is a no-op rather than an error", status == 200, f"got {
 
 print("== the turn actually runs ==")
 
-deadline = time.time() + 30
-final = None
-while time.time() < deadline:
-    status, payload = call("GET", f"/v1/threads/{thread_id}/turns/{running_turn}")
-    fetched = result_pb2.GetTurnResponse()
-    fetched.ParseFromString(payload)
-    if fetched.turn.status not in (turn_pb2.TURN_STATUS_QUEUED, turn_pb2.TURN_STATUS_RUNNING):
-        final = fetched
-        break
-    time.sleep(0.5)
+final = await_turn(thread_id, running_turn)
 
 check("the turn reached a terminal state", final is not None)
 if final is not None:
@@ -199,6 +204,108 @@ check("the thread returned to idle", after.thread.state == thread_pb2.THREAD_STA
 check("the queue drained", after.thread.queue_depth == 0)
 check("the harness session was recorded", after.thread.harness_session_id != "")
 check("the event log advanced", after.thread.latest_sequence >= 6)
+
+print("== incidents ==")
+
+# An event type nothing maps is what a CLI release adding one looks like from the
+# satellite's side. The mapper records a degraded incident and drops the line, so
+# the turn still finishes and there is evidence to read back afterwards.
+degraded = create_thread(f"incidents-{RUN}")
+
+request = turn_pb2.StartTurnRequest(prompt="replay the probe [[unrecognized=1]]")
+status, payload = call("POST", f"/v1/threads/{degraded}/turns", request.SerializeToString())
+started = turn_pb2.StartTurnResponse()
+started.ParseFromString(payload)
+degraded_turn = started.turn.turn_id
+
+finished = await_turn(degraded, degraded_turn)
+check("the degraded turn reached a terminal state", finished is not None)
+if finished is not None:
+    check(
+        "an unmapped event type does not fail the turn",
+        finished.turn.status == turn_pb2.TURN_STATUS_COMPLETED,
+        turn_pb2.TurnStatus.Name(finished.turn.status),
+    )
+    check(
+        "the report counts it, so the common case needs no query",
+        finished.result.incident_counts.degraded == 1,
+        str(finished.result.incident_counts).strip(),
+    )
+
+status, payload = call(
+    "GET",
+    f"/v1/threads/{degraded}/incidents",
+    incident_pb2.ListIncidentsRequest().SerializeToString(),
+)
+listed = incident_pb2.ListIncidentsResponse()
+listed.ParseFromString(payload)
+check("the thread listing returns 200", status == 200, f"got {status}")
+check("the incident is listed", len(listed.incidents) == 1, f"got {len(listed.incidents)}")
+
+if listed.incidents:
+    incident = listed.incidents[0]
+    check(
+        "work continued, so it is degraded rather than fatal",
+        incident.disposition == incident_pb2.DISPOSITION_DEGRADED,
+        incident_pb2.Disposition.Name(incident.disposition),
+    )
+    check("it names the turn it happened during", incident.turn_id == degraded_turn)
+    # The sequence is what locates a queried incident in the stream it was
+    # emitted on, and a stream frame in the database afterwards.
+    check("it carries the sequence its frame landed at", incident.HasField("sequence"))
+    check(
+        "and says which event type it could not map",
+        "an_event_type_from_a_later_cli" in incident.message,
+        incident.message,
+    )
+
+# Every filter is "match any of these", so a narrowing one has to actually
+# narrow rather than falling back to everything.
+request = incident_pb2.ListIncidentsRequest(dispositions=[incident_pb2.DISPOSITION_FATAL])
+status, payload = call(
+    "GET", f"/v1/threads/{degraded}/incidents", request.SerializeToString()
+)
+fatal = incident_pb2.ListIncidentsResponse()
+fatal.ParseFromString(payload)
+check("a disposition nothing carries returns nothing", len(fatal.incidents) == 0, f"got {len(fatal.incidents)}")
+
+request = incident_pb2.ListIncidentsRequest(
+    dispositions=[incident_pb2.DISPOSITION_DEGRADED], turn_ids=[degraded_turn]
+)
+status, payload = call(
+    "GET", f"/v1/threads/{degraded}/incidents", request.SerializeToString()
+)
+narrowed = incident_pb2.ListIncidentsResponse()
+narrowed.ParseFromString(payload)
+check("the disposition it does carry returns it", len(narrowed.incidents) == 1, f"got {len(narrowed.incidents)}")
+
+request = incident_pb2.ListIncidentsRequest(codes=[error_pb2.ERROR_CODE_INTERNAL])
+status, payload = call("GET", "/v1/incidents", request.SerializeToString())
+fleet = incident_pb2.ListIncidentsResponse()
+fleet.ParseFromString(payload)
+check("the satellite-wide listing returns 200", status == 200, f"got {status}")
+check(
+    "and finds it without being told which thread to look at",
+    any(found.thread_id == degraded for found in fleet.incidents),
+)
+
+# Destroying the thread takes its workspace, its turns, and its events. The
+# evidence stays, which is the whole reason incidents are not ephemeral.
+status, _payload = call("DELETE", f"/v1/threads/{degraded}")
+check("the thread is destroyed", status == 200, f"got {status}")
+
+status, payload = call("GET", f"/v1/threads/{degraded}")
+check("the thread itself is gone", status == 410, f"got {status}")
+
+status, payload = call(
+    "GET",
+    f"/v1/threads/{degraded}/incidents",
+    incident_pb2.ListIncidentsRequest().SerializeToString(),
+)
+outlived = incident_pb2.ListIncidentsResponse()
+outlived.ParseFromString(payload)
+check("a destroyed thread still answers its incident listing", status == 200, f"got {status}")
+check("and the evidence outlived the workspace", len(outlived.incidents) == 1, f"got {len(outlived.incidents)}")
 
 print("== thread control ==")
 

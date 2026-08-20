@@ -41,6 +41,15 @@
 //! **A thread with no secrets costs one branch.** The automaton is absent
 //! rather than empty, and every entry point returns before it looks at the text.
 //!
+//! # Credentials are also a field, not only text
+//!
+//! Everything above masks text a secret might appear in. [`scrub_settings`] is
+//! the other half: it masks the credentials a thread's settings carry as typed
+//! `Secret` fields, on their way back out through an API response. Same masking,
+//! different door, and it is called at the response boundary rather than where
+//! settings are decoded, because the provisioner and the spawn read the same
+//! stored settings to do real work with a live credential.
+//!
 //! # What this module is not
 //!
 //! It is the scanning and masking engine and its wiring into the paths that
@@ -51,6 +60,7 @@
 
 use aho_corasick::{AhoCorasick, MatchKind};
 use arsox_sdk::proto::artifact::v1::Artifact;
+use arsox_sdk::proto::common::v1::Secret;
 use arsox_sdk::proto::error::v1::Error as ContractError;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
 use arsox_sdk::proto::event::v1::{
@@ -65,8 +75,9 @@ use arsox_sdk::proto::interaction::v1::{
     Plan, Question, QuestionAnswer, QuestionOption, QuestionSet, question_answer::Answer,
 };
 use arsox_sdk::proto::settings::v1::{
-    GitAuth, LlmAuth, Redaction, RedactionMode, StarCount, ThreadSettings, git_auth,
-    llm_auth::Credential as LlmCredential, star_count::Style,
+    AgentsRepo, EnvVar, GitAuth, GithubIntegration, JiraIntegration, LlmAuth, McpServer,
+    ModelEndpoint, OAuthCredential, Redaction, RedactionMode, Repo, SshKeyPair, StarCount,
+    ThreadSettings, git_auth, llm_auth::Credential as LlmCredential, star_count::Style,
 };
 use arsox_sdk::proto::turn::v1::{
     ChangedFile, CheckerResult, IntegrationRecord, PullRequestWatchReport, StageOutcome,
@@ -335,11 +346,283 @@ fn collect_llm(into: &mut Vec<String>, auth: Option<&LlmAuth>) {
 }
 
 /// Pushes a credential's plaintext, when it has one.
-fn push_secret(into: &mut Vec<String>, secret: Option<&arsox_sdk::proto::common::v1::Secret>) {
+fn push_secret(into: &mut Vec<String>, secret: Option<&Secret>) {
     if let Some(value) = secret.and_then(|secret| secret.value.as_deref())
         && !value.is_empty()
     {
         into.push(value.to_owned());
+    }
+}
+
+/// Masks every credential in a thread's settings, on their way out.
+///
+/// `Secret.value` is the plaintext a caller sent up, and the contract is
+/// explicit that the satellite never populates it on a response, at any
+/// endpoint, at any authentication level. This is where that holds: each
+/// plaintext moves into `display` as the mask that stands in for it, and `value`
+/// is cleared.
+///
+/// The thread's own [`Redaction`] settings choose the rendering, so under
+/// `PostfixShown` two credentials can be told apart in a status page without
+/// either being readable.
+///
+/// # At the response boundary, not at hydration
+///
+/// Stored settings are read for two different purposes. One is a response. The
+/// other is work: the provisioner re-reads them to re-clone private repos after
+/// a restart, and the spawn reads them to build an agent's environment. Masking
+/// where the settings are decoded would serve the first and silently break the
+/// second, leaving `Provisioner::resume_interrupted` cloning with `******` for a
+/// token. So this is called on the copy already on its way to a client, and
+/// nowhere else.
+///
+/// # What it visits
+///
+/// Every `Secret` the contract declares beneath `ThreadSettings`:
+///
+/// - each declared [`EnvVar`], whether it is secret or public
+/// - each repo's personal access token or SSH private key, and the agents
+///   repo's
+/// - the GitHub and Jira tokens
+/// - each LLM endpoint's API key, subscription token, and OAuth access and
+///   refresh tokens
+/// - each MCP server's header values
+///
+/// Two mechanisms keep that list honest as the contract grows. Every message on
+/// the walk is destructured by name rather than reached into, so a field added
+/// to one of them stops compiling here until somebody says what it is. And the
+/// guard test in this module reads the proto sources for every message that
+/// declares a `Secret` at all, so one added to a message this walk does not
+/// visit fails a test rather than leaving a plaintext on a response.
+///
+/// # Examples
+///
+/// ```
+/// use arsox_satellite::redaction::scrub_settings;
+/// use arsox_sdk::proto::common::v1::Secret;
+/// use arsox_sdk::proto::settings::v1::{GithubIntegration, ThreadSettings};
+///
+/// let mut settings = ThreadSettings {
+///     github: Some(GithubIntegration {
+///         token: Some(Secret {
+///             value: Some("ghp_the_real_token".to_owned()),
+///             display: None,
+///         }),
+///     }),
+///     ..ThreadSettings::default()
+/// };
+/// scrub_settings(&mut settings);
+///
+/// let token = settings.github.unwrap().token.unwrap();
+/// assert_eq!(token.value, None);
+/// assert_eq!(token.display.as_deref(), Some("******"));
+/// ```
+#[expect(
+    clippy::unneeded_field_pattern,
+    reason = "naming every field is the check: `..` is exactly what would let a credential               added to the contract travel back out in plaintext"
+)]
+pub fn scrub_settings(settings: &mut ThreadSettings) {
+    // Copied out before the walk borrows the rest of the settings mutably.
+    let rules = settings.redaction.unwrap_or_default();
+
+    // Destructured rather than reached into field by field. Every name has to
+    // appear, so a settings group added to the contract stops compiling here
+    // until somebody says whether it carries a credential.
+    let ThreadSettings {
+        agents_repo,
+        env,
+        github,
+        jira,
+        mcp_servers,
+        models,
+        repos,
+
+        // Nothing beneath these declares a `Secret` today. The guard test below
+        // is what notices when that stops being true.
+        budget: _,
+        delete_on_complete: _,
+        harness: _,
+        human_in_the_loop: _,
+        idle_ttl: _,
+        permissions: _,
+        plan_mode: _,
+        prefetch: _,
+        prompt: _,
+        pull_requests: _,
+        redaction: _,
+        resource_limits: _,
+        resume_interrupted_turns: _,
+        self_review: _,
+        stream: _,
+        suggestions: _,
+        team_mode: _,
+        timeouts: _,
+        virtual_browser: _,
+        watch_pull_requests: _,
+    } = settings;
+
+    for variable in env.iter_mut() {
+        scrub_env(variable, &rules);
+    }
+
+    for repo in repos.iter_mut() {
+        let Repo {
+            auth,
+            base_branch: _,
+            checker: _,
+            name: _,
+            services: _,
+            setup_commands: _,
+            url: _,
+        } = repo;
+
+        scrub_git_auth(auth.as_mut(), &rules);
+    }
+
+    if let Some(AgentsRepo {
+        auth,
+        r#ref: _,
+        url: _,
+    }) = agents_repo.as_mut()
+    {
+        scrub_git_auth(auth.as_mut(), &rules);
+    }
+
+    if let Some(GithubIntegration { token }) = github.as_mut() {
+        scrub_optional(token, Some(&rules));
+    }
+
+    if let Some(JiraIntegration {
+        token,
+        allow_comments: _,
+        allow_status_transitions: _,
+        base_url: _,
+        email: _,
+    }) = jira.as_mut()
+    {
+        scrub_optional(token, Some(&rules));
+    }
+
+    for endpoint in models.iter_mut() {
+        let ModelEndpoint {
+            auth,
+            base_url: _,
+            model: _,
+            name: _,
+            retry: _,
+        } = endpoint;
+
+        scrub_llm_auth(auth.as_mut(), &rules);
+    }
+
+    for server in mcp_servers.iter_mut() {
+        let McpServer {
+            headers,
+            name: _,
+            url: _,
+        } = server;
+
+        // Header values are credentials far more often than not, which is why
+        // the contract types them as one. The key is the header's name.
+        for value in headers.values_mut() {
+            scrub_secret(value, Some(&rules));
+        }
+    }
+}
+
+/// Masks one declared variable, or reveals it when the caller marked it public.
+#[expect(
+    clippy::unneeded_field_pattern,
+    reason = "the same exhaustiveness check `scrub_settings` makes"
+)]
+fn scrub_env(variable: &mut EnvVar, rules: &Redaction) {
+    // The same rule the spawn applies, absent included: absent means secret.
+    let secret = crate::harness::spawn::is_secret(variable);
+
+    let EnvVar {
+        value,
+        is_secret: _,
+        key: _,
+    } = variable;
+
+    scrub_optional(value, secret.then_some(rules));
+}
+
+/// Masks a git credential's material, whichever kind it is.
+#[expect(
+    clippy::unneeded_field_pattern,
+    reason = "the same exhaustiveness check `scrub_settings` makes"
+)]
+fn scrub_git_auth(auth: Option<&mut GitAuth>, rules: &Redaction) {
+    // Exhaustive on purpose: a credential kind added to the contract stops
+    // compiling here rather than travelling back out in plaintext.
+    match auth.and_then(|auth| auth.credential.as_mut()) {
+        Some(git_auth::Credential::PersonalAccessToken(token)) => {
+            scrub_secret(token, Some(rules));
+        }
+        Some(git_auth::Credential::SshKey(pair)) => {
+            let SshKeyPair {
+                private_key,
+                // Most remotes derive it from the private half, and a public key
+                // is not a credential. Returned in full.
+                public_key: _,
+            } = pair;
+
+            scrub_optional(private_key, Some(rules));
+        }
+        None => {}
+    }
+}
+
+/// Masks an LLM endpoint's credential, whichever kind it is.
+#[expect(
+    clippy::unneeded_field_pattern,
+    reason = "the same exhaustiveness check `scrub_settings` makes"
+)]
+fn scrub_llm_auth(auth: Option<&mut LlmAuth>, rules: &Redaction) {
+    match auth.and_then(|auth| auth.credential.as_mut()) {
+        Some(LlmCredential::ApiKey(key) | LlmCredential::SubscriptionToken(key)) => {
+            scrub_secret(key, Some(rules));
+        }
+        Some(LlmCredential::Oauth(oauth)) => {
+            let OAuthCredential {
+                access_token,
+                refresh_token,
+                expires_at: _,
+            } = oauth;
+
+            scrub_optional(access_token, Some(rules));
+            scrub_optional(refresh_token, Some(rules));
+        }
+        None => {}
+    }
+}
+
+/// Moves a credential's plaintext into the rendering that replaces it.
+///
+/// Absent `rules` marks a value the caller declared public. The move still
+/// happens, so one rule covers the whole contract: `value` goes up and `display`
+/// comes back. The rendering is the plaintext, because there is nothing to hide.
+///
+/// A `Secret` carrying no plaintext is left exactly as it arrived, so a
+/// `display` that is already resolved is not overwritten with a mask of nothing.
+fn scrub_secret(secret: &mut Secret, rules: Option<&Redaction>) {
+    let Secret { value, display } = secret;
+
+    let Some(plaintext) = value.take() else {
+        return;
+    };
+
+    *display = Some(match rules {
+        Some(rules) => mask(&plaintext, rules),
+        None => plaintext,
+    });
+}
+
+/// The same, where the contract makes the credential itself optional.
+fn scrub_optional(secret: &mut Option<Secret>, rules: Option<&Redaction>) {
+    if let Some(present) = secret.as_mut() {
+        scrub_secret(present, rules);
     }
 }
 
@@ -1000,8 +1283,9 @@ impl Scrub for Incident {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arsox_sdk::proto::common::v1::Secret;
-    use arsox_sdk::proto::settings::v1::{EnvVar, MirrorLength, Repo};
+    use arsox_sdk::proto::settings::v1::MirrorLength;
+    use std::collections::BTreeSet;
+    use std::path::{Path, PathBuf};
 
     /// The redaction settings for one mode, everything else at its default.
     fn with_mode(mode: RedactionMode) -> Redaction {
@@ -1269,8 +1553,6 @@ mod tests {
 
     #[test]
     fn an_ssh_private_key_is_masked_and_its_public_half_is_not() {
-        use arsox_sdk::proto::settings::v1::SshKeyPair;
-
         let redactor = Redactor::for_thread(&ThreadSettings {
             repos: vec![Repo {
                 auth: Some(GitAuth {
@@ -1410,5 +1692,344 @@ mod tests {
 
         let rendered = format!("{event:?}");
         assert!(!rendered.contains("ghp_the_real_token"), "{rendered}");
+    }
+
+    /// One of every credential the contract carries beneath `ThreadSettings`.
+    ///
+    /// Each plaintext is distinct and self-describing, so a failure names the
+    /// one the walk missed rather than only saying that something leaked.
+    fn every_credential() -> ThreadSettings {
+        ThreadSettings {
+            env: vec![
+                EnvVar {
+                    key: "DEPLOY_KEY".to_owned(),
+                    value: Some(plaintext("plaintext-env-secret")),
+                    is_secret: None,
+                },
+                EnvVar {
+                    key: "LOG_LEVEL".to_owned(),
+                    value: Some(plaintext("plaintext-env-public")),
+                    is_secret: Some(false),
+                },
+            ],
+            repos: vec![
+                Repo {
+                    name: "api".to_owned(),
+                    auth: Some(GitAuth {
+                        credential: Some(git_auth::Credential::PersonalAccessToken(plaintext(
+                            "plaintext-repo-pat",
+                        ))),
+                    }),
+                    ..Repo::default()
+                },
+                Repo {
+                    name: "web".to_owned(),
+                    auth: Some(ssh_key("plaintext-repo-ssh-key", Some("ssh-ed25519 AAAA"))),
+                    ..Repo::default()
+                },
+            ],
+            agents_repo: Some(AgentsRepo {
+                url: "git@github.com:acme/agents.git".to_owned(),
+                r#ref: Some("v2.4.0".to_owned()),
+                auth: Some(ssh_key("plaintext-agents-ssh-key", None)),
+            }),
+            github: Some(GithubIntegration {
+                token: Some(plaintext("plaintext-github-token")),
+            }),
+            jira: Some(JiraIntegration {
+                token: Some(plaintext("plaintext-jira-token")),
+                base_url: "https://acme.atlassian.net".to_owned(),
+                ..JiraIntegration::default()
+            }),
+            models: every_endpoint_credential(),
+            mcp_servers: vec![McpServer {
+                name: "tickets".to_owned(),
+                url: "https://mcp.acme.test".to_owned(),
+                headers: [(
+                    "authorization".to_owned(),
+                    plaintext("plaintext-mcp-header"),
+                )]
+                .into_iter()
+                .collect(),
+            }],
+            ..ThreadSettings::default()
+        }
+    }
+
+    /// A credential as a caller sends one up: plaintext, no rendering.
+    fn plaintext(value: &str) -> Secret {
+        Secret {
+            value: Some(value.to_owned()),
+            display: None,
+        }
+    }
+
+    /// An SSH credential, with or without the public half a remote may not need.
+    fn ssh_key(private: &str, public: Option<&str>) -> GitAuth {
+        GitAuth {
+            credential: Some(git_auth::Credential::SshKey(SshKeyPair {
+                private_key: Some(plaintext(private)),
+                public_key: public.map(str::to_owned),
+            })),
+        }
+    }
+
+    /// One endpoint per kind of LLM credential the contract defines.
+    fn every_endpoint_credential() -> Vec<ModelEndpoint> {
+        let endpoint = |name: &str, credential: LlmCredential| ModelEndpoint {
+            name: name.to_owned(),
+            auth: Some(LlmAuth {
+                credential: Some(credential),
+            }),
+            ..ModelEndpoint::default()
+        };
+
+        vec![
+            endpoint(
+                "primary",
+                LlmCredential::ApiKey(plaintext("plaintext-api-key")),
+            ),
+            endpoint(
+                "fallback",
+                LlmCredential::SubscriptionToken(plaintext("plaintext-subscription-token")),
+            ),
+            endpoint(
+                "oauth",
+                LlmCredential::Oauth(OAuthCredential {
+                    access_token: Some(plaintext("plaintext-access-token")),
+                    refresh_token: Some(plaintext("plaintext-refresh-token")),
+                    expires_at: None,
+                }),
+            ),
+        ]
+    }
+
+    #[test]
+    fn every_credential_in_the_settings_is_masked_on_the_way_out() {
+        let mut settings = every_credential();
+        scrub_settings(&mut settings);
+
+        // Rendered whole rather than field by field, because the failure worth
+        // catching is a credential the walk never reached, and a per-field
+        // assertion can only check the fields somebody thought of.
+        let rendered = format!("{settings:?}");
+
+        for plaintext in [
+            "plaintext-env-secret",
+            "plaintext-repo-pat",
+            "plaintext-repo-ssh-key",
+            "plaintext-agents-ssh-key",
+            "plaintext-github-token",
+            "plaintext-jira-token",
+            "plaintext-api-key",
+            "plaintext-subscription-token",
+            "plaintext-access-token",
+            "plaintext-refresh-token",
+            "plaintext-mcp-header",
+        ] {
+            assert!(
+                !rendered.contains(plaintext),
+                "{plaintext} survived the scrub: {rendered}"
+            );
+        }
+
+        // Absent rather than empty. A `value` present and blank is a field the
+        // contract says the satellite never populates on a response.
+        assert_eq!(settings.github.and_then(|github| github.token), {
+            Some(Secret {
+                value: None,
+                display: Some("******".to_owned()),
+            })
+        });
+
+        // A public key is not a credential, and neither is anything else the
+        // caller needs back to recognize its own configuration.
+        assert!(rendered.contains("ssh-ed25519 AAAA"), "{rendered}");
+        assert!(
+            rendered.contains("https://acme.atlassian.net"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn a_public_declared_variable_comes_back_readable_in_display() {
+        // The contract carries the credential type even for a value marked
+        // public, so one rule covers the whole surface: `value` goes up and
+        // `display` comes back. For a public value the redaction is a no-op.
+        let mut settings = every_credential();
+        scrub_settings(&mut settings);
+
+        let public = settings.env[1].value.clone().expect("should be carried");
+
+        assert_eq!(public.value, None);
+        assert_eq!(public.display.as_deref(), Some("plaintext-env-public"));
+    }
+
+    #[test]
+    fn the_display_follows_the_threads_own_redaction_settings() {
+        // What `PostfixShown` is for: telling two credentials apart in a status
+        // page without either being readable.
+        let mut settings = ThreadSettings {
+            redaction: Some(with_mode(RedactionMode::PostfixShown)),
+            github: Some(GithubIntegration {
+                token: Some(Secret {
+                    value: Some(WORKED.to_owned()),
+                    display: None,
+                }),
+            }),
+            ..ThreadSettings::default()
+        };
+        scrub_settings(&mut settings);
+
+        assert_eq!(
+            settings
+                .github
+                .and_then(|github| github.token)
+                .and_then(|token| token.display)
+                .as_deref(),
+            Some("******45")
+        );
+    }
+
+    #[test]
+    fn a_credential_that_carried_no_plaintext_is_left_as_it_arrived() {
+        // Nothing to move, so nothing is written. Masking an absent value would
+        // claim a credential the thread never held.
+        let mut settings = ThreadSettings {
+            github: Some(GithubIntegration {
+                token: Some(Secret {
+                    value: None,
+                    display: Some("already-resolved".to_owned()),
+                }),
+            }),
+            ..ThreadSettings::default()
+        };
+        scrub_settings(&mut settings);
+
+        assert_eq!(
+            settings
+                .github
+                .and_then(|github| github.token)
+                .and_then(|token| token.display)
+                .as_deref(),
+            Some("already-resolved")
+        );
+    }
+
+    #[test]
+    fn scrubbing_settings_that_hold_nothing_changes_nothing() {
+        let mut settings = ThreadSettings::default();
+        scrub_settings(&mut settings);
+
+        assert_eq!(settings, ThreadSettings::default());
+    }
+
+    /// Every message beneath `ThreadSettings` that [`scrub_settings`] visits.
+    ///
+    /// Kept as names rather than as types because the guard test below reads the
+    /// contract from its own source, which is the only place a message that
+    /// nothing in Rust mentions yet can be seen.
+    const SECRET_BEARING_MESSAGES: [&str; 8] = [
+        "EnvVar",
+        "GitAuth",
+        "GithubIntegration",
+        "JiraIntegration",
+        "LlmAuth",
+        "McpServer",
+        "OAuthCredential",
+        "SshKeyPair",
+    ];
+
+    #[test]
+    fn every_secret_the_contract_declares_is_one_the_walk_visits() {
+        // Destructuring covers a field added to a message `scrub_settings`
+        // already walks: it stops compiling. This covers the other direction, a
+        // `Secret` added to a message the walk never reaches, which would
+        // otherwise leave a plaintext on a response with nothing failing.
+        let declared = messages_declaring_a_secret();
+        let visited: BTreeSet<String> = SECRET_BEARING_MESSAGES
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect();
+
+        assert_eq!(
+            declared, visited,
+            "the contract's credential-bearing messages moved. Anything new that \
+             ThreadSettings can reach must be visited by scrub_settings and listed in \
+             SECRET_BEARING_MESSAGES; anything it cannot reach is listed there with a \
+             note saying why the scrub does not have to.",
+        );
+    }
+
+    /// Reads the proto sources for every message that declares a `Secret` field.
+    ///
+    /// The sources rather than the generated Rust, because a message no Rust
+    /// code mentions is exactly the one this is looking for.
+    fn messages_declaring_a_secret() -> BTreeSet<String> {
+        // The contract lives at the repository root, beside the crates.
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../proto");
+        let mut found = BTreeSet::new();
+
+        for file in proto_files(&root) {
+            let source = std::fs::read_to_string(&file)
+                .unwrap_or_else(|error| panic!("should read {}: {error}", file.display()));
+
+            // Nesting is tracked as one entry per brace rather than per message,
+            // so a `oneof` or an `enum` closing does not pop the message around
+            // it. The innermost named entry is the message a field belongs to.
+            let mut open: Vec<Option<String>> = Vec::new();
+
+            for line in source.lines() {
+                // A comment mentioning the type is prose, and thread.proto
+                // carries one. Braces inside a comment are not nesting either.
+                let code = line.split("//").next().unwrap_or_default().trim();
+
+                let opens = code.matches('{').count();
+                let name = code
+                    .strip_prefix("message ")
+                    .and_then(|rest| rest.split_whitespace().next());
+
+                for index in 0..opens {
+                    // Only the first brace on the line belongs to the message
+                    // the line declares.
+                    open.push((index == 0).then(|| name.map(str::to_owned)).flatten());
+                }
+
+                if code.contains("arsox.common.v1.Secret")
+                    && let Some(message) = open.iter().rev().flatten().next()
+                {
+                    found.insert(message.clone());
+                }
+
+                for _closed in 0..code.matches('}').count() {
+                    open.pop();
+                }
+            }
+        }
+
+        found
+    }
+
+    /// Every `.proto` file under `directory`, recursively.
+    fn proto_files(directory: &Path) -> Vec<PathBuf> {
+        let mut files = Vec::new();
+
+        let entries = std::fs::read_dir(directory)
+            .unwrap_or_else(|error| panic!("should read {}: {error}", directory.display()));
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            if path.is_dir() {
+                files.extend(proto_files(&path));
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension == "proto")
+            {
+                files.push(path);
+            }
+        }
+
+        files
     }
 }

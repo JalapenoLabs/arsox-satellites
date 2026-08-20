@@ -13,7 +13,8 @@ use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::incident::v1::{ListIncidentsRequest, ListIncidentsResponse};
 use arsox_sdk::proto::thread::v1::{
     CreateThreadRequest, CreateThreadResponse, DestroyThreadResponse, DrainThreadResponse,
-    GetThreadResponse, ListThreadsResponse, PauseThreadResponse, ResumeThreadResponse, ThreadOrder,
+    GetThreadResponse, ListThreadsResponse, PauseThreadResponse, ResumeThreadResponse, Thread,
+    ThreadOrder,
 };
 use arsox_sdk::proto::turn::v1::{
     CancelTurnResponse, GetTurnResponse, ListTurnsResponse, StartTurnRequest, StartTurnResponse,
@@ -88,6 +89,26 @@ where
             )
         })
     }
+}
+
+/// The thread as a response is allowed to carry it.
+///
+/// Every response shape below carries a whole [`Thread`], and a thread carries
+/// the settings it was created with, credentials included. This is the one place
+/// they are masked, because it is the one place the settings are on their way to
+/// a client: the provisioner and the spawn read the same stored settings to
+/// clone private repos and to build an agent's environment, so a scrub any
+/// deeper would leave a restart cloning with `******` for a token.
+///
+/// `ListThreads` is deliberately absent. It returns `ThreadSummary`, which
+/// carries no settings at all, and that is the stronger answer: an operational
+/// listing has no configuration in it to mask.
+fn scrubbed(mut thread: Thread) -> Thread {
+    if let Some(settings) = thread.settings.as_mut() {
+        crate::redaction::scrub_settings(settings);
+    }
+
+    thread
 }
 
 /// Renders a store failure as the contract error it already knows itself to be.
@@ -228,7 +249,7 @@ async fn create_thread(
             }
 
             protobuf(&CreateThreadResponse {
-                thread: Some(stored.thread),
+                thread: Some(scrubbed(stored.thread)),
                 deduplicated: !stored.created,
             })
         }
@@ -279,7 +300,7 @@ async fn pause_thread(
 ) -> Response {
     match satellite.store.pause_thread(&thread_id).await {
         Ok(thread) => protobuf(&PauseThreadResponse {
-            thread: Some(thread),
+            thread: Some(scrubbed(thread)),
         }),
         Err(error) => store_failure(&error),
     }
@@ -296,7 +317,7 @@ async fn resume_thread(
             satellite.work_queued.notify_one();
 
             protobuf(&ResumeThreadResponse {
-                thread: Some(thread),
+                thread: Some(scrubbed(thread)),
             })
         }
         Err(error) => store_failure(&error),
@@ -322,7 +343,7 @@ async fn get_thread(
 ) -> Response {
     match satellite.store.thread(&thread_id).await {
         Ok(thread) => protobuf(&GetThreadResponse {
-            thread: Some(thread),
+            thread: Some(scrubbed(thread)),
         }),
         Err(error) => store_failure(&error),
     }
@@ -347,7 +368,7 @@ async fn destroy_thread(
         .await
     {
         Ok(thread) => protobuf(&DestroyThreadResponse {
-            thread: Some(thread),
+            thread: Some(scrubbed(thread)),
         }),
         Err(crate::collector::CollectError::Store(error)) => store_failure(&error),
         Err(error) => contract_error(

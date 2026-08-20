@@ -16,7 +16,10 @@ use arsox_sdk::proto::common::v1::{Duration as ProtoDuration, Secret};
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::incident::v1::Disposition;
-use arsox_sdk::proto::settings::v1::{Budget, EnvVar, ThreadSettings};
+use arsox_sdk::proto::settings::v1::{
+    Budget, EnvVar, GithubIntegration, LlmAuth, ModelEndpoint, Redaction, RedactionMode,
+    ThreadSettings, llm_auth::Credential,
+};
 use arsox_sdk::proto::thread::v1::ThreadState;
 use arsox_sdk::proto::turn::v1::TurnStatus;
 use futures_util::StreamExt as _;
@@ -652,4 +655,184 @@ async fn a_cancelled_turn_reports_as_cancelled() {
         .expect("should not time out")
         .expect("should report a result");
     assert_eq!(result.status, i32::from(TurnStatus::Completed));
+}
+
+/// A thread's settings carrying one of every credential an endpoint could echo.
+///
+/// No repos, deliberately: a repo would send the thread through provisioning
+/// against a URL nothing serves, and these tests are about what comes back
+/// rather than about what a clone does.
+fn settings_with_credentials() -> ThreadSettings {
+    let plaintext = |value: &str| {
+        Some(Secret {
+            value: Some(value.to_owned()),
+            display: None,
+        })
+    };
+
+    ThreadSettings {
+        env: vec![EnvVar {
+            key: "DEPLOY_TOKEN".to_owned(),
+            value: plaintext(ENV_PLAINTEXT),
+            is_secret: None,
+        }],
+        github: Some(GithubIntegration {
+            token: plaintext(GITHUB_PLAINTEXT),
+        }),
+        models: vec![ModelEndpoint {
+            name: "primary".to_owned(),
+            model: "claude-opus-5[1m]".to_owned(),
+            auth: Some(LlmAuth {
+                credential: Some(Credential::ApiKey(Secret {
+                    value: Some(MODEL_PLAINTEXT.to_owned()),
+                    display: None,
+                })),
+            }),
+            ..ModelEndpoint::default()
+        }],
+        // Postfix, because a mask that can still tell two credentials apart is
+        // the interesting case: it proves the thread's own settings chose the
+        // rendering rather than a default applied everywhere.
+        redaction: Some(Redaction {
+            mode: RedactionMode::PostfixShown.into(),
+            ..Redaction::default()
+        }),
+        ..settings()
+    }
+}
+
+/// The credentials `settings_with_credentials` carries, and none of them short
+/// enough for the anonymous rule to swallow the reveal.
+const ENV_PLAINTEXT: &str = "declared-env-credential";
+const GITHUB_PLAINTEXT: &str = "ghp_the_real_github_token";
+const MODEL_PLAINTEXT: &str = "sk-ant-the-real-api-key";
+
+/// Everything the thread was created with, rendered for scanning.
+///
+/// Rendered whole rather than field by field, because the failure worth
+/// catching is a credential nothing thought to assert on.
+fn rendered(thread: &arsox_sdk::proto::thread::v1::Thread) -> String {
+    format!("{:?}", thread.settings)
+}
+
+/// Asserts a thread carries no plaintext credential, whatever endpoint returned
+/// it.
+fn carries_no_plaintext(thread: &arsox_sdk::proto::thread::v1::Thread, endpoint: &str) {
+    let settings = rendered(thread);
+
+    for plaintext in [ENV_PLAINTEXT, GITHUB_PLAINTEXT, MODEL_PLAINTEXT] {
+        assert!(
+            !settings.contains(plaintext),
+            "{endpoint} echoed {plaintext}: {settings}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn creating_a_thread_hands_its_credentials_back_masked() {
+    // The contract says the satellite never populates Secret.value on a
+    // response, at any endpoint, at any authentication level. This is the
+    // endpoint that would otherwise hand every credential straight back to the
+    // caller that just sent it.
+    let url = start().await;
+    let client = Client::connect(&url, SECRET).await.expect("should connect");
+
+    let created = client
+        .threads()
+        .create(settings_with_credentials())
+        .await
+        .expect("should create");
+
+    carries_no_plaintext(&created.thread, "create");
+
+    let settings = created
+        .thread
+        .settings
+        .expect("a thread carries its settings");
+
+    // Masked, and readable enough to tell two credentials apart, which is what
+    // `display` exists for.
+    let token = settings
+        .github
+        .and_then(|github| github.token)
+        .expect("the token survives as a rendering");
+    assert_eq!(token.value, None);
+    assert_eq!(token.display.as_deref(), Some("******token"));
+
+    // A declared variable is a credential unless the caller said otherwise, so
+    // absent means secret here exactly as it does everywhere else.
+    let declared = settings.env[0].value.clone().expect("should be carried");
+    assert_eq!(declared.value, None);
+    assert_eq!(declared.display.as_deref(), Some("******tial"));
+
+    // And the endpoint answered with everything else untouched, so a caller can
+    // still read back the configuration it asked for.
+    assert_eq!(settings.models[0].model, "claude-opus-5[1m]");
+}
+
+#[tokio::test]
+async fn every_endpoint_that_returns_a_thread_masks_its_credentials() {
+    // One scrub at the response boundary rather than one per handler. Get is the
+    // endpoint the issue named; pause, resume, and destroy carry the same whole
+    // thread and would each be their own leak.
+    let url = start().await;
+    let client = Client::connect(&url, SECRET).await.expect("should connect");
+
+    let created = client
+        .threads()
+        .create(settings_with_credentials())
+        .await
+        .expect("should create");
+    let handle = created.handle;
+
+    carries_no_plaintext(&handle.get().await.expect("should read"), "get");
+    carries_no_plaintext(&handle.pause().await.expect("should pause"), "pause");
+    carries_no_plaintext(&handle.resume().await.expect("should resume"), "resume");
+    carries_no_plaintext(&handle.destroy().await.expect("should destroy"), "destroy");
+}
+
+#[tokio::test]
+async fn no_credential_appears_in_the_bytes_a_response_is_made_of() {
+    // Asserting on what the SDK decoded proves the fields were masked. This
+    // proves the encoding carries nothing else: a plaintext left in an unread
+    // field, or in a field this SDK version has no name for, would still be a
+    // credential in a proxy log.
+    let url = start().await;
+    let client = Client::connect(&url, SECRET).await.expect("should connect");
+
+    let created = client
+        .threads()
+        .create(settings_with_credentials())
+        .await
+        .expect("should create");
+
+    let http = reqwest::Client::new();
+    let thread_id = created.thread.thread_id.clone();
+
+    for path in [
+        format!("/v1/threads/{thread_id}"),
+        // The listing too, which returns summaries rather than threads. It is
+        // the stronger answer, and it is worth proving rather than assuming.
+        "/v1/threads".to_owned(),
+    ] {
+        let bytes = http
+            .get(format!("{url}{path}"))
+            .header("Authorization", format!("Bearer {SECRET}"))
+            .header("Accept", "application/protobuf")
+            .send()
+            .await
+            .expect("should answer")
+            .bytes()
+            .await
+            .expect("should read");
+
+        let wire = String::from_utf8_lossy(&bytes);
+
+        for plaintext in [ENV_PLAINTEXT, GITHUB_PLAINTEXT, MODEL_PLAINTEXT] {
+            assert!(
+                !wire.contains(plaintext),
+                "{path} put {plaintext} on the wire"
+            );
+        }
+    }
 }

@@ -10,6 +10,7 @@
 
 use arsox_satellite::commands::Execution;
 use arsox_satellite::harness::spawn::declared_environment;
+use arsox_satellite::redaction::scrub_settings;
 use arsox_satellite::store::{NewThread, NewTurn, Store};
 use arsox_satellite::workspace::{Provisioner, provision_repos, write_instructions};
 use arsox_sdk::proto::common::v1::Secret;
@@ -711,6 +712,99 @@ async fn a_workspace_left_half_built_by_a_restart_is_rebuilt_rather_than_strande
         !checkout.join("half-written").exists(),
         "the half-built subtree goes before the clone is attempted again"
     );
+}
+
+#[tokio::test]
+async fn a_restart_reclones_a_private_repo_with_the_credential_it_was_given() {
+    // The scrub that masks credentials on an API response deliberately does not
+    // happen where settings are decoded. This is why: the provisioner re-reads
+    // the same stored settings to rebuild a workspace a restart left half-built,
+    // and a scrub any deeper would leave it cloning with `******` for a token.
+    const TOKEN: &str = "ghp_ThisTokenMustStillWorkAfterARestart";
+
+    let fixtures = scratch::Dir::new("origin");
+    let workspace = scratch::Dir::new("workspace");
+    let store = Store::open_in_memory().await.expect("should open");
+    let url = origin(&fixtures.path().join("private"), "README.md");
+
+    let authenticated = Repo {
+        auth: Some(GitAuth {
+            credential: Some(Credential::PersonalAccessToken(Secret {
+                value: Some(TOKEN.to_owned()),
+                display: None,
+            })),
+        }),
+        ..repo("api", &url)
+    };
+
+    let thread = store
+        .create_thread(NewThread {
+            settings: settings(vec![authenticated]),
+            metadata: BTreeMap::new(),
+            idempotency_key: None,
+        })
+        .await
+        .expect("should create")
+        .thread;
+
+    // What a killed process leaves: a checkout of unknown completeness, and a
+    // thread nothing is driving.
+    let checkout = workspace
+        .path()
+        .join(&thread.thread_id)
+        .join("repos")
+        .join("api");
+    std::fs::create_dir_all(&checkout).expect("should create");
+    std::fs::write(checkout.join("half-written"), b"...").expect("should write");
+
+    // The exact read the boot sweep makes, asserted before it makes it.
+    let waiting = store
+        .provisioning_threads()
+        .await
+        .expect("should find the half-built thread");
+    assert_eq!(waiting.len(), 1);
+    assert_eq!(
+        personal_access_token(&waiting[0]),
+        Some(TOKEN.to_owned()),
+        "the settings a restart re-clones from still carry a live credential"
+    );
+
+    provisioner(&store, &workspace).resume_interrupted().await;
+
+    let ready = await_state(&store, &thread.thread_id, ThreadState::Idle).await;
+    assert!(ready, "the thread should have been rebuilt and released");
+    assert!(checkout.join("README.md").is_file(), "a clean clone");
+
+    // And the same settings, on their way to a client, carry none of it. Two
+    // readings of one row, which is the whole reason the scrub is at the
+    // response boundary rather than at hydration.
+    let mut answered = store.thread(&thread.thread_id).await.expect("should read");
+    if let Some(settings) = answered.settings.as_mut() {
+        scrub_settings(settings);
+    }
+    assert_eq!(personal_access_token(&answered), None);
+    assert!(
+        !format!("{:?}", answered.settings).contains(TOKEN),
+        "the scrubbed copy still held the token"
+    );
+}
+
+/// The plaintext of the first repo's personal access token, when it has one.
+fn personal_access_token(thread: &arsox_sdk::proto::thread::v1::Thread) -> Option<String> {
+    let credential = thread
+        .settings
+        .as_ref()?
+        .repos
+        .first()?
+        .auth
+        .as_ref()?
+        .credential
+        .as_ref()?;
+
+    match credential {
+        Credential::PersonalAccessToken(token) => token.value.clone(),
+        Credential::SshKey(_key) => None,
+    }
 }
 
 #[tokio::test]

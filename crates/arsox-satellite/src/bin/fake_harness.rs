@@ -67,6 +67,12 @@
 //!   was configured with, for a test that needs a recording the process-wide
 //!   variable does not carry. The vocabulary still has to match the harness
 //!   being stood in for, which is the caller's to get right.
+//! - `[[unrecognized=N]]` emits N lines of an event type nothing maps, before
+//!   the transcript, which is what a CLI release adding an event type looks like
+//!   from the satellite's side. The mapper records a degraded incident and drops
+//!   the line, so the turn still finishes with an incident to read back.
+//!   `scripts/fake-harness.sh` implements the same directive, so a check written
+//!   against one stand-in runs against either.
 //!
 //! "First run" is a marker file in the working directory rather than a counter
 //! in this process, because a restart is a **new** process. The same trick a
@@ -222,6 +228,15 @@ async fn main() {
 
     let stdout = std::io::stdout();
     let mut out = stdout.lock();
+
+    // Before the transcript, so the turn it degrades still runs to completion
+    // and reports what it did. An incident that ended the turn would be a
+    // different case entirely.
+    for _line in 0..directive(&prompt, "unrecognized").unwrap_or(0) {
+        if writeln!(out, r#"{{"type":"an_event_type_from_a_later_cli"}}"#).is_err() {
+            return;
+        }
+    }
 
     for line in transcript.lines().take(truncate_after) {
         if line.trim().is_empty() {

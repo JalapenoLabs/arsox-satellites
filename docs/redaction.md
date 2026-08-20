@@ -92,13 +92,14 @@ with the work, on `ClaimedTurn`, on `TurnContext`, and on `Execution`.
 
 ## Where it is applied
 
-Three doors, chosen because each is the only way its kind of text gets out.
+Four doors, chosen because each is the only way its kind of text gets out.
 
 | Door | What it masks |
 |---|---|
 | `Store::append_event` | every stream event and its payload, before the encode |
 | `Store::record_incident` | an incident's message and its evidence |
 | `commands::execute` | a setup or checker command's captured output, and the command text itself |
+| `api::scrubbed` | every credential in the settings a `Thread` response carries |
 
 **Masking at the door rather than above it** is what makes this a property rather
 than a convention. `append_event` masks before the encode, so the row on disk and
@@ -129,6 +130,41 @@ which is the only way a contract that grows every release keeps this honest.
 Identifiers the satellite or the harness generates are deliberately left alone: a
 UUID and a tool call id cannot carry a credential, and scanning them buys nothing.
 
+### Settings on their way back out
+
+The first three doors mask text. The fourth masks a typed field, and it is a
+different problem: `Secret.value` is the plaintext a caller sent up, and the
+contract says the satellite never populates it on a response, at any endpoint,
+at any authentication level.
+
+`redaction::scrub_settings` moves each plaintext into `display` as the mask that
+stands in for it and clears `value`, under the thread's own mode. A value the
+caller marked public makes the same move and its rendering is the plaintext, so
+one rule covers the whole surface: `value` goes up, `display` comes back.
+
+**It runs at the response boundary, not where settings are decoded.** The stored
+settings are read for two purposes. One is a response. The other is work:
+`Provisioner::resume_interrupted` re-reads them to re-clone private repos after a
+restart, and `spawn` reads them to build an agent's environment. Masking at
+hydration would serve the first and silently break the second, leaving a restart
+cloning with `******` for a token. So `api::scrubbed` masks the copy already on
+its way to a client, and every handler returning a whole `Thread` goes through
+it: create, get, pause, resume, destroy.
+
+`ListThreads` is not among them and needs no masking. It returns `ThreadSummary`,
+which carries no settings at all, which is the stronger answer: an operational
+listing has no configuration in it to leak.
+
+Two mechanisms keep the walk honest as the contract grows:
+
+- **Every message on it is destructured by name**, so a field added to one of
+  them stops compiling until somebody says what it is. `clippy::unneeded_field_pattern`
+  is expected away there with that reason, because `..` is exactly what would let
+  a new credential through.
+- **A guard test reads the proto sources** for every message that declares a
+  `Secret` at all, so one added to a message the walk never reaches fails a test
+  rather than leaving a plaintext on a response.
+
 ### Two maskings that are not the engine, and stay
 
 `AgentVar` writes its own `Debug`, so a declared credential and the turn's proxy
@@ -157,6 +193,7 @@ that exist:
 - turn results, summaries, checker output, and command logs
 - incident messages and their evidence
 - captured setup and checker output
+- credentials in the settings every thread response carries
 
 These do not exist yet, because the features they belong to do not:
 

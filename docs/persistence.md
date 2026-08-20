@@ -158,10 +158,16 @@ events survive a reopen.
 
 `scripts/smoke-test.py` drives a running container with real protobuf requests:
 thread and turn lifecycle, pause, drain, resume, ordering, collection, expiry,
-idempotency, metadata filtering, and every error code the endpoints can return.
-It is written in Python on purpose, because a Python client decoding what a Rust
-satellite encoded is the cross-language contract proving itself rather than
-being asserted.
+idempotency, metadata filtering, the incident listings, and every error code the
+endpoints can return. It is written in Python on purpose, because a Python client
+decoding what a Rust satellite encoded is the cross-language contract proving
+itself rather than being asserted.
+
+The incident checks drive a turn with `[[unrecognized=1]]`, which makes the
+stand-in harness emit an event type nothing maps: a degraded incident, a turn
+that still completes, and evidence that outlives the thread when it is destroyed.
+Both stand-ins implement that directive, so the same check runs against the
+mounted shell one and against the Rust one a `cargo run` satellite spawns.
 
 The image ships no harness, so the run mounts a fake one. Both mounts are
 required: without the fixture the harness starts and immediately fails, taking
