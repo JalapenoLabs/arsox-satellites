@@ -251,7 +251,7 @@ pub async fn provision_repos(
         let name = directory_name(repo)?;
         let checkout = repos_root.join(&name);
 
-        if let Err(failure) = repos::clone(repo, &checkout).await {
+        if let Err(failure) = repos::clone(repo, &checkout, &execution.redactor).await {
             // The captured output stays in the incident rather than being
             // repeated here. It is already durable there, and a full git stderr
             // in a log line is noise in front of the one sentence that matters.
@@ -494,10 +494,11 @@ impl Provisioner {
     pub async fn provision(&self, thread_id: &str, settings: &ThreadSettings) {
         let repos = &settings.repos;
 
-        // Compiled once for the whole provisioning, the same way a claimed turn
-        // compiles one for its whole turn. A clone that fails prints whatever
-        // the remote said, and a remote's error body is not ours to predict.
-        let redactor = crate::redaction::Redactor::for_thread(settings);
+        // Resolved once per provisioning rather than per command. The refusal
+        // rule is applied inside, so a variable that would put back what the
+        // scrub removed never reaches a setup command either, and the thread's
+        // exec bound and its redactor come along with it.
+        let execution = Execution::for_thread(settings);
 
         tracing::info!(
             event.name = "workspace.provision.started",
@@ -511,12 +512,6 @@ impl Provisioner {
         // workspace either way, and an operator looking at that workspace should
         // find the instructions it was created with.
         self.write_instructions(thread_id, settings).await;
-
-        // Resolved once per provisioning rather than per command. The refusal
-        // rule is applied inside, so a variable that would put back what the
-        // scrub removed never reaches a setup command either, and the thread's
-        // exec bound comes along with it.
-        let execution = Execution::for_thread(settings);
 
         let report = match provision_repos(&self.workspace_root, thread_id, repos, &execution).await
         {
@@ -539,7 +534,7 @@ impl Provisioner {
                         message: format!("could not prepare the workspace: {error}"),
                         output: String::new(),
                     },
-                    &redactor,
+                    &execution.redactor,
                 )
                 .await;
 
@@ -549,7 +544,7 @@ impl Provisioner {
         };
 
         for failure in &report.failures {
-            self.report(thread_id, failure, &redactor).await;
+            self.report(thread_id, failure, &execution.redactor).await;
         }
 
         let outcome = if report.is_fatal() {

@@ -80,10 +80,10 @@ pub(crate) const TIMED_OUT: i32 = -2;
 
 /// How a thread's declared commands run.
 ///
-/// The environment and the bound travel together because every call site needs
-/// both, and a signature that took them separately is a signature that can be
-/// called with one. Setup commands and checkers are the same commands at two
-/// ends of a turn, so they run under the same pair.
+/// The environment, the bound, and the mask travel together because every call
+/// site needs all three, and a signature that took them separately is a
+/// signature that can be called with one. Setup commands and checkers are the
+/// same commands at two ends of a turn, so they run under the same three.
 #[derive(Debug, Clone)]
 pub struct Execution {
     /// The thread's declared variables, applied on top of the scrubbed
@@ -93,6 +93,16 @@ pub struct Execution {
 
     /// How long any one command may run before it is killed.
     pub bound: Duration,
+
+    /// The thread's secrets, masked out of captured output as it is captured.
+    ///
+    /// A command runs with the thread's credentials in its environment, so a
+    /// failing install that echoes its own registry token is an ordinary
+    /// Tuesday. Masking here rather than at each of the places captured output
+    /// travels to means the incident, the checker result, the turn report, and
+    /// the prompt that hands a failure back to the agent all carry the same
+    /// masked text, from one scan.
+    pub redactor: crate::redaction::Redactor,
 }
 
 impl Default for Execution {
@@ -100,6 +110,7 @@ impl Default for Execution {
         Self {
             env: Vec::new(),
             bound: crate::timeouts::DEFAULT_EXEC_COMMAND,
+            redactor: crate::redaction::Redactor::none(),
         }
     }
 }
@@ -111,6 +122,7 @@ impl Execution {
         Self {
             env: crate::harness::spawn::declared_environment(&settings.env),
             bound: crate::timeouts::Bounds::for_thread(settings).exec_command,
+            redactor: crate::redaction::Redactor::for_thread(settings),
         }
     }
 }
@@ -129,6 +141,19 @@ pub(crate) struct CommandOutcome {
 impl CommandOutcome {
     pub(crate) fn succeeded(&self) -> bool {
         self.exit_code == 0
+    }
+
+    /// The outcome as anything outside the satellite may see it.
+    ///
+    /// Applied at the moment of capture, so every place this travels to, the
+    /// incident, the checker result, the turn report, and the prompt that hands
+    /// a failure back to the agent, is masked from one scan rather than from
+    /// four that could each be forgotten.
+    fn masked(mut self, redactor: &crate::redaction::Redactor) -> Self {
+        redactor.redact_in_place(&mut self.command);
+        redactor.redact_in_place(&mut self.output);
+
+        self
     }
 }
 
@@ -217,6 +242,10 @@ pub(crate) async fn run(commands: &str, working_dir: &Path, execution: &Executio
 /// that says so, carrying whatever it had printed by then. The tail of a hung
 /// build is the only evidence of what it was doing when it stopped, so it is
 /// kept rather than discarded along with the process.
+///
+/// Every outcome leaves through [`Execution::redactor`], the command text
+/// included: a checker written as `deploy --token ghp_...` puts a credential in
+/// the command rather than in its output, and both end up in the same report.
 async fn execute(command: String, working_dir: &Path, execution: &Execution) -> CommandOutcome {
     let (program, flag) = shell();
 
@@ -248,7 +277,8 @@ async fn execute(command: String, working_dir: &Path, execution: &Execution) -> 
                 command,
                 exit_code: NOT_LAUNCHED,
                 output: format!("could not run the command: {error}"),
-            };
+            }
+            .masked(&execution.redactor);
         }
     };
 
@@ -276,7 +306,7 @@ async fn execute(command: String, working_dir: &Path, execution: &Execution) -> 
     let mut output = String::from_utf8_lossy(&said).into_owned();
     output.push_str(&String::from_utf8_lossy(&complained));
 
-    match finished {
+    let outcome = match finished {
         Ok(Ok(status)) => CommandOutcome {
             command,
             // `None` means a signal killed it, which is a failure with no
@@ -294,7 +324,9 @@ async fn execute(command: String, working_dir: &Path, execution: &Execution) -> 
         Err(_elapsed) => {
             tracing::warn!(
                 event.name = "command.timed_out",
-                command.text = command,
+                // A checker or setup command can carry a credential in its own
+                // text, and a satellite's logs leave the satellite too.
+                command.text = %execution.redactor.redact(&command),
                 command.bound_seconds = execution.bound.as_secs(),
                 "killing a command that ran past its {{command.bound_seconds}} second bound: \
                  {{command.text}}",
@@ -317,7 +349,9 @@ async fn execute(command: String, working_dir: &Path, execution: &Execution) -> 
                 ),
             }
         }
-    }
+    };
+
+    outcome.masked(&execution.redactor)
 }
 
 /// Reads one of a child's pipes to the end, into `into`.
@@ -503,6 +537,62 @@ mod tests {
             run.outcomes[0].output.contains("the-declared-value"),
             "got {:?}",
             run.outcomes[0].output
+        );
+
+        drop(std::fs::remove_dir_all(&directory));
+    }
+
+    #[tokio::test]
+    async fn a_command_that_echoes_a_secret_is_masked_before_anything_reads_it() {
+        // The whole reason masking happens at capture: a command runs with the
+        // thread's credentials in its environment, so an install that prints
+        // its own registry token is an ordinary Tuesday. Every place this
+        // outcome travels to reads the masked text.
+        let directory = scratch();
+        let declared = Execution {
+            env: vec![AgentVar {
+                key: "ARSOX_TEST_DECLARED".to_owned(),
+                value: "the-declared-secret".to_owned(),
+                secret: true,
+            }],
+            redactor: crate::redaction::Redactor::for_values(
+                vec!["the-declared-secret".to_owned()],
+                None,
+            ),
+            ..Execution::default()
+        };
+
+        let run = run(ECHO_DECLARED, &directory, &declared).await;
+
+        assert!(
+            !run.outcomes[0].output.contains("the-declared-secret"),
+            "got {:?}",
+            run.outcomes[0].output
+        );
+        assert!(run.outcomes[0].output.contains("******"));
+
+        drop(std::fs::remove_dir_all(&directory));
+    }
+
+    #[tokio::test]
+    async fn a_secret_written_into_the_command_itself_is_masked_too() {
+        // A checker spelled `deploy --token ghp_...` puts the credential in the
+        // command rather than in its output, and both reach the same report.
+        let directory = scratch();
+        let declared = Execution {
+            redactor: crate::redaction::Redactor::for_values(
+                vec!["the-inlined-secret".to_owned()],
+                None,
+            ),
+            ..Execution::default()
+        };
+
+        let run = run("exit 0 the-inlined-secret", &directory, &declared).await;
+
+        assert!(
+            !run.outcomes[0].command.contains("the-inlined-secret"),
+            "got {:?}",
+            run.outcomes[0].command
         );
 
         drop(std::fs::remove_dir_all(&directory));

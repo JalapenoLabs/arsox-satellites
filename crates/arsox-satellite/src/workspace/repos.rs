@@ -73,7 +73,11 @@ pub(super) struct CloneFailed {
 /// Returns [`CloneFailed`] when git exits nonzero or cannot be launched at all.
 /// Neither is a satellite error: both are reported as a `REPO_CLONE_FAILED`
 /// incident and end the thread's provisioning.
-pub(super) async fn clone(repo: &Repo, into: &Path) -> Result<(), CloneFailed> {
+pub(super) async fn clone(
+    repo: &Repo,
+    into: &Path,
+    redactor: &crate::redaction::Redactor,
+) -> Result<(), CloneFailed> {
     let credential = Credentials::lend(repo).map_err(|error| CloneFailed {
         message: format!(
             "could not stage the credential for {}",
@@ -112,13 +116,20 @@ pub(super) async fn clone(repo: &Repo, into: &Path) -> Result<(), CloneFailed> {
 
     let said = String::from_utf8_lossy(&output.stderr);
 
+    // Three passes over the same text, and each is here for its own reason. The
+    // thread's redactor masks every secret the thread declared, since a remote's
+    // error body is not ours to predict. `redact_url` catches a credential
+    // somebody wrote into the URL themselves, which the thread never declared
+    // and the redactor has therefore never heard of. And the staged credential
+    // masks itself, so the token this clone was handed is hidden by the code
+    // that staged it rather than by whatever redactor a caller passed in.
     Err(CloneFailed {
         message: format!(
             "git clone of {} exited with {}",
             redact_url(&repo.url),
             output.status
         ),
-        output: credential.redact(&redact_url(said.trim())),
+        output: credential.redact(&redactor.redact(&redact_url(said.trim()))),
     })
 }
 
@@ -250,9 +261,25 @@ impl Credentials {
     /// git does not print a token it was handed, but a remote's error body and a
     /// setup command's log are not ours to predict, and this text is on its way
     /// to an incident row that outlives the thread.
+    ///
+    /// The thread's own redactor already knows this token, so in the ordinary
+    /// case this finds nothing. It stays because it is the guarantee that
+    /// belongs to the code that staged the credential: a caller who passed a
+    /// redactor built from different settings still cannot print the token this
+    /// clone was lent. The mask itself comes from the shared engine, so one
+    /// implementation decides what a masked secret looks like.
     fn redact(&self, text: &str) -> String {
         match self {
-            Self::Token(token) if !token.is_empty() => text.replace(token, "******"),
+            Self::Token(token) if !token.is_empty() => text.replace(
+                token,
+                // The contract's default: reveal nothing. There is nothing here
+                // to read a thread's `Redaction` mode from, and a credential
+                // masked more tightly than asked for costs nothing.
+                &crate::redaction::mask(
+                    token,
+                    &arsox_sdk::proto::settings::v1::Redaction::default(),
+                ),
+            ),
             _nothing_to_hide => text.to_owned(),
         }
     }

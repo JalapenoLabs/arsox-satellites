@@ -253,6 +253,18 @@ impl Redactor {
         }
     }
 
+    /// Masks every secret in a string that is already owned.
+    ///
+    /// For text on its way into a struct, where the borrow [`Self::redact`]
+    /// hands back has nowhere to live. Nothing is written when nothing matched.
+    pub fn redact_in_place(&self, text: &mut String) {
+        if let Some(scanner) = self.scanner.as_deref()
+            && let Cow::Owned(masked) = scanner.scan(text)
+        {
+            *text = masked;
+        }
+    }
+
     /// Masks every secret in a whole stream event, payload included.
     pub fn redact_event(&self, event: &mut ThreadEvent) {
         if let Some(scanner) = self.scanner.as_deref() {
