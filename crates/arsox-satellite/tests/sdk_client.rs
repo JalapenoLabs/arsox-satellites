@@ -687,6 +687,8 @@ fn settings_with_credentials() -> ThreadSettings {
                     value: Some(MODEL_PLAINTEXT.to_owned()),
                     display: None,
                 })),
+                // Undeclared, so the satellite infers presentation as before.
+                presentation: None,
             }),
             ..ModelEndpoint::default()
         }],

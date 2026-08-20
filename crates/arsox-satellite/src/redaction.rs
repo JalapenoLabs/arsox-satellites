@@ -1780,6 +1780,8 @@ mod tests {
             name: name.to_owned(),
             auth: Some(LlmAuth {
                 credential: Some(credential),
+                // Undeclared, so the satellite infers presentation as before.
+                presentation: None,
             }),
             ..ModelEndpoint::default()
         };
