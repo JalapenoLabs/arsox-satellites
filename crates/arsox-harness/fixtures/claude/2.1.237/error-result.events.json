@@ -14,7 +14,7 @@
     "is_error": true,
     "permission_denials": [],
     "stop_reason": null,
-    "summary": "",
+    "summary": "No conversation found with session ID: 00000000-0000-4000-8000-0000000000ff",
     "timing": {
       "llm": {
         "nanos": 0,

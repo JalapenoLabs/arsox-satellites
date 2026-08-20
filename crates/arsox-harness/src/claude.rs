@@ -253,7 +253,7 @@ fn map_result(event: &Value) -> HarnessResult {
             .get("is_error")
             .and_then(Value::as_bool)
             .unwrap_or(false),
-        summary: string_at(event, "result"),
+        summary: summary(event),
         tokens: usage.map(token_usage).unwrap_or_default(),
         cost: CostEstimate {
             amount: event
@@ -285,6 +285,35 @@ fn map_result(event: &Value) -> HarnessResult {
             .map(|denials| denials.iter().map(ToString::to_string).collect())
             .unwrap_or_default(),
     }
+}
+
+/// What the harness said it did, or why it could not.
+///
+/// A run the CLI refuses to start carries no `result` at all: the reason arrives
+/// in an `errors` array instead. Reading only `result` would report a failed
+/// turn with an empty summary, losing the turn's own account of itself in the
+/// one case somebody most wants to read it.
+///
+/// An entry that is not a string is rendered rather than skipped, on the same
+/// rule the rest of this mapper follows: a shape nobody anticipated is still
+/// evidence, and dropping it is how a failure goes quiet.
+fn summary(event: &Value) -> String {
+    if let Some(text) = event.get("result").and_then(Value::as_str) {
+        return text.to_owned();
+    }
+
+    let Some(errors) = event.get("errors").and_then(Value::as_array) else {
+        return String::new();
+    };
+
+    errors
+        .iter()
+        .map(|error| match error.as_str() {
+            Some(text) => text.to_owned(),
+            None => error.to_string(),
+        })
+        .collect::<Vec<String>>()
+        .join("\n")
 }
 
 /// Splits usage by the model that actually answered.
@@ -749,6 +778,25 @@ mod tests {
             assert!(all_events(ERROR_RESULT_TRANSCRIPT).is_empty());
             assert!(result.is_error);
             assert_eq!(result.stop_reason, None);
+        }
+
+        #[test]
+        fn a_failed_run_reports_why_rather_than_an_empty_summary() {
+            // The recording is what corrected this. A failed run carries no
+            // `result` field at all, so a mapper reading only that reports the
+            // failure with nothing to show for it, and the reason the CLI wrote
+            // down never reaches the caller.
+            assert_eq!(
+                result_of(ERROR_RESULT_TRANSCRIPT).summary,
+                "No conversation found with session ID: 00000000-0000-4000-8000-0000000000ff"
+            );
+        }
+
+        #[test]
+        fn a_successful_run_still_summarizes_from_its_result() {
+            // `errors` is the fallback, not the source. A run that succeeded
+            // must summarize from what the agent said.
+            assert_eq!(result_of(TOOL_CALL_TRANSCRIPT).summary, "done");
         }
     }
 
