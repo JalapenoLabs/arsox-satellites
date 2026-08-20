@@ -1161,7 +1161,7 @@ impl Runner {
                 }
 
                 Some(incident) = incidents.recv() => {
-                    self.store_incident(&incident, at.redactor).await;
+                    self.report_incident(incident, at.redactor).await;
                 }
 
                 () = tokio::time::sleep_until(clock.warn_at), if !clock.warned => {
@@ -1199,7 +1199,7 @@ impl Runner {
         // to select on, and an incident recorded nowhere is the silent failure
         // the whole incident system exists to prevent.
         while let Ok(incident) = incidents.try_recv() {
-            self.store_incident(&incident, at.redactor).await;
+            self.report_incident(incident, at.redactor).await;
         }
 
         consumed
@@ -1222,20 +1222,13 @@ impl Runner {
         }
 
         for event in mapping.events {
-            // An incident from the mapper is recorded as well as streamed: the
-            // stream is ephemeral and the database is where "why did last night
-            // go wrong" gets answered.
-            if let Payload::Incident(incident) = &event.payload {
-                self.record_incident(
-                    at,
-                    ErrorCode::try_from(incident.code).unwrap_or(ErrorCode::Internal),
-                    Disposition::try_from(incident.disposition).unwrap_or(Disposition::Degraded),
-                    // The mapper's own judgement, carried through rather than
-                    // re-derived from a code it already decided about.
-                    incident.retryable,
-                    &incident.message,
-                )
-                .await;
+            // An incident from the mapper takes the path that records it and
+            // streams it in one call, and takes it instead of the append below.
+            // Doing both would put two copies of one failure on the stream.
+            if let Payload::Incident(incident) = event.payload {
+                self.report_incident(attributed(incident, at, event.member_id), at.redactor)
+                    .await;
+                continue;
             }
 
             self.append(at, event.type_name, event.member_id, event.payload)
@@ -1455,9 +1448,11 @@ impl Runner {
         retryable: bool,
         message: &str,
     ) {
-        self.store_incident(
-            &Incident {
+        self.report_incident(
+            Incident {
                 incident_id: uuid::Uuid::now_v7().to_string(),
+                // Filled in by the append, so the row can be located in the
+                // stream and the frame looked up afterwards.
                 sequence: None,
                 thread_id: Some(at.thread_id.to_owned()),
                 turn_id: Some(at.turn_id.to_owned()),
@@ -1474,19 +1469,47 @@ impl Runner {
         .await;
     }
 
-    /// Writes an already assembled incident to the database.
+    /// Records an already assembled incident and puts it on the thread's stream.
     ///
-    /// Separate from [`Self::record_incident`] because an incident the proxy
-    /// built arrives whole: it knows its own code, disposition, and message, and
-    /// re-deriving any of those here would let the two disagree.
-    async fn store_incident(&self, incident: &Incident, redactor: &Redactor) {
-        if let Err(error) = self.store.record_incident(incident, redactor).await {
+    /// Separate from [`Self::record_incident`] because an incident the proxy or
+    /// the mapper built arrives whole: it knows its own code, disposition, and
+    /// message, and re-deriving any of those here would let the two disagree.
+    ///
+    /// One store call writes both copies. Appending the event at each call site
+    /// and recording the row separately would be two rules to remember, and the
+    /// one that gets forgotten is the stream.
+    async fn report_incident(&self, incident: Incident, redactor: &Redactor) {
+        if let Err(error) = self.store.report_incident(incident, redactor).await {
             tracing::error!(
                 event.name = "incident.record.failed",
                 "could not record an incident: {error}",
             );
         }
     }
+}
+
+/// Fills in what a mapper-produced incident cannot know about itself.
+///
+/// The mapper reads one native line. It knows the code, the disposition, and
+/// what went wrong, and nothing about which thread or turn was reading that
+/// line, so the attribution is supplied here rather than invented there. Its own
+/// judgement, `retryable` included, is carried through untouched.
+fn attributed(mut incident: Incident, at: Attribution<'_>, member_id: Option<String>) -> Incident {
+    if incident.incident_id.is_empty() {
+        incident.incident_id = uuid::Uuid::now_v7().to_string();
+    }
+
+    incident.thread_id = Some(at.thread_id.to_owned());
+    incident.turn_id = Some(at.turn_id.to_owned());
+    incident.member_id = incident.member_id.or(member_id);
+
+    if incident.occurred_at.is_none() {
+        // The native line that caused this is by definition one the mapper could
+        // not read, so it carried no timestamp. Arrival time is the honest one.
+        incident.occurred_at = Some(Timestamp::now());
+    }
+
+    incident
 }
 
 /// Starts the harness process with its pipes arranged the way the runner reads

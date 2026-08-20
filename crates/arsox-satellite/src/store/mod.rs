@@ -20,6 +20,7 @@
 
 mod claims;
 mod events;
+mod incidents;
 mod threads;
 mod turns;
 

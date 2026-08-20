@@ -57,7 +57,6 @@ use crate::commands::Execution;
 use crate::store::{ProvisionOutcome, Store};
 use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::error::v1::ErrorCode;
-use arsox_sdk::proto::event::v1::thread_event::Payload;
 use arsox_sdk::proto::incident::v1::{Disposition, Incident};
 use arsox_sdk::proto::settings::v1::{Repo, ThreadSettings};
 use std::path::{Path, PathBuf};
@@ -558,17 +557,18 @@ impl Provisioner {
 
     /// Writes one failure where it will still be readable next week.
     ///
-    /// The event goes first so the incident row can carry the sequence it
-    /// landed at, which is what lets a query result be located in the stream and
-    /// a stream frame be looked up afterwards.
+    /// Recorded and streamed by the one store call that does both, so a
+    /// provisioning failure cannot land in the database without also reaching
+    /// whoever is watching the thread it happened to.
     async fn report(
         &self,
         thread_id: &str,
         failure: &ProvisionFailure,
         redactor: &crate::redaction::Redactor,
     ) {
-        let mut incident = Incident {
+        let incident = Incident {
             incident_id: uuid::Uuid::now_v7().to_string(),
+            // Filled in by the append, so the row can be located in the stream.
             sequence: None,
             thread_id: Some(thread_id.to_owned()),
             // Provisioning happens at thread creation, before any turn exists.
@@ -582,28 +582,7 @@ impl Provisioner {
             occurred_at: Some(Timestamp::now()),
         };
 
-        match self
-            .store
-            .append_event(crate::store::AppendEvent {
-                thread_id: thread_id.to_owned(),
-                turn_id: None,
-                member_id: None,
-                type_name: "incident".to_owned(),
-                occurred_at: None,
-                payload: Payload::Incident(incident.clone()),
-                redactor: redactor.clone(),
-            })
-            .await
-        {
-            Ok(event) => incident.sequence = Some(event.sequence),
-            Err(error) => tracing::error!(
-                event.name = "event.append.failed",
-                thread.id = thread_id,
-                "could not stream a provisioning incident: {error}",
-            ),
-        }
-
-        if let Err(error) = self.store.record_incident(&incident, redactor).await {
+        if let Err(error) = self.store.report_incident(incident, redactor).await {
             tracing::error!(
                 event.name = "incident.record.failed",
                 thread.id = thread_id,
