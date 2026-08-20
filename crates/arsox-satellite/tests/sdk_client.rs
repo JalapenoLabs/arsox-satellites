@@ -470,7 +470,9 @@ async fn incidents_are_listed_through_the_sdk_per_thread_and_per_satellite() {
         .expect("should create");
 
     // The stand-in stops after three lines, which is a harness that exited
-    // without saying what it did: one fatal incident against this turn.
+    // without saying what it did. The turn starts it once more and then gives
+    // up, so this thread carries the recovery that was attempted and the failure
+    // it ended on.
     let turn = created
         .handle
         .start_turn("replay the probe [[truncate=3]]")
@@ -483,12 +485,11 @@ async fn incidents_are_listed_through_the_sdk_per_thread_and_per_satellite() {
         .expect("should report a result");
 
     assert_eq!(result.status, i32::from(TurnStatus::Failed));
+
+    let counts = result.incident_counts.expect("a report carries its counts");
     assert_eq!(
-        result
-            .incident_counts
-            .expect("a report carries its counts")
-            .fatal,
-        1,
+        (counts.recovered, counts.fatal),
+        (1, 1),
         "the counts ride along, so the common case needs no query"
     );
 
@@ -498,13 +499,20 @@ async fn incidents_are_listed_through_the_sdk_per_thread_and_per_satellite() {
         .await
         .expect("should list this thread's incidents");
 
-    assert_eq!(listed.len(), 1);
-    assert_eq!(listed[0].code, i32::from(ErrorCode::HarnessCrashed));
-    assert_eq!(listed[0].disposition, i32::from(Disposition::Fatal));
-    assert_eq!(listed[0].turn_id.as_deref(), Some(turn.id()));
+    // Oldest first, which is the order they happened in: the restart, then the
+    // turn giving up.
+    assert_eq!(listed.len(), 2);
+    assert!(
+        listed
+            .iter()
+            .all(|incident| incident.code == i32::from(ErrorCode::HarnessCrashed))
+    );
+    assert_eq!(listed[0].disposition, i32::from(Disposition::Recovered));
+    assert_eq!(listed[1].disposition, i32::from(Disposition::Fatal));
+    assert_eq!(listed[1].turn_id.as_deref(), Some(turn.id()));
     // The sequence is what lets a query result be located in the stream the same
     // incident was emitted on.
-    assert!(listed[0].sequence.is_some());
+    assert!(listed[1].sequence.is_some());
 
     // A filter narrows. A disposition nothing carries returns nothing rather
     // than falling back to everything.
@@ -558,7 +566,7 @@ async fn incidents_are_listed_through_the_sdk_per_thread_and_per_satellite() {
 
     assert_eq!(
         after_teardown.len(),
-        1,
+        2,
         "incidents outlive the thread they describe"
     );
 }

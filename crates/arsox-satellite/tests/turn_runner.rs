@@ -43,6 +43,15 @@ const CODEX_TRANSCRIPT: &str = concat!(
     "/../arsox-harness/fixtures/codex/0.147.0/tool-call.stdout.jsonl"
 );
 
+/// A recording whose result reports a failure, from a clean exit.
+///
+/// The harness said what went wrong, which is a statement about the work rather
+/// than a process that stopped. It is the case a restart must leave alone.
+const ERROR_RESULT_TRANSCRIPT: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../arsox-harness/fixtures/claude/2.1.237/error-result.stdout.jsonl"
+);
+
 /// The session id that recording's `thread.started` announces.
 ///
 /// Minted by the CLI rather than chosen by the satellite, which is the whole
@@ -806,6 +815,22 @@ async fn incidents_coded(store: &Store, thread_id: &str, code: ErrorCode) -> Vec
         .collect()
 }
 
+/// One numeric field of an incident's evidence.
+fn number_field(details: &prost_types::Struct, key: &str) -> Option<f64> {
+    match details.fields.get(key)?.kind.as_ref()? {
+        prost_types::value::Kind::NumberValue(number) => Some(*number),
+        _other => None,
+    }
+}
+
+/// One text field of an incident's evidence.
+fn text_field<'a>(details: &'a prost_types::Struct, key: &str) -> Option<&'a str> {
+    match details.fields.get(key)?.kind.as_ref()? {
+        prost_types::value::Kind::StringValue(text) => Some(text),
+        _other => None,
+    }
+}
+
 #[tokio::test]
 async fn a_harness_that_hangs_once_is_restarted_and_the_turn_completes() {
     // A harness that says nothing at all is stopped rather than slow, and a
@@ -903,6 +928,250 @@ async fn a_harness_that_hangs_every_time_fails_the_turn_with_the_idle_code() {
             i32::from(arsox_sdk::proto::incident::v1::Disposition::Fatal),
         ],
         "one restart attempted, then the turn gave up"
+    );
+}
+
+#[tokio::test]
+async fn a_harness_that_crashes_once_is_restarted_and_the_turn_completes() {
+    // The other ending a restart recovers. `crash_once` dies before the
+    // transcript on the first run and lets the second through, which is what a
+    // harness that died on startup looks like from here.
+    let (harness, thread_id, turn_id) = start("run the probe [[crash_once=9]]").await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Completed,
+        "the restarted session finished the work"
+    );
+
+    let names: Vec<String> = harness
+        .store
+        .events_after(&thread_id, 0, 100)
+        .await
+        .expect("should replay")
+        .into_iter()
+        .map(|event| event.r#type)
+        .collect();
+    assert!(
+        names.iter().any(|name| name == "agent.message"),
+        "{names:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_restarted_crash_records_the_recovery_with_the_code_it_died_on() {
+    // `recovered` is the disposition that pays for the incident feature: a
+    // restart that worked looks exactly like a turn that never crashed, and a
+    // harness dying on every turn is a pattern nobody sees unless the recovery
+    // is written down. The exit code rides along because it is the first thing
+    // anybody asks about a process that died.
+    let (harness, thread_id, turn_id) = start("run the probe [[crash_once=9]]").await;
+
+    settle(&harness.store, &thread_id, &turn_id).await;
+
+    let recorded = incidents_coded(&harness.store, &thread_id, ErrorCode::HarnessCrashed).await;
+
+    assert_eq!(recorded.len(), 1, "one restart, so one incident");
+    assert_eq!(
+        recorded[0].disposition,
+        i32::from(arsox_sdk::proto::incident::v1::Disposition::Recovered),
+        "the turn went on, so this is not fatal"
+    );
+    assert!(
+        recorded[0].retryable,
+        "a process that died is worth another attempt"
+    );
+    assert_eq!(recorded[0].turn_id.as_deref(), Some(turn_id.as_str()));
+
+    let evidence = recorded[0]
+        .details
+        .as_ref()
+        .expect("a crash carries the exit code it died on");
+    assert_eq!(number_field(evidence, "exit_code"), Some(9.0));
+}
+
+#[tokio::test]
+async fn a_harness_that_crashes_every_time_fails_the_turn_and_says_what_it_died_of() {
+    // One restart, never two. `exit` dies on every run, so the second death is
+    // the turn's ending, and it carries the evidence somebody needs to act on it
+    // without reproducing the run.
+    let (harness, thread_id, turn_id) = start("run the probe [[exit=3]]").await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Failed
+    );
+
+    let error = result_of(&harness.store, &thread_id, &turn_id)
+        .await
+        .error
+        .expect("a turn that gave up says why");
+
+    assert_eq!(error.code, i32::from(ErrorCode::HarnessCrashed));
+    assert!(
+        error.retryable,
+        "the workspace survives, so the same turn is worth submitting again"
+    );
+
+    // Two incidents under one code, saying different things: the restart that
+    // was attempted, and the turn that ended anyway.
+    let recorded = incidents_coded(&harness.store, &thread_id, ErrorCode::HarnessCrashed).await;
+    let dispositions: Vec<i32> = recorded
+        .iter()
+        .map(|incident| incident.disposition)
+        .collect();
+
+    assert_eq!(
+        dispositions,
+        vec![
+            i32::from(arsox_sdk::proto::incident::v1::Disposition::Recovered),
+            i32::from(arsox_sdk::proto::incident::v1::Disposition::Fatal),
+        ],
+        "one restart attempted, then the turn gave up"
+    );
+
+    let evidence = recorded[1]
+        .details
+        .as_ref()
+        .expect("the fatal incident carries the exit code and the last output");
+    assert_eq!(number_field(evidence, "exit_code"), Some(3.0));
+    assert!(
+        text_field(evidence, "output_tail").is_some_and(|tail| tail.contains("result")),
+        "the tail should hold what the process said last: {:?}",
+        text_field(evidence, "output_tail")
+    );
+}
+
+#[tokio::test]
+async fn a_clean_exit_that_reported_an_error_result_is_not_restarted() {
+    // The line that decides what a restart is for. A harness that emitted a
+    // well-formed error result made a statement about the work, and running it
+    // again would spend another session reaching the same answer. Only a process
+    // that stopped without saying anything is worth replacing.
+    let (harness, thread_id, turn_id) = start(&format!(
+        "run the probe [[transcript={ERROR_RESULT_TRANSCRIPT}]]"
+    ))
+    .await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Failed,
+        "the harness reported a failure, and the turn reports it too"
+    );
+
+    // A restart always records the recovery it attempted, so an empty listing
+    // under both restartable codes is the proof that no session was spent twice.
+    assert!(
+        incidents_coded(&harness.store, &thread_id, ErrorCode::HarnessCrashed)
+            .await
+            .is_empty(),
+        "an error result is an answer rather than a crash"
+    );
+    assert!(
+        incidents_coded(&harness.store, &thread_id, ErrorCode::HarnessIdleTimeout)
+            .await
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn an_idle_restart_and_a_crash_spend_one_budget_between_them() {
+    // One budget for the turn, across both causes. What it bounds is process
+    // instability inside a turn, and a harness that hung, was restarted, and
+    // then died is unstable twice however differently the two endings read.
+    let (harness, thread_id, turn_id) = start_with(
+        "run the probe [[hang_once=5000]] [[exit=4]]",
+        idle_bound_of(300),
+    )
+    .await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Failed
+    );
+
+    let error = result_of(&harness.store, &thread_id, &turn_id)
+        .await
+        .error
+        .expect("a turn that gave up says why");
+    assert_eq!(
+        error.code,
+        i32::from(ErrorCode::HarnessCrashed),
+        "the turn ends on the ending that actually stopped it"
+    );
+
+    // The hang was recovered, and the crash after it found the budget spent.
+    let hung = incidents_coded(&harness.store, &thread_id, ErrorCode::HarnessIdleTimeout).await;
+    assert_eq!(hung.len(), 1);
+    assert_eq!(
+        hung[0].disposition,
+        i32::from(arsox_sdk::proto::incident::v1::Disposition::Recovered)
+    );
+
+    let died = incidents_coded(&harness.store, &thread_id, ErrorCode::HarnessCrashed).await;
+    assert_eq!(
+        died.iter()
+            .map(|incident| incident.disposition)
+            .collect::<Vec<i32>>(),
+        vec![i32::from(
+            arsox_sdk::proto::incident::v1::Disposition::Fatal
+        )],
+        "a second restart would be a third session proving the second one"
+    );
+}
+
+#[tokio::test]
+async fn a_crash_before_a_session_id_restarts_under_the_id_the_first_attempt_used() {
+    // A first turn that died before the harness announced a session has nothing
+    // to resume, so the restart opens one under the id the satellite chose the
+    // first time. Resuming a session that was never created would fail the
+    // restart on the one path it exists to recover.
+    let (harness, thread_id, turn_id) =
+        start("run the probe [[crash_once=9]] [[record_argv=restart.argv]]").await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Completed
+    );
+
+    // The file holds the last spawn's command line, which is the restart's.
+    let restarted = recorded_argv(harness.workspace.path(), &thread_id, "restart.argv");
+
+    assert!(
+        !restarted.contains(&"--resume".to_owned()),
+        "there was no session to resume: {restarted:?}"
+    );
+    assert!(
+        restarted
+            .windows(2)
+            .any(|pair| pair == ["--session-id".to_owned(), thread_id.clone()]),
+        "the restart should open the session the first attempt was given: {restarted:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_codex_crash_before_its_thread_started_restarts_without_a_resume() {
+    // The same case from the other side of the session disagreement. Codex mints
+    // its own id and announces it on `thread.started`, so a process that died
+    // before saying anything left the satellite with nothing to pass, and the
+    // restart asks for a fresh one exactly as a first turn does.
+    let (harness, thread_id, turn_id) = start_with(
+        "run the probe [[crash_once=9]] [[record_argv=restart.argv]]",
+        codex_thread(),
+    )
+    .await;
+
+    assert_eq!(
+        settle(&harness.store, &thread_id, &turn_id).await,
+        TurnStatus::Completed
+    );
+
+    let restarted = recorded_argv(harness.workspace.path(), &thread_id, "restart.argv");
+
+    assert_eq!(restarted.first().map(String::as_str), Some("exec"));
+    assert!(
+        !restarted.contains(&"resume".to_owned()),
+        "the CLI had not minted an id yet: {restarted:?}"
     );
 }
 
@@ -1220,11 +1489,13 @@ async fn a_turn_report_carries_its_own_incident_counts() {
         .incident_counts
         .expect("every turn reports its counts, even when they are all zero");
 
-    // The one fatal incident the runner records for a harness that exited
-    // without saying what it did.
+    // A harness that exited without saying what it did is started once more,
+    // and the turn gives up when the second one says nothing either. Both are
+    // counted, which is the point: a report saying only that the turn failed
+    // would hide that a recovery was attempted.
+    assert_eq!(counts.recovered, 1);
     assert_eq!(counts.fatal, 1);
     assert_eq!(counts.degraded, 0);
-    assert_eq!(counts.recovered, 0);
     assert_eq!(counts.blocked, 0);
 
     // The counts describe the rows a listing would return rather than a tally
@@ -1239,7 +1510,7 @@ async fn a_turn_report_carries_its_own_incident_counts() {
             .iter()
             .filter(|incident| incident.turn_id.as_deref() == Some(turn_id.as_str()))
             .count(),
-        1
+        2
     );
 }
 

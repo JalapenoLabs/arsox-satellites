@@ -18,17 +18,24 @@
 //! recognize all produce incidents. A turn that ends badly ends with a reason
 //! attached rather than a gap where its output should be.
 //!
-//! # A hung harness is ended, and given one chance to recover
+//! # A wedged harness is ended, and given one chance to recover
 //!
-//! A harness that produces no output at all is not slow, it is stopped, and
-//! nothing else in the loop can tell. So the reading loop carries an idle bound
-//! that every line of output resets, and a harness that outlives it is killed
-//! and started again on the same session with the same grant.
+//! Three endings say the process stopped without saying what the turn did: it
+//! produced no output at all inside its idle bound, it died, or it exited
+//! cleanly having never reported a result. Each is a fact about a process rather
+//! than about the work, and a process is what a restart replaces. So the harness
+//! is started again on the same session, under the same grant, meter, and wall
+//! clock.
 //!
-//! **Once, never twice.** A restart recovers a process that wedged; it does not
-//! recover a prompt that wedges every process that reads it. A second restart
-//! would spend another session reaching the same place, so the second expiry
-//! ends the turn with `HARNESS_IDLE_TIMEOUT` instead.
+//! A clean exit that **did** report a result is none of those, however badly the
+//! result reads. The harness made a statement, and restarting it would repeat
+//! the turn against the same answer.
+//!
+//! **Once, never twice, and once for the whole turn.** A restart recovers a
+//! process that wedged; it does not recover a prompt that wedges every process
+//! that reads it. A second restart would spend another session reaching the same
+//! place, so the second ending fails the turn with `HARNESS_IDLE_TIMEOUT` or
+//! `HARNESS_CRASHED`, whichever it was.
 
 use crate::harness::spawn::{HarnessCommand, ModelAccess, Session, command_for, process_for};
 use crate::harness::{HarnessResult, Mapping, accounting, checkers, claude, codex};
@@ -84,13 +91,36 @@ const SECONDS_IN_A_YEAR: u64 = 365 * 24 * 60 * 60;
 /// because a duration is scaled rather than divided into percent.
 const WARN_AT_FRACTION: f64 = 0.8;
 
-/// How many times a hung harness is started again before the turn gives up.
+/// How many times one turn starts its harness again before it gives up.
 ///
 /// One. A restart recovers a process that wedged, which is a real and common
 /// thing; it does not recover a prompt, a repo, or a model that wedges every
-/// process reading it, which is what a second hang after a clean restart says is
-/// happening. A third attempt spends another session proving the second one.
+/// process reading it, which is what a second failure after a clean restart says
+/// is happening. A third attempt spends another session proving the second one.
+///
+/// **One budget for the turn, across every cause and every session.** What it
+/// bounds is process instability inside a turn, and a harness that hung, was
+/// restarted, and then died is unstable twice however differently the two
+/// endings are named. A budget per cause would let one turn spend four sessions
+/// to learn the same thing, and a budget per session would not be a ceiling the
+/// turn holds at all, since a checker fix cycle is another session in it. See
+/// [`TurnContext::restarts_left`].
 const RESTARTS_ALLOWED: u32 = 1;
+
+/// How many of a wedged session's last lines are kept as evidence.
+///
+/// Enough to carry a stack trace or the CLI's parting complaint, and bounded
+/// because the alternative is a turn's entire output in an incident row. What
+/// stdout carried is in the event log either way; this is the only place stderr
+/// survives at all.
+const TAIL_LINES: usize = 20;
+
+/// How much of any one of those lines is kept.
+///
+/// A single line of harness stdout is a JSON object that can run to tens of
+/// kilobytes, and twenty of those is a row nobody can read. The head of a line
+/// is the part that says what it was.
+const TAIL_LINE_CHARS: usize = 500;
 
 /// Withdraws a turn's proxy grant however the turn ends.
 ///
@@ -155,6 +185,19 @@ struct Consumed {
     /// turn.
     idle: bool,
 
+    /// How the process died, when it died rather than finished.
+    ///
+    /// Not an error by itself either, for the same reason and through the same
+    /// restart. Absent for a session the runner tore down on purpose: the exit
+    /// status of a process the satellite killed says nothing about the harness.
+    crashed: Option<Crash>,
+
+    /// The last lines the session wrote, on either pipe.
+    ///
+    /// The "last output" the README promises a crash captures, and the evidence
+    /// that lets somebody act on the incident without reproducing the run.
+    tail: Tail,
+
     /// A failure the proxy reported that the turn cannot go on from.
     ///
     /// The proxy sees requests and not the turn they belong to the end of, so it
@@ -175,6 +218,141 @@ struct Consumed {
     /// a preamble announcing what the agent is about to do and closes with the
     /// answer, so taking the first would report the plan as the result.
     last_agent_message: Option<String>,
+}
+
+/// A harness process that ended by dying rather than by finishing.
+#[derive(Debug, Clone)]
+struct Crash {
+    /// The code it exited with, absent when a signal ended it instead.
+    code: Option<i32>,
+
+    /// The status as the platform renders it.
+    ///
+    /// Kept alongside the code because a signal has no code, and "killed by
+    /// SIGKILL" is the sentence that explains an out-of-memory harness.
+    status: String,
+}
+
+/// The last lines a harness wrote before it stopped.
+///
+/// A bounded ring rather than the whole session. See [`TAIL_LINES`].
+#[derive(Debug, Default)]
+struct Tail(std::collections::VecDeque<String>);
+
+impl Tail {
+    /// Keeps `line`, dropping the oldest once the ring is full.
+    fn remember(&mut self, line: &str) {
+        let kept: String = line.chars().take(TAIL_LINE_CHARS).collect();
+
+        self.0.push_back(kept);
+        if self.0.len() > TAIL_LINES {
+            self.0.pop_front();
+        }
+    }
+
+    /// What it amounts to, or nothing when the session said nothing.
+    ///
+    /// `None` rather than an empty string, so an incident carries no field
+    /// pretending to be evidence.
+    fn joined(&self) -> Option<String> {
+        (!self.0.is_empty()).then(|| {
+            self.0
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<&str>>()
+                .join("\n")
+        })
+    }
+}
+
+/// A session ending that a restart could plausibly recover.
+///
+/// Every variant is a fact about the process rather than about the work, which
+/// is the line that decides what restarts. A clean exit carrying a result is
+/// absent from this enum on purpose: the harness said what happened, and running
+/// it again would reach the same answer by the same route.
+#[derive(Debug, Clone, Copy)]
+enum Wedged<'a> {
+    /// No output at all inside the idle bound.
+    Idle,
+
+    /// The process died.
+    Crashed(&'a Crash),
+
+    /// A clean exit that never said what the turn did.
+    Speechless,
+}
+
+impl<'a> Wedged<'a> {
+    /// What a finished session amounts to, when a restart could recover it.
+    fn of(consumed: &'a Consumed) -> Option<Self> {
+        // An ending the runner chose is not a wedged process. Checked first,
+        // because a harness killed mid-word exits like one that died on its own
+        // and the difference is which of us stopped it.
+        if consumed.cancelled || consumed.exhausted.is_some() {
+            return None;
+        }
+
+        if consumed.idle {
+            return Some(Self::Idle);
+        }
+
+        if let Some(crash) = consumed.crashed.as_ref() {
+            return Some(Self::Crashed(crash));
+        }
+
+        consumed.result.is_none().then_some(Self::Speechless)
+    }
+
+    /// The code this ending is reported under, restarted or not.
+    ///
+    /// One code per ending rather than one per position, so a `recovered` row
+    /// and the `fatal` row that may follow it are the same fact told twice.
+    const fn code(self) -> ErrorCode {
+        match self {
+            Self::Idle => ErrorCode::HarnessIdleTimeout,
+            Self::Crashed(..) | Self::Speechless => ErrorCode::HarnessCrashed,
+        }
+    }
+
+    /// What happened, for the incident recording that it is being retried.
+    fn restarting(self, bounds: &Bounds) -> String {
+        match self {
+            Self::Idle => format!(
+                "the harness produced no output for {:?} and was restarted",
+                bounds.harness_idle
+            ),
+            Self::Crashed(died) => {
+                format!("the harness exited with {} and was restarted", died.status)
+            }
+            Self::Speechless => {
+                "the harness exited cleanly without reporting a result and was restarted".to_owned()
+            }
+        }
+    }
+
+    /// How the turn ends when this ending arrives with the restart budget spent.
+    ///
+    /// `None` for [`Self::Speechless`], which `drive` reports for itself: it
+    /// reads the missing result and fails the turn with the reason it has always
+    /// given, and naming that failure here as well would be one ending told two
+    /// ways.
+    fn gave_up(self, bounds: &Bounds, evidence: Option<prost_types::Struct>) -> Option<Failure> {
+        let message = match self {
+            Self::Idle => format!(
+                "the harness produced no output for {:?}, twice, and did not recover \
+                 when it was restarted",
+                bounds.harness_idle
+            ),
+            Self::Crashed(died) => format!(
+                "the harness exited with {}, and did not recover when it was restarted",
+                died.status
+            ),
+            Self::Speechless => return None,
+        };
+
+        Some(Failure::new(self.code(), message).carrying(evidence))
+    }
 }
 
 /// The turn's wall clock ceiling, shared by every harness session in it.
@@ -226,6 +404,14 @@ struct TurnContext {
 
     /// The bounds this thread declared, or the documented defaults.
     bounds: Bounds,
+
+    /// How many times this turn may still start its harness again.
+    ///
+    /// One budget for the turn, spent by whichever ending reaches it first. See
+    /// [`RESTARTS_ALLOWED`] for why the causes share it, and why it sits here
+    /// beside the grant, the meter, and the wall clock rather than inside the
+    /// loop that spends it.
+    restarts_left: u32,
 
     /// The thread's secrets, masked out of everything the turn emits.
     ///
@@ -409,12 +595,13 @@ impl Runner {
                 // turn could not go on. A failure the proxy already recorded is
                 // skipped here rather than written twice.
                 if !failure.recorded {
-                    self.record_incident(
+                    self.record_incident_with(
                         Attribution::of(&claimed),
                         failure.code,
                         Disposition::Fatal,
                         failure.retryable,
                         &failure.message,
+                        failure.details.clone(),
                     )
                     .await;
                 }
@@ -691,6 +878,7 @@ impl Runner {
             },
             clock: WallClock::starting_now(ceilings),
             bounds,
+            restarts_left: RESTARTS_ALLOWED,
             redactor: claimed.redactor.clone(),
             crossings: reported,
             incidents: reported_incidents,
@@ -704,22 +892,24 @@ impl Runner {
         (context, grant)
     }
 
-    /// Runs a harness session, restarting it once if it hung.
+    /// Runs a harness session, starting it once more if the process wedged.
     ///
-    /// A harness that produced no output at all inside its idle bound is not
-    /// slow, it is stopped, and a stopped process is exactly what a restart
-    /// recovers. It resumes the same session under the same grant, so the second
-    /// attempt continues the conversation rather than starting one, and spends
-    /// against the ceilings the turn already set.
+    /// A harness that said nothing inside its idle bound, one that died, and one
+    /// that exited cleanly having reported no result are all stopped processes,
+    /// and a stopped process is exactly what a restart replaces. It resumes the
+    /// same session under the same grant, so the second attempt continues the
+    /// conversation rather than starting one, and spends against the ceilings the
+    /// turn already set.
     ///
-    /// **Once, never twice.** See [`RESTARTS_ALLOWED`]. A second hang ends the
-    /// turn with `HARNESS_IDLE_TIMEOUT`, which is retryable: the turn is worth
-    /// running again, just not inside this one.
+    /// **Once, never twice, and once for the turn.** See [`RESTARTS_ALLOWED`].
+    /// The second ending fails the turn with the code for what it was, both of
+    /// which are retryable: the turn is worth running again, just not inside
+    /// this one.
     ///
-    /// A harness that **crashed** is the other ending a restart recovers, and it
-    /// belongs in this function rather than in a second restart loop beside it.
-    /// That is separate work and is deliberately not done here: today a nonzero
-    /// exit fails the turn exactly as it did before.
+    /// [`Wedged::Speechless`] is the one ending that leaves through the happy
+    /// path rather than as a failure. `drive` reads a missing result and fails
+    /// the turn with the reason it has always given, and returning a failure
+    /// here would rename that ending for the sake of sharing this loop.
     async fn session_with_restart(
         &self,
         claimed: &ClaimedTurn,
@@ -729,58 +919,60 @@ impl Runner {
         let thread_id = &claimed.turn.thread_id;
         let turn_id = &claimed.turn.turn_id;
 
-        for attempt in 0..=RESTARTS_ALLOWED {
+        loop {
             // Rebuilt per attempt rather than reused, because `session_for` is
             // what decides between opening a session and resuming one. A harness
             // that got far enough to report its session id is resumed into it,
-            // which is the "same context" a restart is supposed to preserve.
+            // which is the "same context" a restart is supposed to preserve, and
+            // one that died before announcing it opens a session again under the
+            // id the first attempt was given.
             let command = self.command_for_turn(claimed, context, prompt).await;
             let consumed = self
                 .run_session(&command, thread_id, turn_id, context)
                 .await?;
 
-            if !consumed.idle {
+            let Some(wedged) = Wedged::of(&consumed) else {
                 return Ok(consumed);
+            };
+
+            // The exit code and the last output, captured whichever way this
+            // ends, so the incident carries the same evidence whether the
+            // restart recovered the turn or the turn gave up.
+            let evidence = evidence_of(&consumed);
+            let code = wedged.code();
+
+            if context.restarts_left == 0 {
+                return match wedged.gave_up(&context.bounds, evidence) {
+                    Some(failure) => Err(failure),
+                    None => Ok(consumed),
+                };
             }
 
-            if attempt < RESTARTS_ALLOWED {
-                let message = format!(
-                    "the harness produced no output for {:?} and was restarted",
-                    context.bounds.harness_idle
-                );
+            context.restarts_left -= 1;
+            let message = wedged.restarting(&context.bounds);
 
-                tracing::warn!(
-                    event.name = "turn.harness.restarted",
-                    thread.id = thread_id,
-                    turn.id = turn_id,
-                    harness.idle_seconds = context.bounds.harness_idle.as_secs(),
-                    "restarting a harness that said nothing for \
-                     {{harness.idle_seconds}} seconds",
-                );
+            tracing::warn!(
+                event.name = "turn.harness.restarted",
+                thread.id = thread_id,
+                turn.id = turn_id,
+                harness.ending = code.as_str_name(),
+                "restarting a harness session that ended with {{harness.ending}}: {message}",
+            );
 
-                // Recovered, and recorded because it recovered. A restart that
-                // worked looks exactly like a turn that never stalled, and a
-                // harness that hangs on every turn is a pattern nobody sees
-                // unless the recovery is written down.
-                self.record_incident(
-                    Attribution::of(claimed),
-                    ErrorCode::HarnessIdleTimeout,
-                    Disposition::Recovered,
-                    retryable(ErrorCode::HarnessIdleTimeout),
-                    &message,
-                )
-                .await;
-            }
+            // Recovered, and recorded because it recovered. A restart that
+            // worked looks exactly like a turn that never stalled, and a harness
+            // that wedges on every turn is a pattern nobody sees unless the
+            // recovery is written down.
+            self.record_incident_with(
+                Attribution::of(claimed),
+                code,
+                Disposition::Recovered,
+                retryable(code),
+                &message,
+                evidence,
+            )
+            .await;
         }
-
-        Err(Failure::new(
-            ErrorCode::HarnessIdleTimeout,
-            format!(
-                "the harness produced no output for {:?}, twice, and did not recover \
-                 when it was restarted",
-                context.bounds.harness_idle
-            ),
-        ))
     }
 
     /// Builds the command one session of this turn runs.
@@ -851,10 +1043,13 @@ impl Runner {
         })?;
 
         if !status.success() {
-            return Err(Failure::new(
-                ErrorCode::HarnessCrashed,
-                format!("the harness exited with {status}"),
-            ));
+            // Reported rather than raised. A process that died is a fact about
+            // a process, and [`Runner::session_with_restart`] is what decides
+            // whether this turn has a restart left to spend on it.
+            consumed.crashed = Some(Crash {
+                code: status.code(),
+                status: status.to_string(),
+            });
         }
 
         Ok(consumed)
@@ -1035,12 +1230,13 @@ impl Runner {
                 // failure the proxy already recorded keeps the disposition it
                 // arrived with rather than being written down twice.
                 if !failure.recorded {
-                    self.record_incident(
+                    self.record_incident_with(
                         Attribution::of(claimed),
                         failure.code,
                         Disposition::Degraded,
                         failure.retryable,
                         &failure.message,
+                        failure.details.clone(),
                     )
                     .await;
                 }
@@ -1167,6 +1363,7 @@ impl Runner {
                         continue;
                     }
 
+                    consumed.tail.remember(&line);
                     self.absorb(harness, &line, at, &mut consumed).await;
 
                     seen += 1;
@@ -1193,6 +1390,11 @@ impl Runner {
                     silent_since = tokio::time::Instant::now();
 
                     if !complaint.trim().is_empty() {
+                        // Kept as well as traced. Stderr reaches no event, so a
+                        // crash that explained itself there would otherwise
+                        // leave the incident with nothing to show.
+                        consumed.tail.remember(&complaint);
+
                         tracing::debug!(
                             event.name = "turn.harness.stderr",
                             thread.id = thread_id,
@@ -1558,6 +1760,25 @@ impl Runner {
         retryable: bool,
         message: &str,
     ) {
+        self.record_incident_with(at, code, disposition, retryable, message, None)
+            .await;
+    }
+
+    /// Records an incident that carries the evidence behind it.
+    ///
+    /// `details` is what lets somebody act on the incident without reproducing
+    /// the run: a crash carries the exit code and the tail of what the process
+    /// said before it died. Absent when there is nothing to show, rather than an
+    /// empty object pretending there is.
+    async fn record_incident_with(
+        &self,
+        at: Attribution<'_>,
+        code: ErrorCode,
+        disposition: Disposition,
+        retryable: bool,
+        message: &str,
+        details: Option<prost_types::Struct>,
+    ) {
         self.report_incident(
             Incident {
                 incident_id: uuid::Uuid::now_v7().to_string(),
@@ -1571,7 +1792,7 @@ impl Runner {
                 disposition: disposition.into(),
                 retryable,
                 message: message.to_owned(),
-                details: None,
+                details,
                 occurred_at: Some(Timestamp::now()),
             },
             at.redactor,
@@ -1807,6 +2028,47 @@ fn assemble(
     }
 }
 
+/// The evidence behind a wedged session, in the shape `Incident.details` takes.
+///
+/// The exit code and the last output, which is what the README promises a crash
+/// captures. A reader with both can tell an out-of-memory kill from a bad flag
+/// without reproducing the run, and neither is recoverable from the event log:
+/// the log holds what the harness said, not how it stopped saying it.
+///
+/// `None` when there is neither, so an incident never carries an empty object
+/// pretending to be evidence.
+fn evidence_of(consumed: &Consumed) -> Option<prost_types::Struct> {
+    let mut fields = std::collections::BTreeMap::new();
+
+    if let Some(crash) = consumed.crashed.as_ref() {
+        fields.insert("status".to_owned(), text(crash.status.clone()));
+
+        if let Some(code) = crash.code {
+            fields.insert("exit_code".to_owned(), number(f64::from(code)));
+        }
+    }
+
+    if let Some(tail) = consumed.tail.joined() {
+        fields.insert("output_tail".to_owned(), text(tail));
+    }
+
+    (!fields.is_empty()).then(|| prost_types::Struct {
+        fields: fields.into_iter().collect(),
+    })
+}
+
+fn text(value: String) -> prost_types::Value {
+    prost_types::Value {
+        kind: Some(prost_types::value::Kind::StringValue(value)),
+    }
+}
+
+fn number(value: f64) -> prost_types::Value {
+    prost_types::Value {
+        kind: Some(prost_types::value::Kind::NumberValue(value)),
+    }
+}
+
 /// Whether a turn that ended with `code` is worth submitting again.
 ///
 /// A launch that failed, a harness that died, and a harness that hung are facts
@@ -1863,6 +2125,15 @@ impl Failure {
             details: None,
             recorded: false,
         }
+    }
+
+    /// The same failure, carrying the evidence behind it.
+    ///
+    /// Separate from [`Self::new`] because most failures have none: a request
+    /// that was refused says everything it has to say in its code and message.
+    fn carrying(mut self, details: Option<prost_types::Struct>) -> Self {
+        self.details = details;
+        self
     }
 
     /// The failure an incident the proxy already recorded amounts to.
