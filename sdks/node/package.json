@@ -41,14 +41,11 @@
   "sideEffects": false,
   "scripts": {
     "sync-proto": "node scripts/sync-proto.mjs",
-    "prebuild": "yarn sync-proto",
-    "build": "tsc --project tsconfig.build.json",
-    "pretypecheck": "yarn sync-proto",
-    "typecheck": "tsc --noEmit",
-    "pretest": "yarn sync-proto",
-    "test": "vitest run",
-    "test:unit": "vitest run src",
-    "test:integration": "vitest run tests",
+    "build": "yarn sync-proto && tsc --project tsconfig.build.json",
+    "typecheck": "yarn sync-proto && tsc --noEmit",
+    "test": "yarn sync-proto && vitest run",
+    "test:unit": "yarn sync-proto && vitest run src",
+    "test:integration": "yarn sync-proto && vitest run tests",
     "clean": "node --eval \"import('node:fs').then(({ rmSync }) => { rmSync('dist', { recursive: true, force: true }); rmSync('src/proto', { recursive: true, force: true }) })\""
   },
   "dependencies": {
