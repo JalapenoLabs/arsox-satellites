@@ -1,0 +1,12 @@
+# Copyright © 2026 Jalapeno Labs
+
+# The protobuf contract, synced from gen/ts on every build, typecheck, and test.
+# gen/ts is the one checked-in generated tree; a second copy here could be stale
+# while that one is current. See scripts/sync-proto.mjs.
+/src/proto/
+
+/dist/
+
+# Yarn's node-modules linker keeps its bookkeeping here. The lockfile is
+# committed; nothing else under .yarn is.
+/.yarn/

@@ -1,0 +1,64 @@
+{
+  "name": "@jalapenolabs/arsox-sdk",
+  "version": "0.1.0",
+  "description": "The Node client for an Arsox satellite. Protobuf on the wire, ordinary objects in your hands.",
+  "license": "Apache-2.0",
+  "author": "Jalapeno Labs",
+  "homepage": "https://github.com/JalapenoLabs/arsox-satellites",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JalapenoLabs/arsox-satellites.git",
+    "directory": "sdks/node"
+  },
+  "keywords": [
+    "arsox",
+    "agents",
+    "claude",
+    "codex",
+    "sdk"
+  ],
+  "private": true,
+  "type": "module",
+  "packageManager": "yarn@4.17.0",
+  "engines": {
+    "node": ">=22.23.2"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./proto/*.js": {
+      "types": "./dist/proto/*.d.ts",
+      "default": "./dist/proto/*.js"
+    }
+  },
+  "types": "./dist/index.d.ts",
+  "main": "./dist/index.js",
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "sync-proto": "node scripts/sync-proto.mjs",
+    "prebuild": "yarn sync-proto",
+    "build": "tsc --project tsconfig.build.json",
+    "pretypecheck": "yarn sync-proto",
+    "typecheck": "tsc --noEmit",
+    "pretest": "yarn sync-proto",
+    "test": "vitest run",
+    "test:unit": "vitest run src",
+    "test:integration": "vitest run tests",
+    "clean": "node --eval \"import('node:fs').then(({ rmSync }) => { rmSync('dist', { recursive: true, force: true }); rmSync('src/proto', { recursive: true, force: true }) })\""
+  },
+  "dependencies": {
+    "@bufbuild/protobuf": "2.9.0",
+    "ws": "8.21.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "@types/ws": "8.18.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11"
+  }
+}

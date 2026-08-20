@@ -1,0 +1,31 @@
+// Copyright © 2026 Jalapeno Labs
+//
+// `exactOptionalPropertyTypes` is deliberately absent. protobuf-es writes an
+// optional field as `field?: T` with no `| undefined`, so under that flag every
+// place the SDK forwards an optional argument into a generated message would
+// need a conditional spread. The alternative, defaulting an absent value to `''`
+// or `0`, is worse than the flag is worth: proto3 explicit presence makes an
+// empty string present and empty, which is not what absent means.
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": [ "ES2023" ],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": [ "node" ],
+    "esModuleInterop": true,
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "forceConsistentCasingInFileNames": true,
+
+    "noEmit": true,
+    "skipLibCheck": true
+  },
+  "include": [ "src/**/*.ts", "tests/**/*.ts", "vitest.config.ts" ]
+}
