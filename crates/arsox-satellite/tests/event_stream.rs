@@ -7,6 +7,7 @@
 //! between two code paths and testing it against a reimplementation of that
 //! handoff would prove nothing.
 
+use arsox_satellite::redaction::Redactor;
 use arsox_satellite::store::{AppendEvent, NewThread, Store};
 use arsox_satellite::{ServeOptions, assemble};
 use arsox_sdk::proto::event::v1::ThreadEvent;
@@ -133,6 +134,7 @@ async fn append(store: &Store, thread_id: &str, text: &str) {
                     text: text.to_owned(),
                 },
             ),
+            redactor: Redactor::none(),
         })
         .await
         .expect("should append");

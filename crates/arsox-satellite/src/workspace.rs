@@ -460,6 +460,8 @@ impl Provisioner {
             return;
         };
 
+        let redactor = crate::redaction::Redactor::for_thread(settings);
+
         tracing::error!(
             event.name = "workspace.instructions.failed",
             thread.id = thread_id,
@@ -479,6 +481,7 @@ impl Provisioner {
                 message: format!("could not write the thread's instruction files: {error}"),
                 output: String::new(),
             },
+            &redactor,
         )
         .await;
     }
@@ -490,6 +493,11 @@ impl Provisioner {
     /// an incident instead.
     pub async fn provision(&self, thread_id: &str, settings: &ThreadSettings) {
         let repos = &settings.repos;
+
+        // Compiled once for the whole provisioning, the same way a claimed turn
+        // compiles one for its whole turn. A clone that fails prints whatever
+        // the remote said, and a remote's error body is not ours to predict.
+        let redactor = crate::redaction::Redactor::for_thread(settings);
 
         tracing::info!(
             event.name = "workspace.provision.started",
@@ -531,6 +539,7 @@ impl Provisioner {
                         message: format!("could not prepare the workspace: {error}"),
                         output: String::new(),
                     },
+                    &redactor,
                 )
                 .await;
 
@@ -540,7 +549,7 @@ impl Provisioner {
         };
 
         for failure in &report.failures {
-            self.report(thread_id, failure).await;
+            self.report(thread_id, failure, &redactor).await;
         }
 
         let outcome = if report.is_fatal() {
@@ -557,7 +566,12 @@ impl Provisioner {
     /// The event goes first so the incident row can carry the sequence it
     /// landed at, which is what lets a query result be located in the stream and
     /// a stream frame be looked up afterwards.
-    async fn report(&self, thread_id: &str, failure: &ProvisionFailure) {
+    async fn report(
+        &self,
+        thread_id: &str,
+        failure: &ProvisionFailure,
+        redactor: &crate::redaction::Redactor,
+    ) {
         let mut incident = Incident {
             incident_id: uuid::Uuid::now_v7().to_string(),
             sequence: None,
@@ -582,6 +596,7 @@ impl Provisioner {
                 type_name: "incident".to_owned(),
                 occurred_at: None,
                 payload: Payload::Incident(incident.clone()),
+                redactor: redactor.clone(),
             })
             .await
         {
@@ -593,7 +608,7 @@ impl Provisioner {
             ),
         }
 
-        if let Err(error) = self.store.record_incident(&incident).await {
+        if let Err(error) = self.store.record_incident(&incident, redactor).await {
             tracing::error!(
                 event.name = "incident.record.failed",
                 thread.id = thread_id,

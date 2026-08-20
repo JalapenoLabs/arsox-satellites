@@ -280,6 +280,23 @@ impl Redactor {
             incident.scrub(scanner);
         }
     }
+
+    /// The incident as a consumer may see it, borrowing when nothing is hidden.
+    ///
+    /// For callers holding an incident they do not own. A thread with no
+    /// secrets copies nothing, which matters because the same incident is
+    /// frequently both streamed and recorded.
+    #[must_use]
+    pub fn redacted_incident<'a>(&self, incident: &'a Incident) -> Cow<'a, Incident> {
+        if self.is_empty() {
+            return Cow::Borrowed(incident);
+        }
+
+        let mut masked = incident.clone();
+        self.redact_incident(&mut masked);
+
+        Cow::Owned(masked)
+    }
 }
 
 /// Collects a git credential's material, whichever kind it is.

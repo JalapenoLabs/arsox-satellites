@@ -284,6 +284,7 @@ mod tests {
 #[cfg(test)]
 mod store_behaviour {
     use super::*;
+    use crate::redaction::Redactor;
     use arsox_sdk::proto::common::v1::Duration;
     use arsox_sdk::proto::event::v1::{AgentMessage, thread_event::Payload};
     use arsox_sdk::proto::incident::v1::{Disposition, Incident};
@@ -579,6 +580,7 @@ mod store_behaviour {
                         author: None,
                         text: format!("message {index}"),
                     }),
+                    redactor: Redactor::none(),
                 })
                 .await
                 .expect("should append");
@@ -619,6 +621,7 @@ mod store_behaviour {
                 type_name: "agent.message".to_owned(),
                 occurred_at: None,
                 payload: Payload::AgentMessage(AgentMessage::default()),
+                redactor: Redactor::none(),
             })
             .await
             .expect_err("should not append");
@@ -887,6 +890,7 @@ mod store_behaviour {
                     author: None,
                     text: "something happened".to_owned(),
                 }),
+                redactor: Redactor::none(),
             })
             .await
             .expect("should append");
@@ -935,14 +939,17 @@ mod store_behaviour {
             .thread;
 
         store
-            .record_incident(&Incident {
-                incident_id: "incident-1".to_owned(),
-                thread_id: Some(thread.thread_id.clone()),
-                code: ErrorCode::HarnessCrashed.into(),
-                disposition: Disposition::Recovered.into(),
-                message: "the harness died and restarted".to_owned(),
-                ..Default::default()
-            })
+            .record_incident(
+                &Incident {
+                    incident_id: "incident-1".to_owned(),
+                    thread_id: Some(thread.thread_id.clone()),
+                    code: ErrorCode::HarnessCrashed.into(),
+                    disposition: Disposition::Recovered.into(),
+                    message: "the harness died and restarted".to_owned(),
+                    ..Default::default()
+                },
+                &Redactor::none(),
+            )
             .await
             .expect("should record");
 
@@ -1124,6 +1131,7 @@ mod store_behaviour {
                         author: None,
                         text: "survives".to_owned(),
                     }),
+                    redactor: Redactor::none(),
                 })
                 .await
                 .expect("should append");

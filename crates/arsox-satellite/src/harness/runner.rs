@@ -33,6 +33,7 @@
 use crate::harness::spawn::{HarnessCommand, ModelAccess, Session, command_for, process_for};
 use crate::harness::{HarnessResult, accounting, checkers, claude};
 use crate::proxy::budget::{Ceilings, Crossing, Meter};
+use crate::redaction::Redactor;
 use crate::store::{AppendEvent, ClaimedTurn, Store};
 use crate::timeouts::Bounds;
 use arsox_sdk::proto::common::v1::{Duration, Timestamp};
@@ -113,6 +114,31 @@ impl Drop for RevokeOnDrop {
     }
 }
 
+/// Where something that happened belongs, and whose secrets mask it.
+///
+/// The three travel together everywhere: an event, an incident, and a budget
+/// warning each need the thread, the turn, and the thread's redactor. Grouping
+/// them means a signature cannot be called with one thread's ids and another
+/// thread's mask, and it keeps the parameter lists readable now that every one
+/// of them carries a redactor.
+#[derive(Debug, Clone, Copy)]
+struct Attribution<'a> {
+    thread_id: &'a str,
+    turn_id: &'a str,
+    redactor: &'a Redactor,
+}
+
+impl<'a> Attribution<'a> {
+    /// What a claimed turn attributes its output to.
+    fn of(claimed: &'a ClaimedTurn) -> Self {
+        Self {
+            thread_id: &claimed.turn.thread_id,
+            turn_id: &claimed.turn.turn_id,
+            redactor: &claimed.redactor,
+        }
+    }
+}
+
 /// What reading a harness's output produced.
 #[derive(Debug, Default)]
 struct Consumed {
@@ -179,6 +205,14 @@ struct TurnContext {
 
     /// The bounds this thread declared, or the documented defaults.
     bounds: Bounds,
+
+    /// The thread's secrets, masked out of everything the turn emits.
+    ///
+    /// Carried here alongside the grant and the meter for the same reason they
+    /// are: a session that compiled its own would be a second automaton over
+    /// the same settings, and two of anything is one more thing that can
+    /// disagree.
+    redactor: Redactor,
 
     /// Budget crossings the proxy found while counting this turn's requests.
     crossings: mpsc::UnboundedReceiver<Crossing>,
@@ -338,8 +372,7 @@ impl Runner {
         );
 
         self.append(
-            &thread_id,
-            &turn_id,
+            Attribution::of(&claimed),
             "turn.started",
             None,
             Payload::TurnStarted(TurnStarted {
@@ -348,14 +381,13 @@ impl Runner {
         )
         .await;
 
-        let (status, result) = match self.drive(&claimed).await {
+        let (status, mut result) = match self.drive(&claimed).await {
             Ok(finished) => finished,
             Err(failure) => {
                 // Fatal by construction: `drive` only returns an error when the
                 // turn could not go on.
                 self.record_incident(
-                    &thread_id,
-                    &turn_id,
+                    Attribution::of(&claimed),
                     failure.code,
                     Disposition::Fatal,
                     retryable(failure.code),
@@ -366,6 +398,12 @@ impl Runner {
             }
         };
 
+        // Masked once, here, rather than at each of the two places the result
+        // goes. The durable copy and the streamed one are then the same masked
+        // text, and a summary quoting a credential cannot reach one of them
+        // intact because somebody wired a new consumer later.
+        claimed.redactor.redact_turn_result(&mut result);
+
         if let Err(error) = self.store.finish_turn(&turn_id, status, &result).await {
             tracing::error!(
                 event.name = "turn.finish.failed",
@@ -375,8 +413,7 @@ impl Runner {
         }
 
         self.append(
-            &thread_id,
-            &turn_id,
+            Attribution::of(&claimed),
             "turn.completed",
             None,
             Payload::TurnCompleted(TurnCompleted {
@@ -441,9 +478,6 @@ impl Runner {
     /// or restarted at its edges. A fix cycle outside it would be a second turn
     /// wearing the first one's name, spending past the ceiling the first one set.
     async fn drive(&self, claimed: &ClaimedTurn) -> Result<(TurnStatus, TurnResult), Failure> {
-        let thread_id = &claimed.turn.thread_id;
-        let turn_id = &claimed.turn.turn_id;
-
         let ceilings = Ceilings::from_budget(claimed.settings.budget.as_ref());
         let working_dir = self.prepare(claimed, &ceilings).await?;
 
@@ -494,8 +528,7 @@ impl Runner {
 
         if reported_result.is_none() {
             self.record_incident(
-                thread_id,
-                turn_id,
+                Attribution::of(claimed),
                 ErrorCode::HarnessCrashed,
                 Disposition::Fatal,
                 retryable(ErrorCode::HarnessCrashed),
@@ -556,7 +589,7 @@ impl Runner {
         // its lifetime cost has nothing left to run a turn with, and launching
         // a harness to discover that would spend more of it.
         if self
-            .cost_ceiling_reached(thread_id, &claimed.turn.turn_id, ceilings)
+            .cost_ceiling_reached(Attribution::of(claimed), ceilings)
             .await
         {
             return Err(Failure {
@@ -623,6 +656,7 @@ impl Runner {
             },
             clock: WallClock::starting_now(ceilings),
             bounds,
+            redactor: claimed.redactor.clone(),
             crossings: reported,
             incidents: reported_incidents,
         };
@@ -694,8 +728,7 @@ impl Runner {
                 // harness that hangs on every turn is a pattern nobody sees
                 // unless the recovery is written down.
                 self.record_incident(
-                    thread_id,
-                    turn_id,
+                    Attribution::of(claimed),
                     ErrorCode::HarnessIdleTimeout,
                     Disposition::Recovered,
                     retryable(ErrorCode::HarnessIdleTimeout),
@@ -828,7 +861,8 @@ impl Runner {
 
         for attempt in 0..=checkers::MAX_FIX_ATTEMPTS {
             let outcomes = checkers::run_all(&declared, &execution).await;
-            self.publish_checkers(thread_id, turn_id, &outcomes).await;
+            self.publish_checkers(Attribution::of(claimed), &outcomes)
+                .await;
 
             checked.results = outcomes
                 .iter()
@@ -874,8 +908,7 @@ impl Runner {
         // names. Recording it as blocked would put a red build in the same query
         // an operator runs to find an allowlist that needs widening.
         self.record_incident(
-            thread_id,
-            turn_id,
+            Attribution::of(claimed),
             ErrorCode::CheckerFailed,
             Disposition::Degraded,
             // The same commands will exit the same way against the same code.
@@ -955,8 +988,7 @@ impl Runner {
                 // Degraded rather than fatal: the work the turn already did
                 // survives on disk, and what is missing is its verification.
                 self.record_incident(
-                    thread_id,
-                    turn_id,
+                    Attribution::of(claimed),
                     failure.code,
                     Disposition::Degraded,
                     retryable(failure.code),
@@ -980,17 +1012,12 @@ impl Runner {
     ///
     /// Per command rather than per attempt, so a consumer watching a long build
     /// sees it finish rather than learning about the whole stage at the end.
-    async fn publish_checkers(
-        &self,
-        thread_id: &str,
-        turn_id: &str,
-        outcomes: &[checkers::Outcome],
-    ) {
+    async fn publish_checkers(&self, at: Attribution<'_>, outcomes: &[checkers::Outcome]) {
         for outcome in outcomes {
             tracing::info!(
                 event.name = "turn.checker.finished",
-                thread.id = thread_id,
-                turn.id = turn_id,
+                thread.id = at.thread_id,
+                turn.id = at.turn_id,
                 checker.repo = outcome.repo,
                 checker.command = outcome.result.command,
                 checker.exit_code = outcome.result.exit_code,
@@ -998,8 +1025,7 @@ impl Runner {
             );
 
             self.append(
-                thread_id,
-                turn_id,
+                at,
                 "checker.result",
                 None,
                 Payload::CheckerResult(CheckerResultEvent {
@@ -1050,10 +1076,17 @@ impl Runner {
         let TurnContext {
             clock,
             bounds,
+            redactor,
             crossings,
             incidents,
             ..
         } = context;
+
+        let at = Attribution {
+            thread_id,
+            turn_id,
+            redactor,
+        };
 
         // Reset by output on either pipe. Unlike the wall clock this belongs to
         // the session rather than to the turn: a fresh process that has said
@@ -1083,7 +1116,7 @@ impl Runner {
                         continue;
                     }
 
-                    self.absorb(&line, thread_id, turn_id, &mut consumed).await;
+                    self.absorb(&line, at, &mut consumed).await;
 
                     seen += 1;
                     if seen.is_multiple_of(CANCEL_CHECK_EVERY)
@@ -1119,7 +1152,7 @@ impl Runner {
                 }
 
                 Some(crossing) = crossings.recv() => {
-                    self.publish_crossing(thread_id, turn_id, crossing).await;
+                    self.publish_crossing(at, crossing).await;
 
                     if let Crossing::Reached { ceiling } = crossing {
                         consumed.exhausted = Some(ceiling);
@@ -1128,12 +1161,12 @@ impl Runner {
                 }
 
                 Some(incident) = incidents.recv() => {
-                    self.store_incident(&incident).await;
+                    self.store_incident(&incident, at.redactor).await;
                 }
 
                 () = tokio::time::sleep_until(clock.warn_at), if !clock.warned => {
                     clock.warned = true;
-                    self.publish_crossing(thread_id, turn_id, Crossing::Approaching {
+                    self.publish_crossing(at, Crossing::Approaching {
                         ceiling: Ceiling::WallClockPerTurn,
                         percent_used: crate::proxy::budget::WARN_AT_PERCENT,
                     })
@@ -1166,18 +1199,21 @@ impl Runner {
         // to select on, and an incident recorded nowhere is the silent failure
         // the whole incident system exists to prevent.
         while let Ok(incident) = incidents.try_recv() {
-            self.store_incident(&incident).await;
+            self.store_incident(&incident, at.redactor).await;
         }
 
         consumed
     }
 
     /// Turns one line of harness output into log entries and a result.
-    async fn absorb(&self, line: &str, thread_id: &str, turn_id: &str, consumed: &mut Consumed) {
+    async fn absorb(&self, line: &str, at: Attribution<'_>, consumed: &mut Consumed) {
         let mapping = claude::map_line(line);
 
         if let Some(session_id) = mapping.harness_session_id
-            && let Err(error) = self.store.set_harness_session(thread_id, &session_id).await
+            && let Err(error) = self
+                .store
+                .set_harness_session(at.thread_id, &session_id)
+                .await
         {
             tracing::warn!(
                 event.name = "turn.session.unrecorded",
@@ -1191,8 +1227,7 @@ impl Runner {
             // go wrong" gets answered.
             if let Payload::Incident(incident) = &event.payload {
                 self.record_incident(
-                    thread_id,
-                    turn_id,
+                    at,
                     ErrorCode::try_from(incident.code).unwrap_or(ErrorCode::Internal),
                     Disposition::try_from(incident.disposition).unwrap_or(Disposition::Degraded),
                     // The mapper's own judgement, carried through rather than
@@ -1203,14 +1238,8 @@ impl Runner {
                 .await;
             }
 
-            self.append(
-                thread_id,
-                turn_id,
-                event.type_name,
-                event.member_id,
-                event.payload,
-            )
-            .await;
+            self.append(at, event.type_name, event.member_id, event.payload)
+                .await;
         }
 
         if let Some(result) = mapping.result {
@@ -1262,8 +1291,7 @@ impl Runner {
         );
 
         self.record_incident(
-            &claimed.turn.thread_id,
-            &claimed.turn.turn_id,
+            Attribution::of(claimed),
             code,
             Disposition::Fatal,
             // A ceiling does not move by being asked again.
@@ -1292,7 +1320,7 @@ impl Runner {
     /// event the README promises at 80% and the only chance an application has
     /// to react before the wall. A ceiling actually reached produces no warning:
     /// it ends the turn, and the turn's own error names which ceiling did it.
-    async fn publish_crossing(&self, thread_id: &str, turn_id: &str, crossing: Crossing) {
+    async fn publish_crossing(&self, at: Attribution<'_>, crossing: Crossing) {
         let (ceiling, percent_used) = match crossing {
             Crossing::Approaching {
                 ceiling,
@@ -1304,8 +1332,8 @@ impl Runner {
         let Some(percent_used) = percent_used else {
             tracing::info!(
                 event.name = "turn.budget.exhausted",
-                thread.id = thread_id,
-                turn.id = turn_id,
+                thread.id = at.thread_id,
+                turn.id = at.turn_id,
                 budget.ceiling = ceiling.as_str_name(),
                 "{{budget.ceiling}} was reached and the turn is being stopped",
             );
@@ -1314,16 +1342,15 @@ impl Runner {
 
         tracing::info!(
             event.name = "turn.budget.warning",
-            thread.id = thread_id,
-            turn.id = turn_id,
+            thread.id = at.thread_id,
+            turn.id = at.turn_id,
             budget.ceiling = ceiling.as_str_name(),
             budget.percent_used = percent_used,
             "{{budget.ceiling}} is {{budget.percent_used}}% consumed",
         );
 
         self.append(
-            thread_id,
-            turn_id,
+            at,
             "budget.warning",
             None,
             Payload::BudgetWarning(BudgetWarning {
@@ -1342,12 +1369,7 @@ impl Runner {
     /// harness reports when its turn ends. Enforcing at the boundary is the
     /// strongest honest guarantee available, and it is a real one: a thread that
     /// has spent its ceiling runs no further turns.
-    async fn cost_ceiling_reached(
-        &self,
-        thread_id: &str,
-        turn_id: &str,
-        ceilings: &Ceilings,
-    ) -> bool {
+    async fn cost_ceiling_reached(&self, at: Attribution<'_>, ceilings: &Ceilings) -> bool {
         let Some(ceiling) = ceilings.cost_per_thread.as_ref() else {
             return false;
         };
@@ -1355,14 +1377,14 @@ impl Runner {
         // Absent means no finished turn reported a priced cost, which is not the
         // same as having spent nothing. Nothing comparable exists yet, so there
         // is nothing to enforce against.
-        let Ok(Some(spent)) = self.store.thread_cost_nanos(thread_id).await else {
+        let Ok(Some(spent)) = self.store.thread_cost_nanos(at.thread_id).await else {
             return false;
         };
 
         let Some(used) = crate::proxy::budget::percent_of_cost(ceiling, spent) else {
             tracing::warn!(
                 event.name = "turn.budget.incomparable",
-                thread.id = thread_id,
+                thread.id = at.thread_id,
                 budget.currency = ceiling.currency_code,
                 "maxCostPerThread is denominated in {{budget.currency}}, which no harness \
                  reports, so it is not being enforced",
@@ -1376,8 +1398,7 @@ impl Runner {
 
         if used >= crate::proxy::budget::WARN_AT_PERCENT {
             self.publish_crossing(
-                thread_id,
-                turn_id,
+                at,
                 Crossing::Approaching {
                     ceiling: Ceiling::CostPerThread,
                     percent_used: used,
@@ -1391,19 +1412,19 @@ impl Runner {
 
     async fn append(
         &self,
-        thread_id: &str,
-        turn_id: &str,
+        at: Attribution<'_>,
         type_name: impl Into<String>,
         member_id: Option<String>,
         payload: Payload,
     ) {
         let append = AppendEvent {
-            thread_id: thread_id.to_owned(),
-            turn_id: Some(turn_id.to_owned()),
+            thread_id: at.thread_id.to_owned(),
+            turn_id: Some(at.turn_id.to_owned()),
             member_id,
             type_name: type_name.into(),
             occurred_at: None,
             payload,
+            redactor: at.redactor.clone(),
         };
 
         if let Err(error) = self.store.append_event(append).await {
@@ -1411,7 +1432,7 @@ impl Runner {
             // otherwise vanish without trace.
             tracing::error!(
                 event.name = "event.append.failed",
-                thread.id = %thread_id,
+                thread.id = %at.thread_id,
                 "could not append an event: {error}",
             );
         }
@@ -1428,26 +1449,28 @@ impl Runner {
     /// that has nothing else to go on.
     async fn record_incident(
         &self,
-        thread_id: &str,
-        turn_id: &str,
+        at: Attribution<'_>,
         code: ErrorCode,
         disposition: Disposition,
         retryable: bool,
         message: &str,
     ) {
-        self.store_incident(&Incident {
-            incident_id: uuid::Uuid::now_v7().to_string(),
-            sequence: None,
-            thread_id: Some(thread_id.to_owned()),
-            turn_id: Some(turn_id.to_owned()),
-            member_id: None,
-            code: code.into(),
-            disposition: disposition.into(),
-            retryable,
-            message: message.to_owned(),
-            details: None,
-            occurred_at: Some(Timestamp::now()),
-        })
+        self.store_incident(
+            &Incident {
+                incident_id: uuid::Uuid::now_v7().to_string(),
+                sequence: None,
+                thread_id: Some(at.thread_id.to_owned()),
+                turn_id: Some(at.turn_id.to_owned()),
+                member_id: None,
+                code: code.into(),
+                disposition: disposition.into(),
+                retryable,
+                message: message.to_owned(),
+                details: None,
+                occurred_at: Some(Timestamp::now()),
+            },
+            at.redactor,
+        )
         .await;
     }
 
@@ -1456,8 +1479,8 @@ impl Runner {
     /// Separate from [`Self::record_incident`] because an incident the proxy
     /// built arrives whole: it knows its own code, disposition, and message, and
     /// re-deriving any of those here would let the two disagree.
-    async fn store_incident(&self, incident: &Incident) {
-        if let Err(error) = self.store.record_incident(incident).await {
+    async fn store_incident(&self, incident: &Incident, redactor: &Redactor) {
+        if let Err(error) = self.store.record_incident(incident, redactor).await {
             tracing::error!(
                 event.name = "incident.record.failed",
                 "could not record an incident: {error}",
