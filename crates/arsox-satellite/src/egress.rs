@@ -233,7 +233,7 @@ impl Grant {
     /// has the enforcement, and one line per request at info would bury the
     /// refusals that matter.
     fn note_allowed(&self, method: &str, destination: &Authority) {
-        if self.policy.named().is_none() {
+        if matches!(self.policy, policy::WebPolicy::Everything) {
             tracing::info!(
                 event.name = "egress.host.allowed",
                 thread.id = self.thread_id,
@@ -459,10 +459,10 @@ async fn handle(mut client: TcpStream, proxy: EgressProxy) -> std::io::Result<()
 
     // An absent token and an unknown one are the same answer. Saying which would
     // tell a caller whether it had guessed a live turn.
-    let Some(grant) = request.presented_token() else {
+    let Some(presented) = request.presented_token() else {
         return challenge(&mut client).await;
     };
-    let Some(grant) = proxy.grant_for(&grant).await else {
+    let Some(grant) = proxy.grant_for(&presented).await else {
         return challenge(&mut client).await;
     };
 
