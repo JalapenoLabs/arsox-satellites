@@ -212,10 +212,15 @@ async fn start_prepared(
         Arc::new(tokio::sync::Notify::new()),
         1,
         Arc::clone(&collector),
-        arsox_satellite::proxy::LlmProxy::start()
-            .await
-            .expect("should start the proxy"),
-        broker,
+        arsox_satellite::harness::runner::Gates {
+            model: arsox_satellite::proxy::LlmProxy::start()
+                .await
+                .expect("should start the llm proxy"),
+            network: arsox_satellite::egress::EgressProxy::start()
+                .await
+                .expect("should start the egress proxy"),
+            broker,
+        },
     );
     tokio::spawn(runner.dispatch());
 

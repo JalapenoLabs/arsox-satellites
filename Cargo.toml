@@ -25,6 +25,12 @@ prost-types = "0.14"
 anyhow = "1"
 thiserror = "2"
 
+# The egress proxy reads `Proxy-Authorization: Basic`, which is the only shape a
+# client derives from the userinfo in `HTTP_PROXY`, so a turn's admission arrives
+# base64 encoded. Decoding it by hand would be thirty lines of the most
+# thoroughly solved problem in the ecosystem.
+base64 = "0.22"
+
 # Secret redaction scans every event, every report, and every captured command
 # log against all of a thread's secrets at once. One automaton is one pass over
 # the text whatever the number of secrets; the obvious alternative is a

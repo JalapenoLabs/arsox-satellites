@@ -20,6 +20,7 @@ pub mod broker;
 pub mod collector;
 pub mod commands;
 pub mod disk;
+pub mod egress;
 pub mod harness;
 pub mod privilege;
 pub mod proxy;
@@ -621,9 +622,18 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
     ));
     tokio::spawn(Arc::clone(&collector).sweep_forever(options.collect_interval));
 
-    let proxy = proxy::LlmProxy::start()
+    // Two chokepoints, deliberately separate. The first holds the provider
+    // credential and counts what a turn spends; the second decides which hosts a
+    // turn's agents may reach. Model traffic is exempt from the second, by way of
+    // the `NO_PROXY` every agent is handed, so a completion pays for one hop and
+    // has its allowlist decision made once. See `docs/enforcement.md`.
+    let model = proxy::LlmProxy::start()
         .await
         .context("failed to start the llm proxy")?;
+
+    let network = egress::EgressProxy::start()
+        .await
+        .context("failed to start the egress proxy")?;
 
     let runner = harness::runner::Runner::new(
         store.clone(),
@@ -631,8 +641,11 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
         Arc::clone(&work_queued),
         options.max_concurrent_threads,
         Arc::clone(&collector),
-        proxy,
-        broker.clone(),
+        harness::runner::Gates {
+            model,
+            network,
+            broker: broker.clone(),
+        },
     );
     tokio::spawn(runner.dispatch());
 

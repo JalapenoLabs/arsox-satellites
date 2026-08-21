@@ -42,6 +42,7 @@ dependencies = [
  "arsox-harness",
  "arsox-sdk",
  "axum",
+ "base64",
  "chrono",
  "futures-util",
  "libc",

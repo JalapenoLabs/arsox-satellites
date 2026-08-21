@@ -44,7 +44,7 @@
 //! `HARNESS_CRASHED`, whichever it was.
 
 use crate::harness::spawn::{
-    Grants, HarnessCommand, ModelAccess, Session, command_for, process_for,
+    EgressAccess, Grants, HarnessCommand, ModelAccess, Session, command_for, process_for,
 };
 use crate::harness::{HarnessResult, Mapping, accounting, checkers, claude, codex};
 use crate::proxy::budget::{Ceilings, Crossing, Meter};
@@ -512,6 +512,15 @@ struct TurnContext {
     /// The turn's admission to the model, minted once and revoked once.
     access: ModelAccess,
 
+    /// The turn's admission to the network, when its thread declared a web
+    /// policy.
+    ///
+    /// Held for its whole life rather than read once: the ticket withdraws the
+    /// admission when it drops, so it has to live exactly as long as the turn
+    /// whose agents present it. Absent for a thread that declared no web policy,
+    /// which reaches the network exactly as it does today.
+    egress: Option<crate::egress::Ticket>,
+
     clock: WallClock,
 
     /// The bounds this thread declared, or the documented defaults.
@@ -601,6 +610,28 @@ struct StoppedEarly {
     cancelled: bool,
 }
 
+/// The satellite-wide gates a turn is admitted to for its length.
+///
+/// Grouped rather than passed as three more parameters, because they are the
+/// same kind of thing: something the satellite owns, shared by every thread, and
+/// lent to one turn at a time. Per M-INIT-CASCADED.
+#[derive(Debug, Clone)]
+pub struct Gates {
+    /// The chokepoint every model request traverses.
+    pub model: crate::proxy::LlmProxy,
+
+    /// The chokepoint every other request traverses.
+    ///
+    /// Separate from the model chokepoint deliberately: model traffic is exempt
+    /// from this one, and this one holds no provider credential. See
+    /// [`crate::egress`].
+    pub network: crate::egress::EgressProxy,
+
+    /// The shim directories that decide what a brokered agent's shell reaches,
+    /// and the hooks directory that decides what it may push.
+    pub broker: crate::broker::Broker,
+}
+
 /// Claims queued turns and runs them.
 #[derive(Debug, Clone)]
 pub struct Runner {
@@ -617,11 +648,8 @@ pub struct Runner {
     /// Collects threads that asked to be deleted the moment their work is done.
     collector: Arc<crate::collector::Collector>,
 
-    /// The chokepoint every model request traverses.
-    proxy: crate::proxy::LlmProxy,
-
-    /// The shim directories that decide what a brokered agent's shell reaches.
-    broker: crate::broker::Broker,
+    /// What every turn this runner drives is admitted to.
+    gates: Gates,
 }
 
 impl Runner {
@@ -633,8 +661,7 @@ impl Runner {
         notify: Arc<Notify>,
         max_concurrent_threads: u32,
         collector: Arc<crate::collector::Collector>,
-        proxy: crate::proxy::LlmProxy,
-        broker: crate::broker::Broker,
+        gates: Gates,
     ) -> Self {
         Self {
             store,
@@ -642,8 +669,7 @@ impl Runner {
             notify,
             capacity: Arc::new(Semaphore::new(max_concurrent_threads as usize)),
             collector,
-            proxy,
-            broker,
+            gates,
         }
     }
 
@@ -1002,6 +1028,7 @@ impl Runner {
         let thread_id = &claimed.turn.thread_id;
 
         match self
+            .gates
             .broker
             .install(
                 thread_id,
@@ -1082,17 +1109,20 @@ impl Runner {
         }
     }
 
-    /// Mints the turn's admission to the model, and the context its sessions
-    /// share.
+    /// Mints the turn's admissions, and the context its sessions share.
     ///
-    /// Minted per turn and withdrawn when the returned guard drops, whatever the
-    /// turn does. Every model request a session makes goes through the
-    /// satellite, which is what makes counting and ceilings arithmetic rather
-    /// than a request.
+    /// Both are minted per turn and withdrawn when the turn ends, whatever ends
+    /// it. Every model request a session makes goes through the satellite, which
+    /// is what makes counting and ceilings arithmetic rather than a request, and
+    /// every other request goes through the satellite too when the thread
+    /// declared a web policy, which is what makes the allowlist a decision rather
+    /// than a note in a prompt.
     ///
-    /// The meter is shared with the proxy: the proxy adds up what each response
-    /// reported, and the crossings it finds arrive on the channel here, at the
-    /// one thing that knows how to end a turn.
+    /// The meter is shared with the model proxy: the proxy adds up what each
+    /// response reported, and the crossings it finds arrive on the channel here,
+    /// at the one thing that knows how to end a turn. Both proxies report what
+    /// they find on the same incident channel for the same reason: neither holds
+    /// a database, and this is the one place that owns the turn.
     async fn open(
         &self,
         claimed: &ClaimedTurn,
@@ -1109,7 +1139,8 @@ impl Runner {
         // what makes failover the proxy's to perform.
         let route = crate::proxy::failover::Route::resolve(&claimed.settings.models);
         let token = self
-            .proxy
+            .gates
+            .model
             .grant(
                 crate::proxy::Grant::new(
                     &claimed.turn.thread_id,
@@ -1118,9 +1149,13 @@ impl Runner {
                     Arc::clone(&meter),
                 )
                 .bounded(bounds.llm_request)
-                .reporting_to(incidents),
+                .reporting_to(incidents.clone()),
             )
             .await;
+
+        // Absent for a thread that declared no web policy, which is what leaves
+        // that thread's agents reaching the network exactly as they do today.
+        let egress = self.admit_to_network(claimed, incidents).await;
 
         let context = TurnContext {
             harness: Harness::try_from(claimed.settings.harness).unwrap_or(Harness::Claude),
@@ -1128,9 +1163,10 @@ impl Runner {
             shims: prepared.shims,
             _scanner: prepared.scanner,
             access: ModelAccess {
-                base_url: self.proxy.base_url_for(&token),
+                base_url: self.gates.model.base_url_for(&token),
                 token: token.clone(),
             },
+            egress,
             clock: WallClock::starting_now(ceilings),
             bounds,
             restarts_left: RESTARTS_ALLOWED,
@@ -1140,11 +1176,53 @@ impl Runner {
         };
 
         let grant = RevokeOnDrop {
-            proxy: self.proxy.clone(),
+            proxy: self.gates.model.clone(),
             token,
         };
 
         (context, grant)
+    }
+
+    /// Admits the turn to the network, when its thread declared a web policy.
+    ///
+    /// Read per turn rather than held on the thread, exactly as the exec broker's
+    /// policy is, so a thread runs under the allowlist it has now rather than the
+    /// one it was created with.
+    ///
+    /// A thread that declared nothing is admitted to nothing, and that is not a
+    /// refusal: it gets no proxy variables at all and reaches the network the way
+    /// it always has. See [`crate::egress::policy::WebPolicy::for_thread`].
+    async fn admit_to_network(
+        &self,
+        claimed: &ClaimedTurn,
+        incidents: mpsc::UnboundedSender<Incident>,
+    ) -> Option<crate::egress::Ticket> {
+        let policy =
+            crate::egress::policy::WebPolicy::for_thread(claimed.settings.permissions.as_ref())?;
+
+        tracing::info!(
+            event.name = "turn.egress.admitted",
+            thread.id = %claimed.turn.thread_id,
+            turn.id = %claimed.turn.turn_id,
+            // Absent means every host, which is what `WebAccess::ALL` resolves
+            // to and the one case where the count would be a lie.
+            web.allowed_hosts = policy.named(),
+            "this turn's agents reach the network through the satellite's egress proxy",
+        );
+
+        Some(
+            self.gates
+                .network
+                .admit(
+                    crate::egress::Grant::new(
+                        &claimed.turn.thread_id,
+                        &claimed.turn.turn_id,
+                        policy,
+                    )
+                    .reporting_to(incidents),
+                )
+                .await,
+        )
     }
 
     /// Runs a harness session, starting it once more if the process wedged.
@@ -1321,6 +1399,9 @@ impl Runner {
             context.working_dir.clone(),
             &Grants {
                 model: Some(context.access.clone()),
+                egress: context.egress.as_ref().map(|ticket| EgressAccess {
+                    proxy_url: ticket.proxy_url(),
+                }),
                 exec_broker: context.shims.clone(),
             },
             &claimed.settings.env,
@@ -2159,7 +2240,12 @@ impl Runner {
     /// special case whose only effect is to make the reporting path unreachable
     /// from a test.
     async fn report_denials(&self, claimed: &ClaimedTurn) {
-        for denial in self.broker.drain_denials(&claimed.turn.thread_id).await {
+        for denial in self
+            .gates
+            .broker
+            .drain_denials(&claimed.turn.thread_id)
+            .await
+        {
             let mut fields = std::collections::BTreeMap::new();
             fields.insert(
                 "argv".to_owned(),

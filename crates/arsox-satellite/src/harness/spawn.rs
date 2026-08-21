@@ -18,9 +18,8 @@
 //! can reach. What constrains it is [`crate::broker`], which stands underneath
 //! these flags rather than through them: a thread that declared `exec: NONE` or
 //! `exec: CUSTOM` runs with a root-owned shim directory as its whole `PATH`, and
-//! no flag here can switch that off. The egress proxy and the root-owned
-//! `pre-push` hook are still separate future work, so for `web` and for push
-//! policy the container remains the only boundary.
+//! no flag here can switch that off. The same is true of the root-owned
+//! `pre-push` hook and of [`crate::egress`], neither of which any flag reaches.
 //!
 //! This is why `--permission-mode` never reached the contract. It is a Claude
 //! spelling for an advisory gate, and putting it in a message whose whole
@@ -45,12 +44,13 @@
 //!
 //! A thread's declared variables join that list, and they may only add to it:
 //! [`declared_key_refusal`] refuses any key that would put back what the scrub
-//! removed, and the proxy's own variables are applied last so a declared key
-//! cannot repoint an agent away from the satellite's LLM proxy.
+//! removed, and the satellite's own variables are applied last so a declared key
+//! cannot repoint an agent away from the LLM proxy or out from behind the egress
+//! proxy.
 
 use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::settings::v1::{EnvVar, ExecAccess, Permissions};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// Overrides the Claude CLI binary.
 ///
@@ -250,11 +250,7 @@ fn claude_command(
         program: claude_binary(),
         args,
         working_dir,
-        env: environment_for(
-            declared,
-            proxy.unwrap_or_default(),
-            grants.exec_broker.as_deref(),
-        ),
+        env: environment_for(declared, proxy.unwrap_or_default(), grants),
     }
 }
 
@@ -348,7 +344,7 @@ fn codex_command(
         program: codex_binary(),
         args,
         working_dir,
-        env: environment_for(declared, proxy, grants.exec_broker.as_deref()),
+        env: environment_for(declared, proxy, grants),
     }
 }
 
@@ -390,23 +386,22 @@ fn proxy_v1(base_url: &str) -> String {
 
 /// Assembles the environment a harness child runs with.
 ///
-/// Four layers, in the one order that is safe: what the satellite hands every
-/// agent, then what the thread declared, then the proxy's own variables, then
-/// the broker's `PATH`. Everything the satellite decides goes after everything
-/// the thread declared, because the last value set for a key is the one the
-/// child sees. A thread that could set `ANTHROPIC_BASE_URL` would route its
-/// agent out from under every budget ceiling, and a thread that could set `PATH`
-/// would step around the exec broker by declaring a variable.
-fn environment_for(
-    declared: &[EnvVar],
-    proxy: Vec<AgentVar>,
-    exec_broker: Option<&Path>,
-) -> Vec<AgentVar> {
+/// Five layers, in the one order that is safe: what the satellite hands every
+/// agent, then what the thread declared, then the LLM proxy's variables, then
+/// the egress proxy's, then the broker's `PATH`. Everything the satellite
+/// decides goes after everything the thread declared, because the last value set
+/// for a key is the one the child sees. A thread that could set
+/// `ANTHROPIC_BASE_URL` would route its agent out from under every budget
+/// ceiling, a thread that could set `PATH` would step around the exec broker by
+/// declaring a variable, and a thread that could set `HTTP_PROXY` would step out
+/// from behind the egress allowlist the same way.
+fn environment_for(declared: &[EnvVar], proxy: Vec<AgentVar>, grants: &Grants) -> Vec<AgentVar> {
     let mut env = agent_environment();
     env.extend(declared_environment(declared));
     env.extend(proxy);
+    env.extend(egress_environment(grants));
 
-    if let Some(shims) = exec_broker {
+    if let Some(shims) = grants.exec_broker.as_deref() {
         env.push(AgentVar {
             key: "PATH".to_owned(),
             value: shims.display().to_string(),
@@ -417,6 +412,100 @@ fn environment_for(
     }
 
     env
+}
+
+/// Points an agent's ordinary network traffic at the satellite's egress proxy.
+///
+/// Empty for a thread that declared no web policy, which is what leaves that
+/// thread reaching the network exactly as it does today.
+///
+/// **Both cases of every name.** The tools in the image disagree about which
+/// they read: curl takes the lowercase spelling, Go programs such as `gh` and
+/// `jira` take either, and setting one and not the other is how a proxy quietly
+/// applies to half an image.
+///
+/// **The proxy URL is a credential**, because the turn's admission travels in it
+/// as userinfo, so it is masked wherever a command is rendered. The address on
+/// its own is in the boot log, which is where somebody debugging a turn that
+/// cannot reach its proxy would look.
+fn egress_environment(grants: &Grants) -> Vec<AgentVar> {
+    let Some(access) = grants.egress.as_ref() else {
+        return Vec::new();
+    };
+
+    let exempt = no_proxy_for(grants.model.as_ref());
+
+    [
+        ("HTTP_PROXY", access.proxy_url.clone(), true),
+        ("http_proxy", access.proxy_url.clone(), true),
+        ("HTTPS_PROXY", access.proxy_url.clone(), true),
+        ("https_proxy", access.proxy_url.clone(), true),
+        ("NO_PROXY", exempt.clone(), false),
+        ("no_proxy", exempt, false),
+    ]
+    .into_iter()
+    .map(|(key, value, secret)| AgentVar {
+        key: key.to_owned(),
+        value,
+        secret,
+    })
+    .collect()
+}
+
+/// The hosts an agent reaches directly rather than through the egress proxy.
+///
+/// Loopback, always. Every satellite-owned listener an agent legitimately talks
+/// to is on it, and the one that matters is the [LLM proxy](crate::proxy): model
+/// traffic keeps its own chokepoint, so a completion is not relayed twice and its
+/// allowlist decision is not made by a component that holds no provider
+/// credential and counts no tokens.
+///
+/// The model grant's own host is added when it is somehow not loopback, so the
+/// exemption follows the proxy rather than an assumption about where it binds.
+/// All three spellings of loopback are listed because a client matches this
+/// variable as text rather than by resolving it.
+fn no_proxy_for(model: Option<&ModelAccess>) -> String {
+    let mut exempt = vec![
+        "localhost".to_owned(),
+        "127.0.0.1".to_owned(),
+        "::1".to_owned(),
+    ];
+
+    if let Some(host) = model.and_then(|access| host_of(&access.base_url))
+        && !exempt.contains(&host)
+    {
+        exempt.push(host);
+    }
+
+    exempt.join(",")
+}
+
+/// The host part of a URL, without its scheme, port, or path.
+fn host_of(url: &str) -> Option<String> {
+    let rest = url
+        .split_once("://")
+        .map_or(url, |(_scheme, authority)| authority);
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_userinfo, host)| host);
+
+    // A bracketed IPv6 literal keeps its brackets off: `NO_PROXY` is matched
+    // against a hostname, which is what a client has at the point it checks.
+    let host = host.strip_prefix('[').map_or_else(
+        || {
+            host.rsplit_once(':')
+                .map_or(host, |(host, _port)| host)
+                .to_owned()
+        },
+        |rest| {
+            rest.split_once(']')
+                .map_or(rest, |(host, _port)| host)
+                .to_owned()
+        },
+    );
+
+    (!host.is_empty()).then_some(host)
 }
 
 /// What a thread asked for, before any CLI has a word for it.
@@ -615,15 +704,23 @@ fn codex_permission_args(posture: &Posture) -> Vec<String> {
 
 /// What the satellite lends one turn, and takes back when it ends.
 ///
-/// The two travel together because they are the same kind of thing: something
+/// The three travel together because they are the same kind of thing: something
 /// the satellite hands an agent for the length of a turn, and the environment it
 /// arrives in. Taking them as separate parameters is how a signature grows until
-/// nobody can read a call site, and both are `Option` for the same reason: a
-/// turn may run without a model grant, and most threads run without a broker.
+/// nobody can read a call site, and each is `Option` for the same reason: a turn
+/// may run without a model grant, and most threads run without a broker or a
+/// declared web policy.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Grants {
     /// The turn's admission to the model.
     pub model: Option<ModelAccess>,
+
+    /// The turn's admission to the network.
+    ///
+    /// Absent for every thread that declared no web policy, which is the default
+    /// and leaves that thread's agents reaching the network exactly as they do
+    /// today. See [`crate::egress`].
+    pub egress: Option<EgressAccess>,
 
     /// The thread's shim directory, which becomes the agent's whole `PATH`.
     ///
@@ -634,12 +731,12 @@ pub struct Grants {
 }
 
 impl Grants {
-    /// A turn admitted to the model and brokered by nothing.
+    /// A turn admitted to the model, brokered by nothing and gated by nothing.
     #[must_use]
     pub fn model(access: ModelAccess) -> Self {
         Self {
             model: Some(access),
-            exec_broker: None,
+            ..Self::default()
         }
     }
 }
@@ -652,6 +749,18 @@ pub struct ModelAccess {
     /// Identifies the turn. Not a credential: it authorizes nothing beyond
     /// spending this turn's budget through this satellite.
     pub token: String,
+}
+
+/// One turn's admission to the network, by way of the satellite's egress proxy.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EgressAccess {
+    /// The forward proxy an agent is pointed at, carrying the turn's admission
+    /// as the URL's own credentials.
+    ///
+    /// One field rather than an address and a token, because every client that
+    /// reads `HTTP_PROXY` takes both from one URL and splitting them here would
+    /// only mean rejoining them at every call site.
+    pub proxy_url: String,
 }
 
 /// Builds the process to spawn, with an environment an agent may safely hold.
@@ -1697,8 +1806,8 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             &Grants {
-                model: None,
                 exec_broker: Some(PathBuf::from("/opt/arsox/threads/x/bin")),
+                ..Grants::default()
             },
             &[],
             None,
@@ -1727,8 +1836,8 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             &Grants {
-                model: None,
                 exec_broker: Some(PathBuf::from("/opt/arsox/threads/x/bin")),
+                ..Grants::default()
             },
             &[declared("PATH", "/usr/bin:/bin", Some(false))],
             None,
