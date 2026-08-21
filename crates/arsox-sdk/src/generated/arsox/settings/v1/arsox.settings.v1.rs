@@ -264,13 +264,16 @@ pub struct Permissions {
     /// rejected by exact argv match, and the binaries are not on the agent's PATH.
     #[prost(string, repeated, tag="4")]
     pub allowed_commands: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// Absent means allowed. Enforced by a root-owned pre-push hook installed
-    /// through core.hooksPath outside every worktree, plus a git credential helper
-    /// that refuses to release credentials for a denied push.
+    /// Absent means allowed. Enforced by a root-owned pre-push hook, installed
+    /// outside every worktree and pointed at by core.hooksPath, which refuses the
+    /// push after git has authenticated and before it uploads anything. No Arsox
+    /// credential is ever released to an agent, for a push or for anything else.
     #[prost(bool, optional, tag="5")]
     pub allow_git_push: ::core::option::Option<bool>,
-    /// Refs no agent may push to. Same hook and credential helper, so no refspec,
-    /// config edit, or clever remote gets around it.
+    /// Refs no agent may push to, matched as the ref will exist on the remote, so
+    /// deleting a protected branch is refused exactly like writing to one. The
+    /// same hook enforces both, and it accepts either spelling: `main` and
+    /// `refs/heads/main` name the same branch.
     #[prost(string, repeated, tag="6")]
     pub protected_branches: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
 }
