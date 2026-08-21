@@ -328,7 +328,7 @@ impl Grant {
 }
 
 /// Routes an agent's model requests, holding the credential it must not.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct LlmProxy {
     grants: Arc<RwLock<HashMap<String, Grant>>>,
     client: reqwest::Client,
@@ -337,6 +337,17 @@ pub struct LlmProxy {
     /// authentication beyond the per-turn token, and it holds a real provider
     /// credential, so it must never be reachable off the container.
     address: SocketAddr,
+}
+
+/// The grant map is keyed by live turn tokens, and a derived `Debug` would
+/// print every one of them into any log line that ever formatted the proxy.
+/// Same rendering the egress proxy uses, per M-PUBLIC-DEBUG.
+impl std::fmt::Debug for LlmProxy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LlmProxy")
+            .field("address", &self.address)
+            .finish_non_exhaustive()
+    }
 }
 
 impl LlmProxy {

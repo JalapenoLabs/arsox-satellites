@@ -664,3 +664,27 @@ async fn a_turn_that_declared_no_ceiling_is_never_refused() {
     assert_eq!(meter.tokens_spent(), 300_000, "counted, and never refused");
     assert_eq!(meter.reached(), None);
 }
+
+#[tokio::test]
+async fn a_formatted_proxy_never_prints_a_live_token() {
+    // The grant map is keyed by turn tokens, and a derived Debug would print
+    // every one of them into any log line that ever formatted the proxy. The
+    // egress proxy renders itself the same way for the same reason.
+    let proxy = LlmProxy::start().await.expect("should start");
+    let token = proxy
+        .grant(Grant::new(
+            "thread-1",
+            "turn-1",
+            Route::resolve(&[]),
+            Arc::new(Meter::unmetered()),
+        ))
+        .await;
+
+    let rendered = format!("{proxy:?}");
+
+    assert!(rendered.contains("LlmProxy"));
+    assert!(
+        !rendered.contains(&token),
+        "a live turn token reached Debug output"
+    );
+}
