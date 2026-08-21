@@ -269,6 +269,168 @@ anything root owns.
 Brokering them would mean an operator's own `yarn install` had to appear in an
 allowlist written for the agent, which reads as a bug every single time.
 
+## The push gate
+
+### What it is
+
+A thread that **denies pushing, protects a ref, or declares a secret** gets a
+**hooks directory** beside its shim directory, holding one file:
+
+```
+#!/usr/local/bin/arsox-satellite --pre-push
+```
+
+`core.hooksPath` points every checkout at that directory, so `git push`, typed
+by an agent, execs the satellite. It is the same multi-call shim pattern the
+exec broker uses, and it learns its thread the same way: from the path of the
+file the kernel ran it by, with the policy sitting beside the directory it came
+out of.
+
+A thread with none of those three has nothing to enforce about pushing and gets
+no hooks directory. Nothing about its pushes changes, and its repos keep
+whatever hooks they installed themselves.
+
+### Where the hooks path is written, and why twice
+
+`core.hooksPath` is ordinary repository config, and the interesting question is
+which config.
+
+- **At clone time**, as `git clone --config core.hooksPath=...`, which is
+  written into the new repository's config and outlives the clone. This is
+  deliberately the *opposite* of how the clone's credential is passed: a
+  credential goes in with `git -c`, which is scoped to the one invocation and
+  persists nowhere. Getting the two the wrong way round would persist a token
+  and lose a gate in the same line.
+- **At the start of every turn**, over every checkout under the thread's
+  `repos/`, for the same reason the shim directory is rebuilt there. Anything
+  that writes config can replace `core.hooksPath`, and a repo whose setup
+  installs husky does exactly that. Re-asserting also picks up a thread whose
+  settings grew a protected branch after it was cloned.
+
+Coverage, stated rather than assumed:
+
+| | Covered | How |
+|---|---|---|
+| the clone | yes | its own config |
+| a worktree of the clone | yes | worktrees share the clone's config, and Arsox does not enable `extensions.worktreeConfig` |
+| a submodule | yes | its own config, written in a pass after the clone |
+| a repo the agent cloned itself | no | it has a config Arsox never wrote |
+
+The hooks path is set and never unset. A thread that stops protecting a branch
+keeps pointing at a hooks directory the installer has emptied, which is a repo
+with no hooks; unsetting instead would clobber whatever the repo's own tooling
+had put there.
+
+### What the hook decides
+
+git hands a `pre-push` hook the remote's name and URL on argv, and one line per
+ref on stdin: the local ref, the local sha, the remote ref, and the remote sha.
+Two of those shas are placeholders rather than commits. A remote sha of all
+zeros means the remote has never seen the ref, and a local sha of all zeros
+means the push deletes it. Both are read as the cases they are rather than
+compared against a forty-character literal, because a SHA-256 repository spells
+the same absence with sixty-four zeros.
+
+The checks run cheapest and broadest first:
+
+1. **`allow_git_push` is false.** Every ref is refused, with
+   `PERMISSION_PUSH_DENIED`, without reading a commit.
+2. **A ref matches `protected_branches`.** Refused with
+   `PERMISSION_BRANCH_PROTECTED` and `details.ref`. The match is against the ref
+   *as it will exist on the remote*, so a delete is refused exactly like a
+   write, and it accepts either spelling: `main` and `refs/heads/main` name the
+   same branch. There is no globbing, which is the same reading the exec
+   allowlist gives an entry.
+3. **Otherwise the outgoing commits are scanned** for the thread's secrets. A
+   hit refuses the push with `SECRET_IN_PUSH_BLOCKED`.
+
+Every refusal is written into the same deny spool the exec broker uses, which
+now carries the code for the gate that closed, and the runner drains it into a
+`blocked` incident attributed to the turn that was running.
+
+### The scan, and why the hook holds no secrets
+
+The hook runs as the agent, because the push does. The thread's secret set
+includes the repo's own access token, the GitHub and Jira tokens, and every LLM
+credential, none of which an agent is ever given. **Writing them somewhere the
+agent can read them, in order to check that the agent is not leaking them,
+would hand over the thing being protected.** A salted hash of each is no better:
+it is an offline cracking target for a credential and it leaks the length.
+
+So the secrets stay with the satellite and the hook asks a question instead:
+
+1. the hook runs `git log --format=%B --patch` over the outgoing range and
+   writes the bytes straight into a unix socket in the thread's broker
+   directory,
+2. it shuts down its writing half,
+3. the satellite, which is root and holds the secrets, answers `clean` or
+   `secret` and closes.
+
+The satellite **reads and never runs**: it does not spawn git, does not open the
+repository, and never touches a path the agent named.
+
+The socket is bound per turn, carrying the turn's own redactor, because an agent
+pushes during a turn and at no other time. A push made when nothing is listening
+is refused rather than allowed.
+
+### Scanning cost
+
+Two bounds, and they are different things.
+
+**The range is bounded.** An update scans `remote..local`. A branch the remote
+has never seen scans `local --not --remotes`, which excludes everything already
+on a remote-tracking ref, so the first push of a topic branch cut from `main`
+costs the topic branch rather than the repository's history. A delete sends
+nothing and scans nothing.
+
+**The memory is bounded.** The satellite reads the stream in 64 KiB chunks and
+carries one secret's length between them, so a push of ten thousand commits
+costs the same memory as a push of one, and a secret straddling a chunk boundary
+is still found. The carry is bytes rather than text, so a multi-byte character
+split by a read reassembles rather than being lost to a replacement character.
+
+### What git's ordering actually guarantees
+
+A credential helper that refuses to release credentials for a denied push is the
+obvious second half of this control, and it is not buildable. Two facts decide
+that, and both are worth stating rather than leaving somebody to rediscover.
+
+**git's credential protocol has no field naming the operation.** A helper is
+told the protocol, the host, the path, and sometimes the `WWW-Authenticate`
+challenge. It is never told whether the fetch it is answering is a fetch or the
+ref discovery half of a push, because over HTTP those are the same request shape
+to the same host. **A helper cannot tell them apart**, so a helper that refuses
+"for a push" cannot be written.
+
+**The ordering makes the hook the gate anyway.** A push is: ref discovery, which
+is where credentials are acquired; then the `pre-push` hook, whose stdin needs
+the remote shas discovery produced; then the upload that sends objects. So the
+hook runs *after* authentication and *before* any content leaves. It is a
+complete gate on content leaving and is not a gate on a credential being
+released.
+
+**And there is no credential to gate.** Arsox lends a token to its own `git`
+process for the length of one invocation and writes nothing into the checkout,
+so an agent's own `git push` has no Arsox credential to release at all. That is
+a stronger guarantee than the one the helper was supposed to give. If Arsox ever
+grows a persistent credential for agents, the holdable version of the promise is
+that a thread which denies pushing has no helper installed rather than one that
+argues.
+
+### Exit codes the hook uses
+
+| Code | Meaning |
+|---|---|
+| 0 | the policy permits it |
+| 1 | the policy refused it; git aborts on any nonzero code and prints nothing of its own, so the line above it is what the agent reads |
+| 125 | the hook could not decide, which is a satellite fault rather than a permission decision |
+
+125 is the exec shim's code for the same condition, and it covers every way the
+gate can fail to run: an unreadable policy, stdin that is not the format git
+documents, no `git` to read the push with, and a satellite that did not answer a
+scan. **All of them refuse.** A scan that did not happen is not a scan that
+found nothing.
+
 ## What this does not enforce
 
 Each of these is real, and each is a consequence of the shape of the control
@@ -296,10 +458,27 @@ prevention.
 **Nothing here bounds resource use.** Disk quotas, memory, and CPU are separate
 controls; a permitted command may still fill a volume.
 
-**The other two deterministic controls are still unbuilt.** The egress proxy and
-the root-owned `pre-push` hook are separate work. Until they land, a brokered
-thread still reaches the network through whatever it is allowed to run, and a
-push is still governed only by the advisory layer.
+**A hook runs as the agent, so an agent can decline to run it.** `git push
+--no-verify` skips every hook, `git -c core.hooksPath=/dev/null push` points at
+another directory for one command, and a repository cloned somewhere Arsox never
+configured has no hooks path at all. The gate is at the point of invocation,
+exactly as the exec broker's is: it holds every push that does not set out to
+disable it, which is every push an agent makes in the ordinary course of its
+work. Closing it needs the egress proxy, so that the network refuses what the
+hook declined to send.
+
+**A repo's own tooling can take the hooks path.** `core.hooksPath` is repository
+config and husky sets it to `.husky` during an ordinary `yarn install`. The
+runner re-asserts it at the start of every turn, so the window is one turn wide
+rather than permanent, and inside that turn the gate is gone.
+
+**The scan reads what git renders as text.** A changed binary is `Binary files
+differ` in a patch, so a credential inside one is not in the text being scanned.
+Neither is anything the push does not carry, which is the same fact that makes
+the scan affordable.
+
+**The egress proxy is still unbuilt.** Until it lands, a brokered thread reaches
+the network through whatever it is allowed to run.
 
 ## The advisory layer stays
 
@@ -314,15 +493,25 @@ it off, no prompt argues with it, and a harness that decides to run a command
 anyway meets the shim. Two layers with one meaning: the flags tell an agent what
 it should reach for, the broker decides what it reaches.
 
+Push is the one control with no advisory half worth speaking of. A push can be
+spelled a dozen ways in argv, so the CLI flags never tried to match one, and the
+hook is the whole of the enforcement rather than the deterministic layer beneath
+a suggestion.
+
 ## Where the code is
 
 | Piece | File |
 |---|---|
 | who drops to whom, and whether anything can | `src/privilege.rs` |
-| the policy, the preset, argv matching, the shim set | `src/broker/mod.rs` |
-| installing and removing a thread's shim directory | `src/broker/install.rs` |
+| the policy, both halves of it, and which gates engage | `src/broker/mod.rs` |
+| the preset, argv matching, the shim set | `src/broker/mod.rs` |
+| installing and removing a thread's gates | `src/broker/install.rs` |
 | the shim entrypoint the shebang reaches | `src/broker/shim.rs` |
-| the deny spool, written by the shim and drained by the runner | `src/broker/spool.rs` |
+| what a push is, and what a policy says about one | `src/broker/push.rs` |
+| the `pre-push` entrypoint the shebang reaches | `src/broker/hook.rs` |
+| the scan: the socket, the protocol, the bounded sieve | `src/broker/scan.rs` |
+| the deny spool, written by a gate and drained by the runner | `src/broker/spool.rs` |
+| pointing a checkout at the hooks it must run | `src/workspace/repos.rs` |
 
 ## What is proven where
 
@@ -330,31 +519,47 @@ The uid drop and the `exec` are Unix system calls, and the satellite is develope
 on Windows. So the layers are split deliberately:
 
 - **The decision logic is pure and unit-tested on every platform.** Who drops to
-  whom given a uid and an `/etc/passwd`, which threads engage the broker, what
-  the shim set computes to for a policy, whether an argv is permitted, what the
-  preset contains, and the spool record round trip.
+  whom given a uid and an `/etc/passwd`, which gates a thread engages, what the
+  shim set computes to for a policy, whether an argv is permitted, what the
+  preset contains, how a push's refspecs parse, which ref a protected entry
+  matches, what range a push scans, and the spool record round trip.
 - **Installation and draining are tested on Unix**, against a temporary
   directory, without root. Installation sets no ownership at all: every path in a
   shim directory is owned by whoever built it, which in the image is the
   satellite and therefore root. What it sets is the three modes, and those are
   the same three whether a test builds the directory or a satellite does, so the
   whole mechanism runs on an ordinary Linux CI runner.
+- **The `pre-push` hook is driven end to end on every platform**, in
+  `tests/push_gate.rs`. git runs a hook as a program with the remote on argv and
+  the refspecs on stdin, so the tests run the satellite binary exactly that way,
+  against a broker directory in a temporary directory: a denied push, a
+  protected ref and its `details.ref`, a delete of a protected branch, a
+  permitted push that records nothing, and both fail-closed paths. What the
+  temporary directory stands in for is ownership, which is not what the hook
+  reads.
+- **The scan and the hooks path are driven on Unix**, in the same file: a real
+  repository, a real socket, a real `git log` streamed to a real satellite. A
+  commit carrying a secret is refused with `SECRET_IN_PUSH_BLOCKED` and a clean
+  one is not, a push with nothing listening is refused rather than allowed, and
+  a checkout comes out of `point_hooks_at` with `core.hooksPath` set.
 - **The drop itself and the shebang exec need Linux and root.** The Docker
   workflow boots the image and asserts that PID 1 runs as uid 0 and that the
   satellite reported `satellite.boot.enforcement_ready`, which is the posture
   every spawn then applies.
 
   **Not asserted in CI**, and worth saying rather than implying: the uid a
-  spawned child actually lands on, and a real command going through a real shim.
-  Observing either means driving a turn inside the container, which is a longer
-  smoke than the build workflow is. A turn-driving container smoke is the test
-  that would close it.
+  spawned child actually lands on, a real command going through a real shim, and
+  a real `git push` finding the hook through `core.hooksPath` rather than the
+  hook being invoked the way the kernel would invoke it. Observing any of them
+  means driving a turn inside the container, which is a longer smoke than the
+  build workflow is. A turn-driving container smoke is the test that would close
+  all three.
 
 ## Roadmap
 
-- The egress proxy, and a container with no default route around it.
-- The root-owned `pre-push` hook, plus the credential helper that refuses to
-  release credentials for a denied push.
+- The egress proxy, and a container with no default route around it. It is also
+  what would close the `--no-verify` route around the push gate, by refusing at
+  the network what the hook declined to send.
 - `PRESET` under the broker, which is a change to the default for every thread
   and needs its own decision.
 - A mount namespace per thread, which is what would close the absolute-path

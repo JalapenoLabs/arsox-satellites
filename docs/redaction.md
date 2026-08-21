@@ -194,12 +194,18 @@ that exist:
 - incident messages and their evidence
 - captured setup and checker output
 - credentials in the settings every thread response carries
+- **content on its way out through git.** The root-owned `pre-push` hook streams
+  the outgoing commits, patch and messages alike, to the satellite and refuses a
+  push that carries a secret with `SECRET_IN_PUSH_BLOCKED`. This engine is what
+  answers, through `Redactor::contains_secret`, and the hook holds no secret of
+  its own: it runs as the agent, and the set includes credentials the agent is
+  never given. See [the enforcement doc](./enforcement.md#the-push-gate).
 
 These do not exist yet, because the features they belong to do not:
 
-- **File contents in commits, and commit messages.** The root-owned `pre-push`
-  hook is the hard gate here and is separate work. Until it lands, nothing stops
-  an agent committing a credential.
+- **Masking on the way into a commit.** The `pre-push` hook gates the push
+  rather than the commit, so a credential can be committed locally and cannot
+  leave. Rewriting it as it is written needs a gate on the commit itself.
 - **PR titles, bodies, review comments, and Jira comments.** There is no `gh` or
   `jira` broker yet.
 - **Artifact contents at upload time**, and **suggestion bodies**. Neither stage
@@ -215,11 +221,9 @@ covers: there is no way for an agent to move it, deliberately or otherwise.
 
 ## Roadmap
 
-- The `pre-push` hook, which refuses a push carrying an unredacted secret. See
-  the [workspace doc](./workspace.md) for where credentials live today.
 - The `override_redaction` MCP tool, scoped to one secret and one operation,
   emitting a high-priority stream event and appearing in the turn report with the
   justification the agent gave. `allowRedactionOverride: false` unregisters it
   entirely rather than gating its behaviour.
 - Masking on the way into a commit, a pull request, and an artifact, alongside
-  the features that produce them.
+  the features that produce them. The push is gated today; the commit is not.

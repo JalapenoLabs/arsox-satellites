@@ -921,20 +921,22 @@ Enforced today:
 | Tool permissions | working posture | Thread permission settings reach the harness as launch flags. This layer is advisory: it shapes what the harness will do, and the exec broker below is what constrains it. |
 | Exec allowlist | preset, unbrokered | A thread that declares `exec: NONE` or `exec: CUSTOM` runs with a root-owned shim directory as its whole `PATH`. Commands outside the allowlist are refused by exact argv match, reported as `PERMISSION_COMMAND_DENIED`, and recorded as `blocked` incidents. Agents are unprivileged and the shims are root-owned, so no flag or prompt reaches them. **Scope, stated plainly**: this shapes name resolution, so an absolute path still runs and an allowed interpreter still executes anything. `PRESET` and an undeclared `exec` keep the full `PATH`. See [Deterministic enforcement](./docs/enforcement.md). |
 | Privilege separation | always, in the image | The satellite runs as root and every process it spawns drops to the unprivileged `arsox` account: harness, `git`, setup commands, and checkers. Off root, the deterministic layer does not engage and boot says so. |
+| Push at all | allowed | A root-owned `pre-push` hook, installed outside every worktree and pointed at by `core.hooksPath`. A thread that denies pushing refuses every push with `PERMISSION_PUSH_DENIED`, recorded as a `blocked` incident. **Scope, stated plainly**: the hook runs as the agent, because the push does, so `git push --no-verify` or a `core.hooksPath` the agent sets on its own command line gets around it. What it holds is every push that does not set out to disable it. See [Deterministic enforcement](./docs/enforcement.md). |
+| Protected branches | none | The same hook, matching the ref as it will exist on the remote, so deleting a protected branch is refused exactly like writing to one. `PERMISSION_BRANCH_PROTECTED` carries `details.ref`. Same scope as the row above. |
+| Secrets in pushed content | blocked | The same hook streams the outgoing commits, patch and messages alike, to the satellite, which holds the thread's secrets and answers. A hit refuses the push with `SECRET_IN_PUSH_BLOCKED`. Only the commits being sent are read, in bounded memory, and a credential inside a binary file is not text git renders. |
 
 On the roadmap, with the same deterministic bar:
 
 | Control | Default | How it will be enforced |
 |---|---|---|
 | Network egress | preset allowlist | The container has no default route. All traffic goes through the Arsox egress proxy, which enforces the domain list. Options: all, none, preset, custom list. |
-| Push at all | allowed | A root-owned `pre-push` hook, installed through `core.hooksPath` outside every worktree, plus a git credential helper that refuses to release credentials for a denied push. |
-| Protected branches | none | Same hook and credential helper. Blacklist `main` and no refspec, config edit, or clever remote gets around it. |
-| Secrets in pushed content | blocked | The same `pre-push` hook scans the outgoing diff. See [Secret redaction](#secret-redaction). |
 | Redaction override | available | The `override_redaction` MCP tool. Setting `allowRedactionOverride: false` unregisters the tool entirely, so no agent in the thread can reach it. |
 | PR merging | disallowed | `gh` is brokered by Arsox, which rejects merge calls that policy forbids. |
 | Filesystem writes | member scope | Unix ownership. A team member can write its own directory and the shared artifacts directory, nothing else. |
 | Exec allowlist under `PRESET` | preset allowlist | The curated list is defined; bringing it under the broker changes the default for every thread that declared nothing, so it gets its own change. |
 | Exec beyond `PATH` | shim directory | A mount namespace per thread, which is what would stop an absolute path rather than documenting it. |
+
+**Credentials are lent to the satellite's own git, and never to an agent.** A clone is handed its token through a helper scoped to that one invocation, and nothing is written into the checkout, so an agent's own `git push` has no Arsox credential to release. That is stronger than a helper that refuses on a denied push, and it is also the only thing available: git's credential protocol tells a helper the host and the path and never which operation is running, so no helper can tell a fetch from a push. The ordering makes the hook the right gate regardless. git acquires credentials during ref discovery, runs `pre-push` next, and uploads objects only after it, so a refusal stops the content before any of it leaves the satellite.
 
 Instructions written into `AGENTS.md` are **advisory**, and always will be. They shape behavior, they do not constrain it. Never rely on an `AGENTS.md` line for anything that matters if it is violated.
 
@@ -956,7 +958,7 @@ Redaction applies to:
 - artifact contents, at upload time
 - suggestion bodies, their evidence output, and proposed setup scripts
 
-The `pre-push` hook is the hard gate for git. A push containing an unredacted secret is refused outright, so a leak requires a deliberate override rather than an oversight.
+The `pre-push` hook is the hard gate for git. A push containing an unredacted secret is refused outright, so a leak requires a deliberate override rather than an oversight. It gates the push rather than the commit: a secret can be committed locally, and it cannot leave.
 
 #### Redaction modes
 
