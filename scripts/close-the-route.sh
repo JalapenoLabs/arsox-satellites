@@ -22,7 +22,7 @@
 #     RUN apt-get update \
 #         && apt-get install --no-install-recommends --yes iptables \
 #         && rm -rf /var/lib/apt/lists/*
-#     COPY close-the-route.sh /usr/local/bin/close-the-route.sh
+#     COPY --chmod=0755 close-the-route.sh /usr/local/bin/close-the-route.sh
 #     ENTRYPOINT [ "/usr/local/bin/close-the-route.sh" ]
 #
 # and then:
@@ -55,35 +55,57 @@ REQUIRE_CLOSURE="${ARSOX_REQUIRE_ROUTE_CLOSURE:-true}"
 #
 # The loopback rule is appended first and matched first, so an agent reaching the
 # proxies is accepted before the rule below it is ever consulted.
+#
+# The reject type is per family: `icmp-port-unreachable` does not exist for IPv6
+# and ip6tables refuses the whole rule when it is named. Getting this wrong is
+# how an IPv6 route stays open behind an IPv4 one that closed cleanly.
 close_route() {
     binary="$1"
+    reject="$2"
 
     command -v "$binary" >/dev/null 2>&1 || return 1
 
     "$binary" -A OUTPUT -o lo -j ACCEPT || return 1
     "$binary" -A OUTPUT -m owner --uid-owner "$AGENT_UID" \
-        -j REJECT --reject-with icmp-port-unreachable || return 1
+        -j REJECT --reject-with "$reject" || return 1
 
     return 0
 }
 
-if close_route iptables; then
-    echo "arsox: uid ${AGENT_UID} may reach loopback only (ipv4)"
-else
-    echo "arsox: could not close the ipv4 route for uid ${AGENT_UID}" >&2
+# Whether this network namespace has an IPv6 stack at all.
+#
+# The file is absent on a kernel built without IPv6, which is the one case where
+# failing to filter IPv6 leaves no route open. Its emptiness says nothing: procfs
+# reports every file as zero bytes.
+has_ipv6() {
+    [ -e /proc/net/if_inet6 ]
+}
+
+# Stops the satellite rather than starting it believing it is enforcing.
+refuse() {
+    echo "arsox: $1" >&2
     echo "arsox: install iptables and run the container with --cap-add NET_ADMIN" >&2
 
     if [ "$REQUIRE_CLOSURE" = "true" ]; then
         exit 1
     fi
+}
+
+if close_route iptables icmp-port-unreachable; then
+    echo "arsox: uid ${AGENT_UID} may reach loopback only (ipv4)"
+else
+    refuse "could not close the ipv4 route for uid ${AGENT_UID}"
 fi
 
-# IPv6 is frequently absent in a container and is a route out when it is not, so
-# it is closed where it exists and is not required to exist.
-if close_route ip6tables; then
+# IPv6 is a route out wherever it exists, so it is closed exactly as strictly.
+# Where the kernel has no IPv6 at all there is nothing to close and nothing to
+# refuse over.
+if ! has_ipv6; then
+    echo "arsox: this kernel has no ipv6, so there is no ipv6 route to close"
+elif close_route ip6tables icmp6-port-unreachable; then
     echo "arsox: uid ${AGENT_UID} may reach loopback only (ipv6)"
 else
-    echo "arsox: no ipv6 route to close" >&2
+    refuse "could not close the ipv6 route for uid ${AGENT_UID}"
 fi
 
 exec /usr/local/bin/arsox-satellite "$@"

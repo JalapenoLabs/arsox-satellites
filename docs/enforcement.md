@@ -695,9 +695,16 @@ That is the property that makes this recipe operable. The closure follows the
 privilege split the satellite already has, so nothing has to be redirected and
 nothing else has to be run.
 
-`scripts/close-the-route.sh` is that recipe as a file, with the IPv6 half and a
-refusal to start when the rules will not apply. It goes into an image that extends
-the published one:
+`scripts/close-the-route.sh` is that recipe as a file. It adds two things the
+snippet above leaves out, and both matter. **The same pair goes on `ip6tables`**,
+with `icmp6-port-unreachable`, because IPv6 is a route out wherever it exists and
+because naming the IPv4 reject type there makes `ip6tables` refuse the whole rule,
+which is how an IPv6 route stays open behind an IPv4 one that closed cleanly. And
+**it refuses to start when the rules will not apply**, since a satellite that came
+up believing it was enforcing on a host where it is not is worse off than one that
+stopped.
+
+It goes into an image that extends the published one:
 
 ```Dockerfile
 FROM jalapenolabs/arsox-satellite:ubuntu-1.0.0
@@ -705,7 +712,7 @@ USER root
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes iptables \
     && rm -rf /var/lib/apt/lists/*
-COPY close-the-route.sh /usr/local/bin/close-the-route.sh
+COPY --chmod=0755 close-the-route.sh /usr/local/bin/close-the-route.sh
 ENTRYPOINT [ "/usr/local/bin/close-the-route.sh" ]
 ```
 
@@ -718,6 +725,12 @@ docker run --cap-add NET_ADMIN -p 8080:8080 \
 
 It belongs in an entrypoint rather than a `docker exec` afterwards, because a
 `docker exec` races the first turn.
+
+Driven end to end against `debian:bookworm-slim` with `--cap-add NET_ADMIN`, the
+recipe behaves as written: root reaches the internet, uid 10001 does not, uid
+10001 still reaches a loopback listener, both families carry the rule, and the
+satellite starts with its arguments intact. Without the capability the script
+stops rather than starting a satellite that would only look enforced.
 
 **What it costs, plainly.** `--cap-add NET_ADMIN` grants the capability to root
 inside the container. Agents are not root and cannot use it, and it is scoped to
