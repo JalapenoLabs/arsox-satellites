@@ -405,9 +405,9 @@ not stop.
 
 Push policy is enforced the same way and by a gate of its own: a root-owned
 `pre-push` hook these flags never tried to describe, because a push can be
-spelled a dozen ways in argv. The one deterministic control still unbuilt is the
-egress proxy the container has no route around, so **for `web` the container
-remains the only boundary**.
+spelled a dozen ways in argv. `web` is enforced by a gate of its own too, the
+egress proxy every request of a gated thread's agents traverses, so **no part of
+`Permissions` reaches a harness as a flag except the exec policy**.
 
 **The decision is derived once and rendered twice.** `Posture` in `spawn.rs`
 holds what the thread asked for, and each harness arm says what its own CLI
@@ -656,9 +656,10 @@ advertised one it cannot run would have a caller learn the truth as
   `skipped_by_commander`, so a check the agents deliberately accept is reported
   as accepted rather than as unfixed. A skip applies to one turn and never
   carries into the next.
-- **The rest of deterministic permission enforcement.** The exec broker and the
-  `pre-push` hook are built; the egress proxy is not. The flags above stay
-  advisory either way: these enforce underneath them.
+- **The rest of deterministic permission enforcement.** The exec broker, the
+  `pre-push` hook, and the egress proxy are built; filesystem scope per member
+  and the redaction kill switch are not. The flags above stay advisory either
+  way: these enforce underneath them.
 - **Codex over its app-server protocol.** It exposes command, patch, and network
   approvals as first-class requests, which is a better fit for the permission
   model than a one-way event stream, and is what would let `allowed_commands`

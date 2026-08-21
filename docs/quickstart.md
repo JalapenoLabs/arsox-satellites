@@ -304,8 +304,13 @@ behavior, and this page shows none of them:
 | The Node SDK on npm, and a Python SDK at all | [Distribution](https://github.com/JalapenoLabs/arsox-satellites/milestone/5) |
 | A published tag for the Rust SDK, so a git dependency can pin one | [Distribution](https://github.com/JalapenoLabs/arsox-satellites/milestone/5) |
 | Team mode, plan approval, question answering, and artifacts | [the SDK doc's roadmap](./sdk.md#what-the-aspirational-example-still-needs) |
-| Deterministic permissions: the exec broker, the egress proxy, the `pre-push` hook | [Enforcement](https://github.com/JalapenoLabs/arsox-satellites/milestone/4) |
+| Deterministic permissions beyond the exec broker, the `pre-push` hook, and the egress proxy: filesystem scope per member, and the redaction kill switch | [Enforcement](https://github.com/JalapenoLabs/arsox-satellites/milestone/4) |
 
-Until the enforcement layer lands, thread permissions reach the harness as
-advisory flags and the container is the real boundary. Give a satellite the
-network reach and the credentials you would give the agent running inside it.
+The three gates that exist engage only on a satellite that separates privilege,
+which means the published image rather than a `cargo run` on a laptop. Off it,
+thread permissions reach the harness as advisory flags and the container is the
+real boundary, so give a satellite the network reach and the credentials you
+would give the agent running inside it. The egress proxy's allowlist also wants
+the [route closure](./enforcement.md#the-route-closure-is-deployment-configuration),
+which is deployment configuration rather than something the satellite applies to
+itself.
