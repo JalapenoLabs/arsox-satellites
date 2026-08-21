@@ -1885,4 +1885,169 @@ mod tests {
 
         assert_eq!(command.args, command_with(None).args);
     }
+
+    /// A turn's admission to the network, as the egress proxy issues one.
+    fn egress_access() -> EgressAccess {
+        EgressAccess {
+            proxy_url: "http://arsox:the-turns-egress-token@127.0.0.1:41234".to_owned(),
+        }
+    }
+
+    /// The command a gated turn builds, model grant and all.
+    fn gated_command() -> HarnessCommand {
+        command_for(
+            Harness::Claude,
+            "do the thing",
+            &Session::Start {
+                session_id: "x".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            &Grants {
+                model: Some(ModelAccess {
+                    base_url: "http://127.0.0.1:9/t/the-token".to_owned(),
+                    token: "the-turns-proxy-token".to_owned(),
+                }),
+                egress: Some(egress_access()),
+                exec_broker: None,
+            },
+            &[],
+            None,
+        )
+    }
+
+    /// The value the child would see for `key`, which is the last one set.
+    fn applied(command: &HarnessCommand, key: &str) -> Option<String> {
+        command
+            .env
+            .iter()
+            .rfind(|variable| variable.key == key)
+            .map(|variable| variable.value.clone())
+    }
+
+    #[test]
+    fn an_ungated_thread_gets_no_proxy_variables_at_all() {
+        // The opt-in, asserted where it would break: a thread that declared no
+        // web policy reaches the network exactly as it did before the egress
+        // proxy existed, which means nothing here points it anywhere.
+        let command = command_with(None);
+
+        for variable in ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "NO_PROXY"] {
+            assert_eq!(applied(&command, variable), None, "{variable}");
+        }
+    }
+
+    #[test]
+    fn a_gated_thread_is_pointed_at_the_proxy_in_both_spellings() {
+        // The image's tools disagree about which case they read: curl takes the
+        // lowercase names and Go programs such as `gh` take either. Setting one
+        // and not the other is how a proxy quietly applies to half an image.
+        let command = gated_command();
+
+        for variable in ["HTTP_PROXY", "http_proxy", "HTTPS_PROXY", "https_proxy"] {
+            assert_eq!(
+                applied(&command, variable).as_deref(),
+                Some(egress_access().proxy_url.as_str()),
+                "{variable}"
+            );
+        }
+    }
+
+    #[test]
+    fn model_traffic_keeps_its_own_chokepoint() {
+        // The two proxies stay apart. A completion relayed through the egress
+        // proxy would pay a second hop and have its allowlist decision made by
+        // the component that holds no provider credential and counts no tokens.
+        let command = gated_command();
+        let exempt = applied(&command, "NO_PROXY").expect("a gated thread is given one");
+
+        assert!(exempt.contains("127.0.0.1"), "{exempt}");
+        assert!(exempt.contains("localhost"), "{exempt}");
+        assert!(exempt.contains("::1"), "{exempt}");
+
+        // Both spellings, for the same reason the proxy variables have both.
+        assert_eq!(applied(&command, "no_proxy"), Some(exempt));
+    }
+
+    #[test]
+    fn the_exemption_follows_the_llm_proxy_rather_than_assuming_where_it_binds() {
+        // Loopback today. Written as a rule about the model grant's own address
+        // so that a proxy which ever moved would take its exemption with it.
+        assert!(no_proxy_for(None).contains("127.0.0.1"));
+
+        let elsewhere = ModelAccess {
+            base_url: "http://model-proxy.internal:9000/t/the-token".to_owned(),
+            token: "the-turns-proxy-token".to_owned(),
+        };
+
+        assert!(no_proxy_for(Some(&elsewhere)).contains("model-proxy.internal"));
+    }
+
+    #[test]
+    fn a_url_yields_the_host_a_client_matches_no_proxy_against() {
+        assert_eq!(
+            host_of("http://127.0.0.1:9/t/x"),
+            Some("127.0.0.1".to_owned())
+        );
+        assert_eq!(
+            host_of("https://example.com/a/b"),
+            Some("example.com".to_owned())
+        );
+        assert_eq!(
+            host_of("http://user:pass@example.com:80/"),
+            Some("example.com".to_owned())
+        );
+        assert_eq!(host_of("http://[::1]:9000/t/x"), Some("::1".to_owned()));
+        assert_eq!(host_of("example.com"), Some("example.com".to_owned()));
+        assert_eq!(host_of(""), None);
+    }
+
+    #[test]
+    fn a_thread_cannot_declare_its_way_around_the_egress_proxy() {
+        // The last value set for a key is the one the child sees, so the
+        // satellite's proxy variables are applied after everything the thread
+        // declared. A declared HTTP_PROXY that won would be an allowlist a
+        // settings field opens, and a declared NO_PROXY of `*` would be the same
+        // hole wearing a different name.
+        let command = command_for(
+            Harness::Claude,
+            "do the thing",
+            &Session::Start {
+                session_id: "x".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            &Grants {
+                egress: Some(egress_access()),
+                ..Grants::default()
+            },
+            &[
+                declared("HTTP_PROXY", "http://elsewhere.invalid:3128", Some(false)),
+                declared("https_proxy", "http://elsewhere.invalid:3128", Some(false)),
+                declared("NO_PROXY", "*", Some(false)),
+            ],
+            None,
+        );
+
+        assert_eq!(
+            applied(&command, "HTTP_PROXY").as_deref(),
+            Some(egress_access().proxy_url.as_str())
+        );
+        assert_eq!(
+            applied(&command, "https_proxy").as_deref(),
+            Some(egress_access().proxy_url.as_str())
+        );
+        assert_ne!(applied(&command, "NO_PROXY").as_deref(), Some("*"));
+    }
+
+    #[test]
+    fn the_admission_is_never_rendered_where_a_command_is() {
+        // The turn's admission travels in the proxy URL as userinfo, so the URL
+        // is a credential and a derived `Debug` would put a live one into any
+        // log line that ever formatted a command.
+        let rendered = format!("{:?}", gated_command());
+
+        assert!(!rendered.contains("the-turns-egress-token"), "{rendered}");
+        // The exemption is an address list and reads plainly, which is what
+        // makes a turn that cannot reach its proxy debuggable at all.
+        assert!(rendered.contains("127.0.0.1"), "{rendered}");
+    }
 }
