@@ -29,7 +29,7 @@ use crate::proto::incident::v1::{
     Disposition, Incident, ListIncidentsRequest, ListIncidentsResponse,
 };
 use crate::proto::satellite::v1::{GetStatusResponse, GetVersionResponse};
-use crate::proto::settings::v1::ThreadSettings;
+use crate::proto::settings::v1::{ThreadSettings, TurnOverrides};
 use crate::proto::thread::v1::{
     CreateThreadRequest, CreateThreadResponse, DestroyThreadResponse, DrainThreadResponse,
     GetThreadResponse, ListThreadsRequest, ListThreadsResponse, PauseThreadResponse,
@@ -454,6 +454,24 @@ impl Threads {
     }
 }
 
+/// Everything a turn carries beyond its prompt.
+///
+/// Default queues a turn that deduplicates nothing, correlates nothing, and
+/// inherits every setting from its thread.
+#[derive(Debug, Clone, Default)]
+pub struct TurnOptions {
+    /// Deduplicates retries of the submission. A second call carrying a key the
+    /// thread has already seen returns the original turn.
+    pub idempotency_key: Option<String>,
+
+    /// Correlation data for this turn, distinct from the thread's.
+    pub metadata: BTreeMap<String, String>,
+
+    /// What this turn decides for itself. Absent fields inherit the thread's
+    /// `turn_defaults`.
+    pub overrides: Option<TurnOverrides>,
+}
+
 /// A handle to one thread.
 ///
 /// Holds an id and a connection. All the state lives on the satellite, which is
@@ -497,10 +515,14 @@ impl ThreadHandle {
     /// Returns an error when the queue is full, the thread is unknown, or the
     /// satellite is unreachable.
     pub async fn start_turn(&self, prompt: impl Into<String>) -> Result<TurnHandle> {
-        self.start_turn_with(prompt, None, BTreeMap::new()).await
+        self.start_turn_with(prompt, TurnOptions::default()).await
     }
 
-    /// Queues a turn with an idempotency key and correlation metadata.
+    /// Queues a turn, saying what else it carries.
+    ///
+    /// One options value rather than a parameter per field: three of them is
+    /// where a call site stops being readable, and the next one to be added
+    /// would not change this signature.
     ///
     /// # Errors
     ///
@@ -509,8 +531,7 @@ impl ThreadHandle {
     pub async fn start_turn_with(
         &self,
         prompt: impl Into<String>,
-        idempotency_key: Option<String>,
-        metadata: BTreeMap<String, String>,
+        options: TurnOptions,
     ) -> Result<TurnHandle> {
         let response: StartTurnResponse = self
             .satellite
@@ -520,8 +541,9 @@ impl ThreadHandle {
                 &StartTurnRequest {
                     thread_id: self.thread_id.clone(),
                     prompt: prompt.into(),
-                    idempotency_key,
-                    metadata: metadata.into_iter().collect(),
+                    idempotency_key: options.idempotency_key,
+                    metadata: options.metadata.into_iter().collect(),
+                    overrides: options.overrides,
                 },
             )
             .await?;

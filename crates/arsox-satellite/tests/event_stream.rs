@@ -437,6 +437,7 @@ mod runner_incidents {
                 prompt: "run the probe [[truncate=3]]".to_owned(),
                 metadata: BTreeMap::new(),
                 idempotency_key: None,
+                overrides: None,
                 satellite_initiated: false,
                 triggered_by_turn_id: None,
             })

@@ -187,6 +187,7 @@ async fn start_prepared(
             prompt: prompt.to_owned(),
             metadata: BTreeMap::new(),
             idempotency_key: None,
+            overrides: None,
             satellite_initiated: false,
             triggered_by_turn_id: None,
         })
@@ -570,6 +571,7 @@ async fn a_turn_interrupted_by_a_restart_is_marked_rather_than_left_running() {
             prompt: "work".to_owned(),
             metadata: BTreeMap::new(),
             idempotency_key: None,
+            overrides: None,
             satellite_initiated: false,
             triggered_by_turn_id: None,
         })
@@ -621,6 +623,7 @@ async fn only_one_turn_per_thread_is_ever_claimed() {
                 prompt: "work".to_owned(),
                 metadata: BTreeMap::new(),
                 idempotency_key: None,
+                overrides: None,
                 satellite_initiated: false,
                 triggered_by_turn_id: None,
             })
@@ -795,6 +798,7 @@ async fn queue_another(store: &Store, thread_id: &str, prompt: &str) -> String {
             prompt: prompt.to_owned(),
             metadata: BTreeMap::new(),
             idempotency_key: None,
+            overrides: None,
             satellite_initiated: false,
             triggered_by_turn_id: None,
         })

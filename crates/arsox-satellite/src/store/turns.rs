@@ -9,6 +9,7 @@
 
 use super::{Store, StoreError, from_nanos, to_nanos};
 use arsox_sdk::proto::common::v1::Timestamp;
+use arsox_sdk::proto::settings::v1::TurnOverrides;
 use arsox_sdk::proto::turn::v1::{Turn, TurnOrder, TurnResult, TurnStatus};
 use prost::Message as _;
 use sqlx::Row as _;
@@ -22,6 +23,10 @@ pub struct NewTurn {
     pub prompt: String,
     pub metadata: BTreeMap<String, String>,
     pub idempotency_key: Option<String>,
+
+    /// What this turn decides for itself, as submitted. Absent fields inherit
+    /// the thread's defaults when the turn is claimed.
+    pub overrides: Option<TurnOverrides>,
 
     /// True when the satellite started this turn itself rather than the SDK
     /// asking for it.
@@ -96,8 +101,8 @@ impl Store {
         sqlx::query(
             "INSERT INTO turns
                (turn_id, thread_id, status, prompt, satellite_initiated,
-                triggered_by_turn_id, queued_at, idempotency_key)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                triggered_by_turn_id, queued_at, idempotency_key, overrides)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&turn_id)
         .bind(&new.thread_id)
@@ -107,6 +112,9 @@ impl Store {
         .bind(new.triggered_by_turn_id.as_deref())
         .bind(now_nanos)
         .bind(new.idempotency_key.as_deref())
+        // Null for a turn that named nothing, which keeps "asked for the
+        // thread's defaults" distinct from "asked for an empty override".
+        .bind(new.overrides.as_ref().map(prost::Message::encode_to_vec))
         .execute(&mut *transaction)
         .await?;
 
@@ -134,6 +142,7 @@ impl Store {
                 started_at: None,
                 finished_at: None,
                 metadata: new.metadata.into_iter().collect(),
+                overrides: new.overrides,
             },
             queued: true,
         })
@@ -406,5 +415,10 @@ fn hydrate_turn(row: &sqlx::sqlite::SqliteRow, metadata: BTreeMap<String, String
         started_at: row.get::<Option<i64>, _>("started_at").map(from_nanos),
         finished_at: row.get::<Option<i64>, _>("finished_at").map(from_nanos),
         metadata: metadata.into_iter().collect(),
+        // A blob that will not decode was written by a different major version.
+        // The turn reports no override rather than refusing to be listed.
+        overrides: row
+            .get::<Option<Vec<u8>>, _>("overrides")
+            .and_then(|bytes| TurnOverrides::decode(bytes.as_slice()).ok()),
     }
 }

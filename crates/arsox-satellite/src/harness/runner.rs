@@ -44,7 +44,8 @@
 //! `HARNESS_CRASHED`, whichever it was.
 
 use crate::harness::spawn::{
-    EgressAccess, Grants, HarnessCommand, ModelAccess, Session, command_for, process_for,
+    EgressAccess, Grants, HarnessCommand, ModelAccess, Session, TurnChoice, command_for,
+    process_for,
 };
 use crate::harness::{HarnessResult, Mapping, accounting, checkers, claude, codex};
 use crate::proxy::budget::{Ceilings, Crossing, Meter};
@@ -59,6 +60,7 @@ use arsox_sdk::proto::event::v1::{
 };
 use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::incident::v1::{Disposition, Incident, IncidentCounts};
+use arsox_sdk::proto::settings::v1::Effort;
 use arsox_sdk::proto::turn::v1::{
     CheckerResult, Stage, StageDisposition, StageOutcome, TurnResult, TurnStatus,
 };
@@ -1399,6 +1401,7 @@ impl Runner {
             context.working_dir.clone(),
             &Grants {
                 model: Some(context.access.clone()),
+                choice: choice_for(claimed),
                 egress: context.egress.as_ref().map(|ticket| EgressAccess {
                     proxy_url: ticket.proxy_url(),
                 }),
@@ -2453,6 +2456,25 @@ fn checker_stage(
     }
 }
 
+/// What a turn runs as: its own overrides over the thread's defaults.
+///
+/// Resolved at the spawn rather than when the turn was queued, so a thread whose
+/// defaults changed between the two runs on the defaults it holds now. That is
+/// the same rule the posture follows, and for the same reason: a queued turn is
+/// an instruction, not a snapshot of the thread.
+fn choice_for(claimed: &ClaimedTurn) -> TurnChoice {
+    let defaults = claimed.settings.turn_defaults.clone().unwrap_or_default();
+    let declared = claimed.turn.overrides.clone().unwrap_or_default();
+
+    TurnChoice {
+        model: declared.model.or(defaults.model),
+        effort: declared
+            .effort
+            .or(defaults.effort)
+            .and_then(|effort| Effort::try_from(effort).ok()),
+    }
+}
+
 /// Folds what the harness and the checkers reported into the full turn result.
 ///
 /// A turn is bigger than a harness run: self-review, artifact scanning, and
@@ -2659,5 +2681,67 @@ impl Failure {
             metadata: claimed.turn.metadata.clone(),
             ..TurnResult::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arsox_sdk::proto::settings::v1::{ThreadSettings, TurnOverrides};
+    use arsox_sdk::proto::turn::v1::Turn;
+
+    fn claimed(thread: Option<TurnOverrides>, turn: Option<TurnOverrides>) -> ClaimedTurn {
+        let settings = ThreadSettings {
+            turn_defaults: thread,
+            ..ThreadSettings::default()
+        };
+
+        ClaimedTurn {
+            redactor: Redactor::for_thread(&settings),
+            settings,
+            turn: Turn {
+                overrides: turn,
+                ..Turn::default()
+            },
+        }
+    }
+
+    #[test]
+    fn a_turn_overrides_the_thread_field_by_field() {
+        // The turn names only an effort, so it keeps the thread's model. Taking
+        // the turn's overrides wholesale would silently drop a model the thread
+        // chose for every turn on it.
+        let choice = choice_for(&claimed(
+            Some(TurnOverrides {
+                model: Some("sonnet".to_owned()),
+                effort: Some(Effort::Low.into()),
+            }),
+            Some(TurnOverrides {
+                model: None,
+                effort: Some(Effort::Max.into()),
+            }),
+        ));
+
+        assert_eq!(choice.model.as_deref(), Some("sonnet"));
+        assert_eq!(choice.effort, Some(Effort::Max));
+    }
+
+    #[test]
+    fn a_thread_default_covers_a_turn_that_named_nothing() {
+        let choice = choice_for(&claimed(
+            Some(TurnOverrides {
+                model: Some("opus".to_owned()),
+                effort: None,
+            }),
+            None,
+        ));
+
+        assert_eq!(choice.model.as_deref(), Some("opus"));
+        assert_eq!(choice.effort, None, "neither named one");
+    }
+
+    #[test]
+    fn naming_nothing_anywhere_leaves_the_cli_its_own_default() {
+        assert_eq!(choice_for(&claimed(None, None)), TurnChoice::default());
     }
 }

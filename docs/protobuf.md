@@ -32,6 +32,7 @@ proto/
                    repo                GitAuth, AgentsRepo, Repo
                    service             Service, ReadinessProbe, ServiceIsolation
                    team                TeamMode
+                   overrides           TurnOverrides, Effort
                    stages              PlanMode, HumanInTheLoop, SelfReview, Suggestions
                    pull_request        PullRequestPolicy, WatchPullRequests
                    integration         GithubIntegration, JiraIntegration

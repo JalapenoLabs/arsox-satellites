@@ -33,6 +33,13 @@ pub struct Turn {
     /// same rules apply, and the satellite never reads either.
     #[prost(map="string, string", tag="10")]
     pub metadata: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    /// What this turn asked to change for itself, as it was submitted.
+    ///
+    /// What the caller declared rather than what it resolved to: a turn that
+    /// named no model inherits one, and reporting the inherited value here would
+    /// make a thread default indistinguishable from a choice the caller made.
+    #[prost(message, optional, tag="11")]
+    pub overrides: ::core::option::Option<super::super::settings::v1::TurnOverrides>,
 }
 /// One member of the team, for reporting.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -111,6 +118,11 @@ pub struct StartTurnRequest {
     /// A thread might carry the tenant, and each turn the request that queued it.
     #[prost(map="string, string", tag="4")]
     pub metadata: ::std::collections::HashMap<::prost::alloc::string::String, ::prost::alloc::string::String>,
+    /// What this turn decides for itself, overriding the thread's `turn_defaults`.
+    /// Absent fields inherit, so a turn that names only an effort keeps the
+    /// thread's model.
+    #[prost(message, optional, tag="5")]
+    pub overrides: ::core::option::Option<super::super::settings::v1::TurnOverrides>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StartTurnResponse {

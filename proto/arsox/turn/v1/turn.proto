@@ -14,6 +14,7 @@ syntax = "proto3";
 package arsox.turn.v1;
 
 import "arsox/common/v1/common.proto";
+import "arsox/settings/v1/overrides.proto";
 
 enum TurnStatus {
   TURN_STATUS_UNSPECIFIED = 0;
@@ -72,6 +73,13 @@ message Turn {
   // Your own correlation data. See ThreadSettings' thread-level `metadata`: the
   // same rules apply, and the satellite never reads either.
   map<string, string> metadata = 10;
+
+  // What this turn asked to change for itself, as it was submitted.
+  //
+  // What the caller declared rather than what it resolved to: a turn that
+  // named no model inherits one, and reporting the inherited value here would
+  // make a thread default indistinguishable from a choice the caller made.
+  optional arsox.settings.v1.TurnOverrides overrides = 11;
 }
 
 // One member of the team, for reporting.
@@ -139,6 +147,11 @@ message StartTurnRequest {
   // Correlation data for this turn specifically, distinct from the thread's.
   // A thread might carry the tenant, and each turn the request that queued it.
   map<string, string> metadata = 4;
+
+  // What this turn decides for itself, overriding the thread's `turn_defaults`.
+  // Absent fields inherit, so a turn that names only an effort keeps the
+  // thread's model.
+  optional arsox.settings.v1.TurnOverrides overrides = 5;
 }
 
 message StartTurnResponse {
