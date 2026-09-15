@@ -57,14 +57,14 @@ FROM ubuntu:24.04 AS runtime
 # a version the archive has dropped surfaces as a red build rather than drift.
 RUN apt-get update \
     && apt-get install --no-install-recommends --yes \
-        ca-certificates=20240203 \
+        ca-certificates=20260601~24.04.1 \
         git=1:2.43.0-1ubuntu7.3 \
         git-lfs=3.4.1-1ubuntu0.4 \
-        openssh-client=1:9.6p1-3ubuntu13.18 \
+        openssh-client=1:9.6p1-3ubuntu13.19 \
         build-essential=12.10ubuntu1 \
         pkg-config=1.8.1-2build1 \
-        curl=8.5.0-2ubuntu10.12 \
-        wget=1.21.4-1ubuntu4.4 \
+        curl=8.5.0-2ubuntu10.13 \
+        wget=1.21.4-1ubuntu4.5 \
         jq=1.7.1-3ubuntu0.24.04.2 \
         zip=3.0-13ubuntu0.2 \
         unzip=6.0-28ubuntu4.1 \
