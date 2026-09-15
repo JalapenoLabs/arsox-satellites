@@ -39,7 +39,7 @@ concurrency:
 jobs:
   node:
     name: Build, typecheck, and test the Node SDK
-    runs-on: [ self-hosted, rocky9, earthly, docker ]
+    runs-on: [ linux, rocky9, flagship, earthly, docker ]
 
     steps:
       - name: Checkout

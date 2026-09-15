@@ -7,11 +7,10 @@ GitHub Actions, on self-hosted runners.
 Every job targets the org's self-hosted pool:
 
 ```yaml
-runs-on: [ self-hosted, rocky9, earthly, docker ]
+runs-on: [ linux, rocky9, flagship, earthly, docker ]
 ```
 
-Labels are matched as a set, so a runner must carry all four to pick up a job. These are the labels the org's
-Rocky Linux runners carry, and the same set its other repositories target.
+Labels are matched as a set, so a runner must carry all five to pick up a job.
 
 **Self-hosted is why there is no caching anywhere in these workflows.** On
 GitHub-hosted runners a cold toolchain download is the dominant cost and

@@ -45,7 +45,7 @@ env:
 jobs:
   release:
     name: Publish the satellite image and the Node SDK
-    runs-on: [ self-hosted, rocky9, earthly, docker ]
+    runs-on: [ linux, rocky9, flagship, earthly, docker ]
 
     steps:
       # Before checkout on purpose: the tag decides which commit is built, so it
