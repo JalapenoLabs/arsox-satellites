@@ -25,8 +25,11 @@ export const file_arsox_settings_v1_overrides: GenFile = /*@__PURE__*/
  * same conversation, and a caller that had to open a second thread to change
  * model would lose the first one's context to say so.
  *
- * Absent fields inherit. A turn's overrides win over the thread's
- * `turn_defaults`, which win over the model the answering endpoint declares.
+ * Absent fields inherit: a turn's overrides win over the thread's
+ * `turn_defaults`, and what neither names is left to the harness CLI's own
+ * default. `ModelEndpoint.model` is not part of that chain. It names what an
+ * endpoint serves, and which endpoint answers is not known until one does, so a
+ * flag fixed at spawn cannot be read from a list the proxy may fail over.
  *
  * @generated from message arsox.settings.v1.TurnOverrides
  */
