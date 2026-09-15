@@ -39,7 +39,7 @@ concurrency:
 jobs:
   python:
     name: Lint, typecheck, and test the Python SDK
-    runs-on: [ linux, rocky9, flagship, earthly, docker ]
+    runs-on: [ self-hosted, rocky9, earthly, docker ]
 
     steps:
       - name: Checkout

@@ -38,7 +38,7 @@ env:
 jobs:
   rust:
     name: Format, lint, and test
-    runs-on: [ linux, rocky9, flagship, earthly, docker ]
+    runs-on: [ self-hosted, rocky9, earthly, docker ]
 
     steps:
       - name: Checkout
