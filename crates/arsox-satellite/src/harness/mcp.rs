@@ -287,212 +287,227 @@ struct ServerBinding<'a> {
     headers: Vec<HeaderBinding<'a>>,
 }
 
-/// The servers a turn actually launches with.
+/// The servers one launch carries, decided once and rendered for each consumer.
 ///
-/// Headers are ordered by name, because the contract carries them as a map and a
-/// map iterates in no particular order. The variable names are derived from
-/// position, so an unstable order would still be correct and would make two
-/// launches of the same thread differ for no reason anybody could read.
-///
-/// A server that fails [`server_refusal`], or repeats a name already bound, is
-/// skipped with a warning naming it. The API refuses both at creation, so this
-/// only fires for settings stored before it did.
-fn bindings(servers: &[McpServer]) -> Vec<ServerBinding<'_>> {
-    let mut seen = BTreeSet::new();
-    let mut bound = Vec::new();
+/// Built once per launch and read by every piece that needs the servers: the
+/// permission rules, the CLI arguments, the environment, and the egress
+/// allowlist. Rendering each from the raw settings instead would re-decide which
+/// servers survive the rule once per consumer, and repeat every warning with it.
+#[derive(Debug)]
+pub struct Launch<'a> {
+    servers: Vec<ServerBinding<'a>>,
+}
 
-    if servers.len() > MAX_SERVERS {
-        tracing::warn!(
-            event.name = "harness.mcp.truncated",
-            mcp.declared = servers.len(),
-            mcp.limit = MAX_SERVERS,
-            "only the first {{mcp.limit}} of {{mcp.declared}} MCP servers reach the agent",
-        );
-    }
+impl<'a> Launch<'a> {
+    /// Decides which of a thread's servers a launch carries.
+    ///
+    /// Headers are ordered by name, because the contract carries them as a map
+    /// and a map iterates in no particular order. The variable names are derived
+    /// from position, so an unstable order would still be correct and would make
+    /// two launches of the same thread differ for no reason anybody could read.
+    ///
+    /// A server that fails the creation rule, or repeats a name already bound,
+    /// is skipped with a warning naming it. The API refuses both at creation, so
+    /// this only fires for settings stored before it did.
+    #[must_use]
+    pub fn of(servers: &'a [McpServer]) -> Self {
+        let mut seen = BTreeSet::new();
+        let mut bound = Vec::new();
 
-    for server in servers.iter().take(MAX_SERVERS) {
-        let refused = server_refusal(server).or_else(|| {
-            (!seen.insert(server.name.to_ascii_lowercase()))
-                .then(|| "is declared more than once".to_owned())
-        });
-
-        if let Some(reason) = refused {
+        if servers.len() > MAX_SERVERS {
             tracing::warn!(
-                event.name = "harness.mcp.refused",
-                mcp.server = server.name,
-                mcp.refusal = reason,
-                "an MCP server was withheld from the agent: {{mcp.refusal}}",
+                event.name = "harness.mcp.truncated",
+                mcp.declared = servers.len(),
+                mcp.limit = MAX_SERVERS,
+                "only the first {{mcp.limit}} of {{mcp.declared}} MCP servers reach the agent",
             );
-            continue;
         }
 
-        let server_index = bound.len();
-        let ordered: BTreeMap<&str, &str> = server
-            .headers
-            .iter()
-            .map(|(header, value)| (header.as_str(), value_of(value)))
-            .collect();
+        for server in servers.iter().take(MAX_SERVERS) {
+            let refused = server_refusal(server).or_else(|| {
+                (!seen.insert(server.name.to_ascii_lowercase()))
+                    .then(|| "is declared more than once".to_owned())
+            });
 
-        let headers = ordered
-            .into_iter()
-            .enumerate()
-            .map(|(header_index, (header, value))| HeaderBinding {
-                header,
-                variable: format!("MCP_HEADER_SECRET_{server_index}_{header_index}"),
-                value,
-            })
-            .collect();
+            if let Some(reason) = refused {
+                tracing::warn!(
+                    event.name = "harness.mcp.refused",
+                    mcp.server = server.name,
+                    mcp.refusal = reason,
+                    "an MCP server was withheld from the agent: {{mcp.refusal}}",
+                );
+                continue;
+            }
 
-        bound.push(ServerBinding {
-            name: &server.name,
-            url: &server.url,
-            headers,
-        });
-    }
+            let server_index = bound.len();
+            let ordered: BTreeMap<&str, &str> = server
+                .headers
+                .iter()
+                .map(|(header, value)| (header.as_str(), value_of(value)))
+                .collect();
 
-    bound
-}
+            let headers = ordered
+                .into_iter()
+                .enumerate()
+                .map(|(header_index, (header, value))| HeaderBinding {
+                    header,
+                    variable: format!("MCP_HEADER_SECRET_{server_index}_{header_index}"),
+                    value,
+                })
+                .collect();
 
-/// The variables carrying every header value, for the satellite's own layer.
-///
-/// Every one is a secret, whatever the header is called: the contract gives
-/// header values the credential type, and a value that happens to be public
-/// costs a masked log line.
-#[must_use]
-pub fn environment(servers: &[McpServer]) -> Vec<AgentVar> {
-    bindings(servers)
-        .into_iter()
-        .flat_map(|server| server.headers)
-        .map(|binding| AgentVar {
-            key: binding.variable,
-            value: binding.value.to_owned(),
-            secret: true,
-        })
-        .collect()
-}
-
-/// The names of the servers a turn launches with.
-///
-/// For the Claude permission rules, which allow a declared server's tools by
-/// name under a posture that would otherwise refuse them.
-#[must_use]
-pub fn names(servers: &[McpServer]) -> Vec<String> {
-    bindings(servers)
-        .into_iter()
-        .map(|server| server.name.to_owned())
-        .collect()
-}
-
-/// The Claude CLI arguments that load a thread's servers, and only those.
-///
-/// Empty when the thread declared none, which leaves its launch exactly as it
-/// was. See the module docs for `--strict-mcp-config`.
-#[must_use]
-pub fn claude_args(servers: &[McpServer]) -> Vec<String> {
-    let bound = bindings(servers);
-    if bound.is_empty() {
-        return Vec::new();
-    }
-
-    let mut config = serde_json::Map::new();
-
-    for server in bound {
-        let headers: serde_json::Map<String, serde_json::Value> = server
-            .headers
-            .into_iter()
-            .map(|binding| {
-                (
-                    binding.header.to_owned(),
-                    serde_json::Value::String(format!("${{{}}}", binding.variable)),
-                )
-            })
-            .collect();
-
-        config.insert(
-            server.name.to_owned(),
-            serde_json::json!({
-                "type": "http",
-                "url": server.url,
-                "headers": headers,
-            }),
-        );
-    }
-
-    let document = serde_json::json!({ "mcpServers": config });
-
-    vec![
-        "--mcp-config".to_owned(),
-        document.to_string(),
-        "--strict-mcp-config".to_owned(),
-    ]
-}
-
-/// The Codex CLI overrides that declare a thread's servers.
-///
-/// Values are written as quoted TOML rather than bare, unlike the provider
-/// overrides in `spawn`. A URL happens to fail TOML parsing and fall back to a
-/// literal, but a value that only works because it failed to parse is one
-/// character away from parsing as something else. A JSON string is a valid TOML
-/// basic string for every character a validated URL and header name can hold.
-#[must_use]
-pub fn codex_args(servers: &[McpServer]) -> Vec<String> {
-    let mut args = Vec::new();
-
-    for server in bindings(servers) {
-        let prefix = format!("mcp_servers.{}", server.name);
-
-        args.push("-c".to_owned());
-        args.push(format!("{prefix}.url={}", toml_string(server.url)));
-
-        if server.headers.is_empty() {
-            continue;
+            bound.push(ServerBinding {
+                name: &server.name,
+                url: &server.url,
+                headers,
+            });
         }
 
-        let headers: Vec<String> = server
-            .headers
-            .iter()
-            .map(|binding| {
-                format!(
-                    "{}={}",
-                    toml_string(binding.header),
-                    toml_string(&binding.variable)
-                )
-            })
-            .collect();
-
-        args.push("-c".to_owned());
-        args.push(format!(
-            "{prefix}.env_http_headers={{{}}}",
-            headers.join(",")
-        ));
+        Self { servers: bound }
     }
 
-    args
+    /// The variables carrying every header value, for the satellite's own layer.
+    ///
+    /// Every one is a secret, whatever the header is called: the contract gives
+    /// header values the credential type, and a value that happens to be public
+    /// costs a masked log line.
+    #[must_use]
+    pub fn environment(&self) -> Vec<AgentVar> {
+        self.servers
+            .iter()
+            .flat_map(|server| &server.headers)
+            .map(|binding| AgentVar {
+                key: binding.variable.clone(),
+                value: binding.value.to_owned(),
+                secret: true,
+            })
+            .collect()
+    }
+
+    /// The names of the servers this launch carries.
+    ///
+    /// For the Claude permission rules, which allow a declared server's tools by
+    /// name under a posture that would otherwise refuse them.
+    #[must_use]
+    pub fn names(&self) -> Vec<String> {
+        self.servers
+            .iter()
+            .map(|server| server.name.to_owned())
+            .collect()
+    }
+
+    /// The Claude CLI arguments that load these servers, and only these.
+    ///
+    /// Empty when there are none, which leaves the launch without either flag.
+    /// See the module docs for `--strict-mcp-config`.
+    #[must_use]
+    pub fn claude_args(&self) -> Vec<String> {
+        if self.servers.is_empty() {
+            return Vec::new();
+        }
+
+        let mut config = serde_json::Map::new();
+
+        for server in &self.servers {
+            let headers: serde_json::Map<String, serde_json::Value> = server
+                .headers
+                .iter()
+                .map(|binding| {
+                    (
+                        binding.header.to_owned(),
+                        serde_json::Value::String(format!("${{{}}}", binding.variable)),
+                    )
+                })
+                .collect();
+
+            config.insert(
+                server.name.to_owned(),
+                serde_json::json!({
+                    "type": "http",
+                    "url": server.url,
+                    "headers": headers,
+                }),
+            );
+        }
+
+        let document = serde_json::json!({ "mcpServers": config });
+
+        vec![
+            "--mcp-config".to_owned(),
+            document.to_string(),
+            "--strict-mcp-config".to_owned(),
+        ]
+    }
+
+    /// The Codex CLI overrides that declare these servers.
+    ///
+    /// Values are written as quoted TOML rather than bare, unlike the provider
+    /// overrides in `spawn`. A URL happens to fail TOML parsing and fall back to
+    /// a literal, but a value that only works because it failed to parse is one
+    /// character away from parsing as something else. A JSON string is a valid
+    /// TOML basic string for every character a validated URL and header name can
+    /// hold.
+    #[must_use]
+    pub fn codex_args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+
+        for server in &self.servers {
+            let prefix = format!("mcp_servers.{}", server.name);
+
+            args.push("-c".to_owned());
+            args.push(format!("{prefix}.url={}", toml_string(server.url)));
+
+            if server.headers.is_empty() {
+                continue;
+            }
+
+            let headers: Vec<String> = server
+                .headers
+                .iter()
+                .map(|binding| {
+                    format!(
+                        "{}={}",
+                        toml_string(binding.header),
+                        toml_string(&binding.variable)
+                    )
+                })
+                .collect();
+
+            args.push("-c".to_owned());
+            args.push(format!(
+                "{prefix}.env_http_headers={{{}}}",
+                headers.join(",")
+            ));
+        }
+
+        args
+    }
+
+    /// The exact host of every server this launch carries.
+    ///
+    /// For the egress allowlist, which admits these hosts and nothing beneath
+    /// them.
+    #[must_use]
+    pub fn hosts(&self) -> Vec<String> {
+        self.servers
+            .iter()
+            .filter_map(|server| {
+                let parsed = reqwest::Url::parse(server.url).ok()?;
+                let host = parsed.host_str()?;
+
+                // A bracketed IPv6 literal keeps its brackets in `host_str`, and
+                // the proxy compares hostnames. Such a host cannot be allowed at
+                // all, which the egress policy states, so it is dropped here
+                // rather than compared as text that never matches.
+                (!host.starts_with('[')).then(|| host.to_owned())
+            })
+            .collect()
+    }
 }
 
 /// A string as a quoted TOML basic string.
 fn toml_string(text: &str) -> String {
     serde_json::Value::String(text.to_owned()).to_string()
-}
-
-/// The exact host of every server a turn launches with.
-///
-/// For the egress allowlist, which admits these hosts and nothing beneath them.
-#[must_use]
-pub fn hosts(servers: &[McpServer]) -> Vec<String> {
-    bindings(servers)
-        .into_iter()
-        .filter_map(|server| {
-            let parsed = reqwest::Url::parse(server.url).ok()?;
-            let host = parsed.host_str()?;
-
-            // A bracketed IPv6 literal keeps its brackets in `host_str`, and the
-            // proxy compares hostnames. Such a host cannot be allowed at all,
-            // which the egress policy states, so it is dropped here rather than
-            // compared as text that never matches.
-            (!host.starts_with('[')).then(|| host.to_owned())
-        })
-        .collect()
 }
 
 #[cfg(test)]
@@ -692,7 +707,7 @@ mod tests {
     fn claude_is_handed_references_rather_than_values() {
         // argv is readable by anything on the host that can run `ps`. The value
         // travels in the environment and the command line names the variable.
-        let args = claude_args(&[storage()]);
+        let args = Launch::of(&[storage()]).claude_args();
 
         assert_eq!(args[0], "--mcp-config");
         assert_eq!(args[2], "--strict-mcp-config");
@@ -717,14 +732,15 @@ mod tests {
 
     #[test]
     fn the_environment_carries_every_value_under_the_referenced_name() {
-        let env = environment(&[
+        let env = Launch::of(&[
             storage(),
             server(
                 "docs",
                 "https://docs.example.com/mcp",
                 &[("X-Key", "docs-key")],
             ),
-        ]);
+        ])
+        .environment();
 
         let pairs: Vec<(&str, &str)> = env
             .iter()
@@ -754,7 +770,8 @@ mod tests {
 
     #[test]
     fn codex_is_handed_the_same_references_as_config_overrides() {
-        let args = codex_args(&[storage(), server("plain", "http://127.0.0.1:9000/mcp", &[])]);
+        let args = Launch::of(&[storage(), server("plain", "http://127.0.0.1:9000/mcp", &[])])
+            .codex_args();
 
         assert_eq!(
             args,
@@ -773,9 +790,9 @@ mod tests {
 
     #[test]
     fn a_thread_with_no_servers_changes_nothing_about_its_launch() {
-        assert!(claude_args(&[]).is_empty());
-        assert!(codex_args(&[]).is_empty());
-        assert!(environment(&[]).is_empty());
+        assert!(Launch::of(&[]).claude_args().is_empty());
+        assert!(Launch::of(&[]).codex_args().is_empty());
+        assert!(Launch::of(&[]).environment().is_empty());
     }
 
     #[test]
@@ -793,12 +810,25 @@ mod tests {
             server("storage", "https://duplicate.example.com/mcp", &[]),
         ];
 
-        assert_eq!(names(&servers), ["storage"]);
-        assert!(!codex_args(&servers).concat().contains("bad.name"));
-        assert!(!codex_args(&servers).concat().contains("duplicate"));
+        assert_eq!(Launch::of(&servers).names(), ["storage"]);
+        assert!(
+            !Launch::of(&servers)
+                .codex_args()
+                .concat()
+                .contains("bad.name")
+        );
+        assert!(
+            !Launch::of(&servers)
+                .codex_args()
+                .concat()
+                .contains("duplicate")
+        );
 
         // Numbered after the skip, so the variables stay dense.
-        assert_eq!(environment(&servers)[0].key, "MCP_HEADER_SECRET_0_0");
+        assert_eq!(
+            Launch::of(&servers).environment()[0].key,
+            "MCP_HEADER_SECRET_0_0"
+        );
     }
 
     #[test]
@@ -811,7 +841,7 @@ mod tests {
         ];
 
         assert_eq!(
-            hosts(&servers),
+            Launch::of(&servers).hosts(),
             ["elysium.example.com", "127.0.0.1", "elysium-api"]
         );
     }

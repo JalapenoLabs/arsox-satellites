@@ -226,11 +226,12 @@ fn claude_command(
         }
     }
 
+    let servers = mcp::Launch::of(&settings.mcp_servers);
     args.extend(claude_permission_args(
         &posture_for(settings.permissions.as_ref()),
-        &mcp::names(&settings.mcp_servers),
+        &servers.names(),
     ));
-    args.extend(mcp::claude_args(&settings.mcp_servers));
+    args.extend(servers.claude_args());
 
     let proxy = grants.model.clone().map(|access| {
         vec![
@@ -253,7 +254,7 @@ fn claude_command(
         program: claude_binary(),
         args,
         working_dir,
-        env: environment_for(settings, proxy.unwrap_or_default(), grants),
+        env: environment_for(settings, &servers, proxy.unwrap_or_default(), grants),
     }
 }
 
@@ -306,10 +307,11 @@ fn codex_command(
 
     args.push("--json".to_owned());
     args.push("--skip-git-repo-check".to_owned());
+    let servers = mcp::Launch::of(&settings.mcp_servers);
     args.extend(codex_permission_args(&posture_for(
         settings.permissions.as_ref(),
     )));
-    args.extend(mcp::codex_args(&settings.mcp_servers));
+    args.extend(servers.codex_args());
 
     // Codex 0.147.0 does not read `OPENAI_BASE_URL`, so the address reaches it
     // as a declared provider rather than as an environment variable. The
@@ -349,7 +351,7 @@ fn codex_command(
         program: codex_binary(),
         args,
         working_dir,
-        env: environment_for(settings, proxy, grants),
+        env: environment_for(settings, &servers, proxy, grants),
     }
 }
 
@@ -404,13 +406,14 @@ fn proxy_v1(base_url: &str) -> String {
 /// server never issued.
 fn environment_for(
     settings: &ThreadSettings,
+    servers: &mcp::Launch<'_>,
     proxy: Vec<AgentVar>,
     grants: &Grants,
 ) -> Vec<AgentVar> {
     let mut env = agent_environment();
     env.extend(declared_environment(&settings.env));
     env.extend(proxy);
-    env.extend(mcp::environment(&settings.mcp_servers));
+    env.extend(servers.environment());
     env.extend(egress_environment(grants));
 
     if let Some(shims) = grants.exec_broker.as_deref() {
