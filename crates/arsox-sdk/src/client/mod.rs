@@ -68,11 +68,25 @@ const PROTOBUF: &str = "application/protobuf";
 /// has not necessarily subscribed and should not have to.
 const RESULT_POLL: Duration = Duration::from_millis(500);
 
-#[derive(Debug)]
 struct Inner {
     base: String,
     secret: String,
     http: reqwest::Client,
+}
+
+/// Written by hand so the bearer secret is never rendered.
+///
+/// Every handle the SDK hands out, [`Satellite`], [`Threads`], [`ThreadHandle`],
+/// [`TurnHandle`], and [`ThreadCreated`], reaches the secret through this, so
+/// a derived `Debug` on any of them prints what this one prints. The secret
+/// commands the whole satellite, and a handle formatted into a log line is the
+/// likeliest place for it to leak. Per M-PUBLIC-DEBUG.
+impl std::fmt::Debug for Inner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inner")
+            .field("base", &self.base)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A connection to one satellite.
@@ -252,10 +266,31 @@ impl Satellite {
 
         let (socket, _response) = tokio_tungstenite::connect_async(request)
             .await
-            .map_err(|error| Error::transport(error.to_string()))?;
+            .map_err(|error| refused_handshake(&error))?;
 
         Ok(socket)
     }
+}
+
+/// The error a failed WebSocket handshake carries.
+///
+/// A satellite refuses a socket before the upgrade with an ordinary contract
+/// error, such as `THREAD_NOT_FOUND` or `RELAY_NOT_DECLARED`, so the body is
+/// read for one. Reporting every refusal as a transport failure would mark a
+/// permanent refusal retryable and send a client reconnecting forever.
+fn refused_handshake(error: &tokio_tungstenite::tungstenite::Error) -> Error {
+    let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+        return Error::transport(error.to_string());
+    };
+
+    response
+        .body()
+        .as_deref()
+        .and_then(|body| ContractError::decode(body).ok())
+        .map_or_else(
+            || Error::transport(format!("the satellite answered {}", response.status())),
+            Error::contract,
+        )
 }
 
 /// Decodes a response, turning a contract error into an [`Error`].
@@ -1027,5 +1062,55 @@ impl TurnHandle {
         response
             .turn
             .ok_or_else(|| Error::transport("the satellite cancelled a turn without saying so"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_handle_renders_the_bearer_secret() {
+        // The secret commands the whole satellite, and a handle formatted into a
+        // log line is the likeliest way for it to leave the process.
+        const SECRET: &str = "the-satellite-bearer-secret";
+
+        let satellite = Satellite {
+            inner: Arc::new(Inner {
+                base: "http://satellite:8080".to_owned(),
+                secret: SECRET.to_owned(),
+                http: reqwest::Client::new(),
+            }),
+        };
+        let thread = ThreadHandle {
+            satellite: satellite.clone(),
+            thread_id: "019fd32f-a25f-7611-a4fe-c93cc2a6d782".to_owned(),
+        };
+        let turn = TurnHandle {
+            satellite: satellite.clone(),
+            thread_id: thread.thread_id.clone(),
+            turn_id: "the-turn".to_owned(),
+            turn: Turn::default(),
+        };
+
+        let rendered = [
+            format!("{satellite:?}"),
+            format!("{:?}", satellite.threads()),
+            format!("{thread:?}"),
+            format!("{turn:?}"),
+            format!(
+                "{:?}",
+                ThreadCreated {
+                    thread: Thread::default(),
+                    deduplicated: false,
+                    handle: thread.clone(),
+                }
+            ),
+        ];
+
+        for rendering in rendered {
+            assert!(!rendering.contains(SECRET), "{rendering}");
+            assert!(rendering.contains("satellite:8080"), "{rendering}");
+        }
     }
 }

@@ -210,7 +210,7 @@ async fn drive_control_stream(mut socket: WebSocket, satellite: Arc<Satellite>) 
 }
 
 /// Whether the handshake asked for JSON frames.
-fn json_frames_requested(headers: &HeaderMap) -> bool {
+pub(crate) fn json_frames_requested(headers: &HeaderMap) -> bool {
     headers
         .get(header::SEC_WEBSOCKET_PROTOCOL)
         .and_then(|value| value.to_str().ok())
@@ -241,7 +241,13 @@ async fn close(mut socket: WebSocket, code: u16, reason: ErrorCode) {
     let reason = match reason {
         // A clean shutdown has no contract code to report.
         ErrorCode::Unspecified => String::new(),
-        named => format!("{named:?}").to_uppercase(),
+        // The contract's own name, `STREAM_CONSUMER_LAGGED`, rather than a
+        // rendering of the Rust variant, which loses the underscores and names
+        // a code no client can look up.
+        named => named
+            .as_str_name()
+            .trim_start_matches("ERROR_CODE_")
+            .to_owned(),
     };
 
     drop(

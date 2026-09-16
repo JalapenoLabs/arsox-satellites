@@ -198,14 +198,17 @@ async fn create_thread(
     }
 
     // A server's name reaches a CLI's config keys and its tool names, and its
-    // URL and headers reach the harness's launch. Refused here, naming the
-    // server, rather than skipped at launch where nobody who could fix it is
-    // listening. The reason never carries a header value.
-    if let Err(reason) = crate::harness::mcp::refusal(&settings.mcp_servers) {
+    // URL and headers reach the harness's launch. A relayed server's tools are
+    // shown to the model on every request. Refused here, naming the field and
+    // the server, rather than skipped at launch where nobody who could fix it
+    // is listening. The reason never carries a header value.
+    if let Err(reason) =
+        crate::harness::mcp::refusal(&settings.mcp_servers, &settings.relayed_mcp_servers)
+    {
         return contract_error(
             StatusCode::BAD_REQUEST,
             ErrorCode::RequestFieldInvalid,
-            &format!("settings.mcp_servers: {reason}"),
+            &reason,
         );
     }
 

@@ -148,6 +148,10 @@ pub enum ErrorCode {
     /// Another client attached to the same thread's relay. Carried in the close
     /// reason of the socket it replaced.
     RelayClientReplaced = 1400,
+    /// The thread declared no `relayed_mcp_servers`, so its relay has nothing to
+    /// carry. Refused before the upgrade, and permanent: a thread's settings do not
+    /// change, so reconnecting cannot succeed.
+    RelayNotDeclared = 1401,
 }
 impl ErrorCode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -221,6 +225,7 @@ impl ErrorCode {
             Self::WorkspaceFileTooLarge => "ERROR_CODE_WORKSPACE_FILE_TOO_LARGE",
             Self::WorkspaceFileLengthRequired => "ERROR_CODE_WORKSPACE_FILE_LENGTH_REQUIRED",
             Self::RelayClientReplaced => "ERROR_CODE_RELAY_CLIENT_REPLACED",
+            Self::RelayNotDeclared => "ERROR_CODE_RELAY_NOT_DECLARED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -291,6 +296,7 @@ impl ErrorCode {
             "ERROR_CODE_WORKSPACE_FILE_TOO_LARGE" => Some(Self::WorkspaceFileTooLarge),
             "ERROR_CODE_WORKSPACE_FILE_LENGTH_REQUIRED" => Some(Self::WorkspaceFileLengthRequired),
             "ERROR_CODE_RELAY_CLIENT_REPLACED" => Some(Self::RelayClientReplaced),
+            "ERROR_CODE_RELAY_NOT_DECLARED" => Some(Self::RelayNotDeclared),
             _ => None,
         }
     }

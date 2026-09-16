@@ -143,6 +143,11 @@ enum ErrorCode {
   // Another client attached to the same thread's relay. Carried in the close
   // reason of the socket it replaced.
   ERROR_CODE_RELAY_CLIENT_REPLACED = 1400;
+
+  // The thread declared no `relayed_mcp_servers`, so its relay has nothing to
+  // carry. Refused before the upgrade, and permanent: a thread's settings do not
+  // change, so reconnecting cannot succeed.
+  ERROR_CODE_RELAY_NOT_DECLARED = 1401;
 }
 
 // The single error shape, on every transport.

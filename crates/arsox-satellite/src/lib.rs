@@ -25,6 +25,7 @@ pub mod harness;
 pub mod privilege;
 pub mod proxy;
 pub mod redaction;
+pub mod relay;
 pub mod store;
 pub mod stream;
 pub mod timeouts;
@@ -190,6 +191,13 @@ pub(crate) struct Satellite {
 
     /// What this satellite's harnesses support, resolved once at boot.
     harness: GetHarnessResponse,
+
+    /// Which host application is attached to which thread's tool relay, shared
+    /// with the LLM proxy that serves those tools to the agents.
+    pub(crate) relay: relay::Hub,
+
+    /// Where thread workspaces live, for the routes that move files in and out.
+    pub(crate) workspace_root: std::path::PathBuf,
 }
 
 impl Satellite {
@@ -409,6 +417,8 @@ fn router(satellite: Arc<Satellite>) -> Router {
         .route("/v1/harness", get(harness_capabilities))
         .merge(api::routes())
         .merge(stream::sockets::routes())
+        .merge(relay::socket::routes())
+        .merge(workspace::files::routes())
         .route_layer(from_fn_with_state(Arc::clone(&satellite), require_auth));
 
     Router::new()
@@ -589,28 +599,7 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
         "database open and migrated",
     );
 
-    // A turn that was in flight when the satellite stopped is not lost work:
-    // the thread and its workspace survive, and the turn is marked interrupted
-    // so a policy or a human can decide whether to resume it. Leaving it
-    // RUNNING would block its thread forever behind a turn nothing is driving.
-    match store.settle_interrupted_turns().await {
-        Ok(settled) if !settled.resumed.is_empty() || !settled.left_interrupted.is_empty() => {
-            tracing::warn!(
-                event.name = "satellite.boot.interrupted_turns",
-                turn.resumed = settled.resumed.len(),
-                turn.left_interrupted = settled.left_interrupted.len(),
-                "a restart interrupted turns: {{turn.resumed}} requeued, \
-                 {{turn.left_interrupted}} awaiting a decision",
-            );
-        }
-        Ok(_none) => {}
-        Err(error) => {
-            tracing::error!(
-                event.name = "satellite.boot.interrupt_sweep_failed",
-                "could not sweep interrupted turns: {error}",
-            );
-        }
-    }
+    settle_interrupted_turns(&store).await;
 
     let work_queued = Arc::new(tokio::sync::Notify::new());
 
@@ -627,7 +616,10 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
     // turn's agents may reach. Model traffic is exempt from the second, by way of
     // the `NO_PROXY` every agent is handed, so a completion pays for one hop and
     // has its allowlist decision made once. See `docs/enforcement.md`.
-    let model = proxy::LlmProxy::start()
+    // Host applications attach through the API; the proxy sends agents' calls.
+    let relay = relay::Hub::new();
+
+    let model = proxy::LlmProxy::start(relay.clone())
         .await
         .context("failed to start the llm proxy")?;
 
@@ -686,9 +678,38 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
                 std::path::PathBuf::from(&options.database_path),
             ),
             harness,
+            relay,
+            workspace_root: std::path::PathBuf::from(&options.workspace_root),
         })),
         store,
     })
+}
+
+/// Settles the turns a restart left running, and says how many there were.
+///
+/// A turn that was in flight when the satellite stopped is not lost work: the
+/// thread and its workspace survive, and the turn is marked interrupted so a
+/// policy or a human can decide whether to resume it. Leaving it RUNNING would
+/// block its thread forever behind a turn nothing is driving.
+async fn settle_interrupted_turns(store: &store::Store) {
+    match store.settle_interrupted_turns().await {
+        Ok(settled) if !settled.resumed.is_empty() || !settled.left_interrupted.is_empty() => {
+            tracing::warn!(
+                event.name = "satellite.boot.interrupted_turns",
+                turn.resumed = settled.resumed.len(),
+                turn.left_interrupted = settled.left_interrupted.len(),
+                "a restart interrupted turns: {{turn.resumed}} requeued, \
+                 {{turn.left_interrupted}} awaiting a decision",
+            );
+        }
+        Ok(_none) => {}
+        Err(error) => {
+            tracing::error!(
+                event.name = "satellite.boot.interrupt_sweep_failed",
+                "could not sweep interrupted turns: {error}",
+            );
+        }
+    }
 }
 
 /// Boots the satellite and serves until interrupted.

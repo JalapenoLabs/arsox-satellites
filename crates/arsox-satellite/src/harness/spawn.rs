@@ -226,7 +226,11 @@ fn claude_command(
         }
     }
 
-    let servers = mcp::Launch::of(&settings.mcp_servers);
+    let servers = mcp::Launch::of(
+        &settings.mcp_servers,
+        &settings.relayed_mcp_servers,
+        grants.model.as_ref().map(|access| access.base_url.as_str()),
+    );
     args.extend(claude_permission_args(
         &posture_for(settings.permissions.as_ref()),
         &servers.names(),
@@ -307,7 +311,11 @@ fn codex_command(
 
     args.push("--json".to_owned());
     args.push("--skip-git-repo-check".to_owned());
-    let servers = mcp::Launch::of(&settings.mcp_servers);
+    let servers = mcp::Launch::of(
+        &settings.mcp_servers,
+        &settings.relayed_mcp_servers,
+        grants.model.as_ref().map(|access| access.base_url.as_str()),
+    );
     args.extend(codex_permission_args(&posture_for(
         settings.permissions.as_ref(),
     )));

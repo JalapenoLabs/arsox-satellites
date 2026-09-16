@@ -59,8 +59,9 @@
 //! so the second gate is load-bearing rather than tidy.
 
 use crate::harness::spawn::AgentVar;
-use arsox_sdk::proto::settings::v1::McpServer;
+use arsox_sdk::proto::settings::v1::{McpServer, RelayedMcpServer, RelayedTool};
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 /// Most servers one thread may declare.
 ///
@@ -100,38 +101,92 @@ pub const MAX_HEADER_VALUE: usize = 4096;
 /// server that shadows one.
 const RESERVED_PREFIX: &str = "arsox";
 
+/// Most tools one relayed server may offer.
+///
+/// None of them reaches a command line, since the harness lists them over HTTP,
+/// so this bounds the settings a thread carries rather than an argument. Every
+/// tool's description and schema is shown to the model on every request, and a
+/// server past this many is spending an agent's context on a catalogue.
+pub const MAX_RELAYED_TOOLS: usize = 64;
+
+/// Longest tool name, the same rule a server name follows.
+///
+/// A tool reaches the model as `mcp__<server>__<tool>`, and both CLIs cap a
+/// whole tool name, so the two halves are bounded alike.
+pub const MAX_TOOL_NAME: usize = 64;
+
+/// Longest tool description, in bytes.
+pub const MAX_TOOL_DESCRIPTION: usize = 4096;
+
+/// Longest input schema, in bytes of JSON.
+///
+/// Room for a detailed schema with nested objects and enumerations, and bounded
+/// because it is sent to the model on every request of every turn.
+pub const MAX_INPUT_SCHEMA: usize = 64 * 1024;
+
+/// Longest relayed server instructions, in bytes.
+pub const MAX_INSTRUCTIONS: usize = 8192;
+
+/// How long Codex waits on one relayed tool call before giving up itself.
+///
+/// Codex 0.147.0 abandons an MCP call after 60 seconds unless told otherwise,
+/// which would cut a file transfer off long before the relay's own deadline. A
+/// minute past that deadline, so the satellite's answer, which says what
+/// happened, is what the agent reads rather than the CLI's generic timeout.
+/// Claude waits far longer than the deadline by default and needs no setting.
+const CODEX_RELAYED_TOOL_TIMEOUT: Duration =
+    Duration::from_secs(crate::relay::CALL_DEADLINE.as_secs() + 60);
+
 /// Why a thread's servers may not be used, when they may not.
 ///
-/// The reason completes the sentence "`settings.mcp_servers`: ...", names the
-/// server it is about, and never carries a header value: half of these are
-/// credentials by definition, and an error body is a log line somewhere.
+/// The reason names the settings field it is about, `settings.mcp_servers` or
+/// `settings.relayed_mcp_servers`, and the server, and never carries a header
+/// value: half of those are credentials by definition, and an error body is a
+/// log line somewhere.
+///
+/// The two lists share one namespace, because both reach the agent as
+/// `mcp__<name>` and a CLI holds one server per name.
 ///
 /// # Errors
 ///
 /// Returns the first reason found, which is enough for a caller to fix and
 /// resubmit.
-pub fn refusal(servers: &[McpServer]) -> Result<(), String> {
-    if servers.len() > MAX_SERVERS {
-        return Err(format!(
-            "declares {} servers, and a thread may declare at most {MAX_SERVERS}",
-            servers.len()
-        ));
+pub fn refusal(servers: &[McpServer], relayed: &[RelayedMcpServer]) -> Result<(), String> {
+    const DECLARED: &str = "settings.mcp_servers";
+    const RELAYED: &str = "settings.relayed_mcp_servers";
+
+    for (field, count) in [(DECLARED, servers.len()), (RELAYED, relayed.len())] {
+        if count > MAX_SERVERS {
+            return Err(format!(
+                "{field}: declares {count} servers, and a thread may declare at most \
+                 {MAX_SERVERS}"
+            ));
+        }
     }
 
     let mut seen = BTreeSet::new();
 
-    for server in servers {
-        if let Some(reason) = server_refusal(server) {
-            return Err(reason);
+    let named = servers
+        .iter()
+        .map(|server| (DECLARED, &server.name, server_refusal(server)))
+        .chain(
+            relayed
+                .iter()
+                .map(|server| (RELAYED, &server.name, relayed_refusal(server))),
+        );
+
+    for (field, name, refused) in named {
+        if let Some(reason) = refused {
+            return Err(format!("{field}: {reason}"));
         }
 
         // Case-insensitively, because a model reading `mcp__Search__query` and
         // `mcp__search__query` beside each other has no way to tell which one
         // it meant.
-        if !seen.insert(server.name.to_ascii_lowercase()) {
+        if !seen.insert(name.to_ascii_lowercase()) {
             return Err(format!(
-                "server {:?} is declared more than once",
-                server.name
+                "{field}: server {name:?} is declared more than once across \
+                 {DECLARED} and {RELAYED}"
             ));
         }
     }
@@ -139,10 +194,11 @@ pub fn refusal(servers: &[McpServer]) -> Result<(), String> {
     Ok(())
 }
 
-/// Why one server may not be used, when it may not.
-fn server_refusal(server: &McpServer) -> Option<String> {
-    let name = &server.name;
-
+/// Why a server name may not be used, when it may not.
+///
+/// One rule for both kinds of server, because both names travel the same
+/// places: a Codex config key, a Claude JSON key, and every tool name.
+fn name_refusal(name: &str) -> Option<String> {
     if name.is_empty() || name.len() > MAX_NAME {
         return Some(format!(
             "server {name:?} needs a name of 1 to {MAX_NAME} characters"
@@ -153,10 +209,7 @@ fn server_refusal(server: &McpServer) -> Option<String> {
     // path and a dot would nest it. No quote or space, because it is a JSON key
     // and part of a tool name. This is the character set both CLIs accept in a
     // tool name, so it is the one that works everywhere a name travels.
-    let identifier = name
-        .chars()
-        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'));
-    if !identifier {
+    if !is_identifier(name) {
         return Some(format!(
             "server {name:?} may use only ASCII letters, digits, '_', and '-' in its name"
         ));
@@ -167,6 +220,105 @@ fn server_refusal(server: &McpServer) -> Option<String> {
             "server {name:?} starts with {RESERVED_PREFIX:?}, which is reserved for the tools \
              Arsox offers the agents itself"
         ));
+    }
+
+    None
+}
+
+/// Whether a name uses only the characters both CLIs accept in a tool name.
+fn is_identifier(name: &str) -> bool {
+    name.chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+}
+
+/// Why one relayed server may not be served, when it may not.
+fn relayed_refusal(server: &RelayedMcpServer) -> Option<String> {
+    let name = &server.name;
+
+    if let Some(reason) = name_refusal(name) {
+        return Some(reason);
+    }
+
+    if server.instructions.len() > MAX_INSTRUCTIONS {
+        return Some(format!(
+            "server {name:?} has instructions longer than {MAX_INSTRUCTIONS} bytes"
+        ));
+    }
+
+    if server.tools.len() > MAX_RELAYED_TOOLS {
+        return Some(format!(
+            "server {name:?} offers {} tools, and a server may offer at most {MAX_RELAYED_TOOLS}",
+            server.tools.len()
+        ));
+    }
+
+    let mut tool_names = BTreeSet::new();
+
+    for tool in &server.tools {
+        if let Some(reason) = tool_refusal(tool) {
+            return Some(format!("server {name:?} tool {:?} {reason}", tool.name));
+        }
+
+        // Exactly, not ignoring case: a tool name is matched exactly by both
+        // CLIs and by the call that names it, and unlike a server it is never
+        // a config key that would fold.
+        if !tool_names.insert(tool.name.as_str()) {
+            return Some(format!(
+                "server {name:?} tool {:?} is declared more than once",
+                tool.name
+            ));
+        }
+    }
+
+    None
+}
+
+/// Why one relayed tool may not be offered, completing "tool `t` ...".
+fn tool_refusal(tool: &RelayedTool) -> Option<String> {
+    if tool.name.is_empty() || tool.name.len() > MAX_TOOL_NAME || !is_identifier(&tool.name) {
+        return Some(format!(
+            "needs a name of 1 to {MAX_TOOL_NAME} ASCII letters, digits, '_', and '-'"
+        ));
+    }
+
+    if tool.description.len() > MAX_TOOL_DESCRIPTION {
+        return Some(format!(
+            "has a description longer than {MAX_TOOL_DESCRIPTION} bytes"
+        ));
+    }
+
+    if tool.input_schema_json.len() > MAX_INPUT_SCHEMA {
+        return Some(format!(
+            "has an input schema longer than {MAX_INPUT_SCHEMA} bytes"
+        ));
+    }
+
+    // An object whose `type` is `object`, because that is the one shape MCP
+    // allows a tool's input schema to take, and a CLI handed anything else
+    // refuses the whole server rather than the one tool.
+    let schema = serde_json::from_str::<serde_json::Value>(&tool.input_schema_json).ok();
+    let is_object_schema = schema
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .is_some_and(|object| {
+            object.get("type").and_then(serde_json::Value::as_str) == Some("object")
+        });
+
+    if !is_object_schema {
+        return Some(
+            "needs an input schema that is a JSON object with \"type\": \"object\"".to_owned(),
+        );
+    }
+
+    None
+}
+
+/// Why one server may not be used, when it may not.
+fn server_refusal(server: &McpServer) -> Option<String> {
+    let name = &server.name;
+
+    if let Some(reason) = name_refusal(name) {
+        return Some(reason);
     }
 
     if let Some(reason) = url_refusal(&server.url) {
@@ -283,8 +435,12 @@ struct HeaderBinding<'a> {
 #[derive(Debug)]
 struct ServerBinding<'a> {
     name: &'a str,
-    url: &'a str,
+    url: String,
     headers: Vec<HeaderBinding<'a>>,
+
+    /// Served by the satellite for the host application to answer, rather
+    /// than reached by the harness directly.
+    relayed: bool,
 }
 
 /// The servers one launch carries, decided once and rendered for each consumer.
@@ -309,33 +465,56 @@ impl<'a> Launch<'a> {
     /// A server that fails the creation rule, or repeats a name already bound,
     /// is skipped with a warning naming it. The API refuses both at creation, so
     /// this only fires for settings stored before it did.
+    ///
+    /// `relayed` servers are served on the turn's own grant, at
+    /// `{grant}/mcp/{name}`, so they reach the launch only when `grant`, the
+    /// model grant's base URL, is present. Declared servers come first, so a
+    /// name both lists claim goes to the declared one.
     #[must_use]
-    pub fn of(servers: &'a [McpServer]) -> Self {
+    pub fn of(
+        servers: &'a [McpServer],
+        relayed: &'a [RelayedMcpServer],
+        grant: Option<&str>,
+    ) -> Self {
         let mut seen = BTreeSet::new();
         let mut bound = Vec::new();
 
-        if servers.len() > MAX_SERVERS {
-            tracing::warn!(
-                event.name = "harness.mcp.truncated",
-                mcp.declared = servers.len(),
-                mcp.limit = MAX_SERVERS,
-                "only the first {{mcp.limit}} of {{mcp.declared}} MCP servers reach the agent",
-            );
+        for (list, declared) in [
+            ("mcp_servers", servers.len()),
+            ("relayed_mcp_servers", relayed.len()),
+        ] {
+            if declared > MAX_SERVERS {
+                tracing::warn!(
+                    event.name = "harness.mcp.truncated",
+                    mcp.list = list,
+                    mcp.declared = declared,
+                    mcp.limit = MAX_SERVERS,
+                    "only the first {{mcp.limit}} of {{mcp.declared}} {{mcp.list}} reach the agent",
+                );
+            }
         }
 
-        for server in servers.iter().take(MAX_SERVERS) {
-            let refused = server_refusal(server).or_else(|| {
-                (!seen.insert(server.name.to_ascii_lowercase()))
+        let mut admit = |name: &str, refused: Option<String>| {
+            let refused = refused.or_else(|| {
+                (!seen.insert(name.to_ascii_lowercase()))
                     .then(|| "is declared more than once".to_owned())
             });
 
-            if let Some(reason) = refused {
-                tracing::warn!(
-                    event.name = "harness.mcp.refused",
-                    mcp.server = server.name,
-                    mcp.refusal = reason,
-                    "an MCP server was withheld from the agent: {{mcp.refusal}}",
-                );
+            let Some(reason) = refused else {
+                return true;
+            };
+
+            tracing::warn!(
+                event.name = "harness.mcp.refused",
+                mcp.server = name,
+                mcp.refusal = reason,
+                "an MCP server was withheld from the agent: {{mcp.refusal}}",
+            );
+            false
+        };
+
+        for server in servers.iter().take(MAX_SERVERS) {
+            if !admit(&server.name, server_refusal(server)) {
                 continue;
             }
 
@@ -358,8 +537,38 @@ impl<'a> Launch<'a> {
 
             bound.push(ServerBinding {
                 name: &server.name,
-                url: &server.url,
+                url: server.url.clone(),
                 headers,
+                relayed: false,
+            });
+        }
+
+        let Some(grant) = grant else {
+            // Only a launch with no model grant at all, which no turn the
+            // runner drives is. Said rather than skipped silently, because the
+            // agent will not find tools its thread declared.
+            if !relayed.is_empty() {
+                tracing::warn!(
+                    event.name = "harness.mcp.relayed_ungranted",
+                    mcp.relayed = relayed.len(),
+                    "a launch with no model grant cannot serve its {{mcp.relayed}} relayed MCP \
+                     servers",
+                );
+            }
+
+            return Self { servers: bound };
+        };
+
+        for server in relayed.iter().take(MAX_SERVERS) {
+            if !admit(&server.name, relayed_refusal(server)) {
+                continue;
+            }
+
+            bound.push(ServerBinding {
+                name: &server.name,
+                url: format!("{}/mcp/{}", grant.trim_end_matches('/'), server.name),
+                headers: Vec::new(),
+                relayed: true,
             });
         }
 
@@ -455,7 +664,15 @@ impl<'a> Launch<'a> {
             let prefix = format!("mcp_servers.{}", server.name);
 
             args.push("-c".to_owned());
-            args.push(format!("{prefix}.url={}", toml_string(server.url)));
+            args.push(format!("{prefix}.url={}", toml_string(&server.url)));
+
+            if server.relayed {
+                args.push("-c".to_owned());
+                args.push(format!(
+                    "{prefix}.tool_timeout_sec={}",
+                    CODEX_RELAYED_TOOL_TIMEOUT.as_secs()
+                ));
+            }
 
             if server.headers.is_empty() {
                 continue;
@@ -486,13 +703,16 @@ impl<'a> Launch<'a> {
     /// The exact host of every server this launch carries.
     ///
     /// For the egress allowlist, which admits these hosts and nothing beneath
-    /// them.
+    /// them. Relayed servers are left out: they are served on the satellite's
+    /// loopback proxy, which an agent reaches directly rather than through the
+    /// egress proxy, exactly as it reaches its model.
     #[must_use]
     pub fn hosts(&self) -> Vec<String> {
         self.servers
             .iter()
+            .filter(|server| !server.relayed)
             .filter_map(|server| {
-                let parsed = reqwest::Url::parse(server.url).ok()?;
+                let parsed = reqwest::Url::parse(&server.url).ok()?;
                 let host = parsed.host_str()?;
 
                 // A bracketed IPv6 literal keeps its brackets in `host_str`, and
@@ -548,6 +768,191 @@ mod tests {
         )
     }
 
+    /// The refusal for declared servers alone, which most tests here are about.
+    fn declared_refusal(servers: &[McpServer]) -> Result<(), String> {
+        refusal(servers, &[])
+    }
+
+    /// A relayed server offering the named tools, each with a valid schema.
+    fn relayed(name: &str, tools: &[&str]) -> RelayedMcpServer {
+        RelayedMcpServer {
+            name: name.to_owned(),
+            instructions: String::new(),
+            tools: tools
+                .iter()
+                .map(|tool| RelayedTool {
+                    name: (*tool).to_owned(),
+                    description: "Does a thing.".to_owned(),
+                    input_schema_json: r#"{"type":"object"}"#.to_owned(),
+                })
+                .collect(),
+        }
+    }
+
+    /// The model grant's base URL, as the runner mints one.
+    const GRANT: &str = "http://127.0.0.1:41000/t/the-turn-token";
+
+    #[test]
+    fn an_ordinary_relayed_server_is_accepted_beside_declared_ones() {
+        assert_eq!(
+            refusal(&[storage()], &[relayed("elysium", &["upload", "download"])]),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_name_is_unique_across_both_lists_whatever_its_case() {
+        let error = refusal(&[storage()], &[relayed("Storage", &["upload"])])
+            .expect_err("should be refused");
+
+        assert!(
+            error.starts_with("settings.relayed_mcp_servers:"),
+            "{error}"
+        );
+        assert!(error.contains("more than once"), "{error}");
+    }
+
+    #[test]
+    fn a_relayed_server_name_follows_the_declared_rule() {
+        for name in ["", "has.dot", "arsox-tools"] {
+            let error = refusal(&[], &[relayed(name, &["upload"])]).expect_err("should be refused");
+            assert!(
+                error.starts_with("settings.relayed_mcp_servers:"),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_tool_needs_a_unique_identifier_name() {
+        for tools in [&["has space"][..], &[""], &["upload", "upload"]] {
+            let error = refusal(&[], &[relayed("elysium", tools)]).expect_err("should be refused");
+            assert!(error.contains("tool"), "{error}");
+        }
+
+        let long = "t".repeat(MAX_TOOL_NAME + 1);
+        refusal(&[], &[relayed("elysium", &[&long])]).expect_err("a long name should be refused");
+    }
+
+    #[test]
+    fn a_tool_schema_must_be_an_object_schema_within_its_bound() {
+        for schema in [
+            "",
+            "not json",
+            "[]",
+            r#""object""#,
+            r#"{"properties":{}}"#,
+            r#"{"type":"string"}"#,
+        ] {
+            let mut server = relayed("elysium", &["upload"]);
+            server.tools[0].input_schema_json = schema.to_owned();
+
+            let error = refusal(&[], &[server]).expect_err("should be refused");
+            assert!(error.contains("schema"), "{schema:?}: {error}");
+        }
+
+        let mut oversized = relayed("elysium", &["upload"]);
+        oversized.tools[0].input_schema_json = format!(
+            r#"{{"type":"object","description":"{}"}}"#,
+            "d".repeat(MAX_INPUT_SCHEMA)
+        );
+        refusal(&[], &[oversized]).expect_err("an oversized schema should be refused");
+    }
+
+    #[test]
+    fn the_relayed_limits_are_counted() {
+        let many_servers: Vec<RelayedMcpServer> = (0..=MAX_SERVERS)
+            .map(|index| relayed(&format!("server-{index}"), &["upload"]))
+            .collect();
+        refusal(&[], &many_servers).expect_err("too many servers should be refused");
+
+        let tool_names: Vec<String> = (0..=MAX_RELAYED_TOOLS)
+            .map(|index| format!("tool-{index}"))
+            .collect();
+        let borrowed: Vec<&str> = tool_names.iter().map(String::as_str).collect();
+        refusal(&[], &[relayed("elysium", &borrowed)])
+            .expect_err("too many tools should be refused");
+
+        let mut described = relayed("elysium", &["upload"]);
+        described.tools[0].description = "d".repeat(MAX_TOOL_DESCRIPTION + 1);
+        refusal(&[], &[described]).expect_err("a long description should be refused");
+
+        let mut instructed = relayed("elysium", &["upload"]);
+        instructed.instructions = "i".repeat(MAX_INSTRUCTIONS + 1);
+        refusal(&[], &[instructed]).expect_err("long instructions should be refused");
+    }
+
+    #[test]
+    fn a_relayed_server_is_served_on_the_turns_grant_to_both_harnesses() {
+        let declared = [storage()];
+        let relayed = [relayed("elysium", &["upload"])];
+        let launch = Launch::of(&declared, &relayed, Some(GRANT));
+
+        assert_eq!(launch.names(), ["storage", "elysium"]);
+
+        let args = launch.claude_args();
+        let config: serde_json::Value =
+            serde_json::from_str(&args[1]).expect("the config should be JSON");
+        assert_eq!(
+            config["mcpServers"]["elysium"],
+            serde_json::json!({
+                "type": "http",
+                "url": format!("{GRANT}/mcp/elysium"),
+                "headers": {},
+            })
+        );
+
+        let codex = launch.codex_args();
+        assert!(
+            codex.contains(&format!("mcp_servers.elysium.url=\"{GRANT}/mcp/elysium\"")),
+            "{codex:?}"
+        );
+        assert!(
+            codex.contains(&format!(
+                "mcp_servers.elysium.tool_timeout_sec={}",
+                CODEX_RELAYED_TOOL_TIMEOUT.as_secs()
+            )),
+            "{codex:?}"
+        );
+        // Only the relayed server is given the long wait.
+        assert_eq!(
+            codex
+                .iter()
+                .filter(|arg| arg.contains("tool_timeout_sec"))
+                .count(),
+            1
+        );
+
+        // Loopback, reached directly rather than through the egress proxy.
+        assert_eq!(launch.hosts(), ["elysium.example.com"]);
+    }
+
+    #[test]
+    fn relayed_servers_alone_still_hold_claude_to_the_declared_set() {
+        let relayed = [relayed("elysium", &["upload"])];
+        let args = Launch::of(&[], &relayed, Some(GRANT)).claude_args();
+
+        assert!(args.contains(&"--strict-mcp-config".to_owned()), "{args:?}");
+    }
+
+    #[test]
+    fn a_launch_with_no_grant_serves_no_relayed_server() {
+        let relayed = [relayed("elysium", &["upload"])];
+
+        assert!(Launch::of(&[], &relayed, None).names().is_empty());
+    }
+
+    #[test]
+    fn a_relayed_name_a_declared_server_already_holds_is_skipped_at_launch() {
+        let declared = [storage()];
+        let relayed = [relayed("STORAGE", &["upload"])];
+
+        assert_eq!(
+            Launch::of(&declared, &relayed, Some(GRANT)).names(),
+            ["storage"]
+        );
+    }
+
     #[test]
     fn an_ordinary_set_of_servers_is_accepted() {
         let servers = [
@@ -556,8 +961,8 @@ mod tests {
             server("docs", "https://docs.example.com/mcp", &[("X-Key", "")]),
         ];
 
-        assert_eq!(refusal(&servers), Ok(()));
-        assert_eq!(refusal(&[]), Ok(()));
+        assert_eq!(declared_refusal(&servers), Ok(()));
+        assert_eq!(declared_refusal(&[]), Ok(()));
     }
 
     #[test]
@@ -572,19 +977,19 @@ mod tests {
             "slash/ed",
             "ünïcode",
         ] {
-            let error = refusal(&[server(name, "https://example.com/mcp", &[])])
+            let error = declared_refusal(&[server(name, "https://example.com/mcp", &[])])
                 .expect_err("should be refused");
             assert!(error.contains("name"), "{name:?}: {error}");
         }
 
         let long = "a".repeat(MAX_NAME + 1);
-        assert!(refusal(&[server(&long, "https://example.com/mcp", &[])]).is_err());
+        assert!(declared_refusal(&[server(&long, "https://example.com/mcp", &[])]).is_err());
     }
 
     #[test]
     fn a_name_arsox_reserves_for_its_own_tools_is_refused() {
         for name in ["arsox", "Arsox-tools", "arsox_integration"] {
-            let error = refusal(&[server(name, "https://example.com/mcp", &[])])
+            let error = declared_refusal(&[server(name, "https://example.com/mcp", &[])])
                 .expect_err("should be refused");
             assert!(error.contains("reserved"), "{error}");
         }
@@ -592,7 +997,7 @@ mod tests {
 
     #[test]
     fn a_name_declared_twice_is_refused_whatever_its_case() {
-        let error = refusal(&[
+        let error = declared_refusal(&[
             server("search", "https://a.example.com/mcp", &[]),
             server("Search", "https://b.example.com/mcp", &[]),
         ])
@@ -613,13 +1018,13 @@ mod tests {
             "https://example.com/${HOME}",
         ] {
             assert!(
-                refusal(&[server("search", url, &[])]).is_err(),
+                declared_refusal(&[server("search", url, &[])]).is_err(),
                 "{url:?} should be refused"
             );
         }
 
         let long = format!("https://example.com/{}", "a".repeat(MAX_URL));
-        assert!(refusal(&[server("search", &long, &[])]).is_err());
+        assert!(declared_refusal(&[server("search", &long, &[])]).is_err());
     }
 
     #[test]
@@ -632,7 +1037,7 @@ mod tests {
             ("X-Nul", "a\0b"),
         ] {
             assert!(
-                refusal(&[server(
+                declared_refusal(&[server(
                     "search",
                     "https://example.com/mcp",
                     &[(header, value)]
@@ -644,7 +1049,7 @@ mod tests {
 
         let long = "v".repeat(MAX_HEADER_VALUE + 1);
         assert!(
-            refusal(&[server(
+            declared_refusal(&[server(
                 "search",
                 "https://example.com/mcp",
                 &[("X-Long", &long)]
@@ -655,7 +1060,7 @@ mod tests {
 
     #[test]
     fn a_header_declared_twice_is_refused_whatever_its_case() {
-        let error = refusal(&[server(
+        let error = declared_refusal(&[server(
             "search",
             "https://example.com/mcp",
             &[
@@ -672,7 +1077,7 @@ mod tests {
     fn a_refusal_never_carries_a_header_value() {
         // An error body is a log line somewhere, and a header value is a
         // credential far more often than not.
-        let error = refusal(&[server(
+        let error = declared_refusal(&[server(
             "search",
             "https://example.com/mcp",
             &[("X-Split", "the-secret-value\nX-More: yes")],
@@ -691,7 +1096,7 @@ mod tests {
         let many: Vec<McpServer> = (0..=MAX_SERVERS)
             .map(|index| server(&format!("server-{index}"), "https://example.com/mcp", &[]))
             .collect();
-        assert!(refusal(&many).is_err());
+        assert!(declared_refusal(&many).is_err());
 
         let headers: Vec<(String, &str)> = (0..=MAX_HEADERS_PER_SERVER)
             .map(|index| (format!("X-Header-{index}"), "value"))
@@ -700,14 +1105,16 @@ mod tests {
             .iter()
             .map(|(header, value)| (header.as_str(), *value))
             .collect();
-        assert!(refusal(&[server("search", "https://example.com/mcp", &borrowed)]).is_err());
+        assert!(
+            declared_refusal(&[server("search", "https://example.com/mcp", &borrowed)]).is_err()
+        );
     }
 
     #[test]
     fn claude_is_handed_references_rather_than_values() {
         // argv is readable by anything on the host that can run `ps`. The value
         // travels in the environment and the command line names the variable.
-        let args = Launch::of(&[storage()]).claude_args();
+        let args = Launch::of(&[storage()], &[], None).claude_args();
 
         assert_eq!(args[0], "--mcp-config");
         assert_eq!(args[2], "--strict-mcp-config");
@@ -732,14 +1139,18 @@ mod tests {
 
     #[test]
     fn the_environment_carries_every_value_under_the_referenced_name() {
-        let env = Launch::of(&[
-            storage(),
-            server(
-                "docs",
-                "https://docs.example.com/mcp",
-                &[("X-Key", "docs-key")],
-            ),
-        ])
+        let env = Launch::of(
+            &[
+                storage(),
+                server(
+                    "docs",
+                    "https://docs.example.com/mcp",
+                    &[("X-Key", "docs-key")],
+                ),
+            ],
+            &[],
+            None,
+        )
         .environment();
 
         let pairs: Vec<(&str, &str)> = env
@@ -770,8 +1181,12 @@ mod tests {
 
     #[test]
     fn codex_is_handed_the_same_references_as_config_overrides() {
-        let args = Launch::of(&[storage(), server("plain", "http://127.0.0.1:9000/mcp", &[])])
-            .codex_args();
+        let args = Launch::of(
+            &[storage(), server("plain", "http://127.0.0.1:9000/mcp", &[])],
+            &[],
+            None,
+        )
+        .codex_args();
 
         assert_eq!(
             args,
@@ -790,9 +1205,9 @@ mod tests {
 
     #[test]
     fn a_thread_with_no_servers_changes_nothing_about_its_launch() {
-        assert!(Launch::of(&[]).claude_args().is_empty());
-        assert!(Launch::of(&[]).codex_args().is_empty());
-        assert!(Launch::of(&[]).environment().is_empty());
+        assert!(Launch::of(&[], &[], None).claude_args().is_empty());
+        assert!(Launch::of(&[], &[], None).codex_args().is_empty());
+        assert!(Launch::of(&[], &[], None).environment().is_empty());
     }
 
     #[test]
@@ -810,15 +1225,15 @@ mod tests {
             server("storage", "https://duplicate.example.com/mcp", &[]),
         ];
 
-        assert_eq!(Launch::of(&servers).names(), ["storage"]);
+        assert_eq!(Launch::of(&servers, &[], None).names(), ["storage"]);
         assert!(
-            !Launch::of(&servers)
+            !Launch::of(&servers, &[], None)
                 .codex_args()
                 .concat()
                 .contains("bad.name")
         );
         assert!(
-            !Launch::of(&servers)
+            !Launch::of(&servers, &[], None)
                 .codex_args()
                 .concat()
                 .contains("duplicate")
@@ -826,7 +1241,7 @@ mod tests {
 
         // Numbered after the skip, so the variables stay dense.
         assert_eq!(
-            Launch::of(&servers).environment()[0].key,
+            Launch::of(&servers, &[], None).environment()[0].key,
             "MCP_HEADER_SECRET_0_0"
         );
     }
@@ -841,7 +1256,7 @@ mod tests {
         ];
 
         assert_eq!(
-            Launch::of(&servers).hosts(),
+            Launch::of(&servers, &[], None).hosts(),
             ["elysium.example.com", "127.0.0.1", "elysium-api"]
         );
     }
