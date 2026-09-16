@@ -17,7 +17,7 @@ use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::incident::v1::Disposition;
 use arsox_sdk::proto::settings::v1::{
-    Budget, EnvVar, GithubIntegration, LlmAuth, ModelEndpoint, Redaction, RedactionMode,
+    Budget, EnvVar, GithubIntegration, LlmAuth, McpServer, ModelEndpoint, Redaction, RedactionMode,
     ThreadSettings, llm_auth::Credential,
 };
 use arsox_sdk::proto::thread::v1::ThreadState;
@@ -282,6 +282,60 @@ async fn a_declared_variable_that_would_undo_the_scrub_is_refused_at_creation() 
         .create(declared("NPM_TOKEN"))
         .await
         .expect("an ordinary declared variable is fine");
+}
+
+#[tokio::test]
+async fn an_mcp_server_a_harness_could_not_be_handed_is_refused_at_creation() {
+    // A server's name becomes a CLI config key and a tool name, and its URL and
+    // headers reach the harness's launch. The caller learns what was wrong here,
+    // naming the server, rather than finding the server missing mid-turn.
+    let url = start().await;
+    let client = Client::connect(&url, SECRET).await.expect("should connect");
+
+    let declaring = |name: &str, server_url: &str| ThreadSettings {
+        mcp_servers: vec![McpServer {
+            name: name.to_owned(),
+            url: server_url.to_owned(),
+            headers: [(
+                "Authorization".to_owned(),
+                Secret {
+                    value: Some("Bearer a-value-no-error-should-carry".to_owned()),
+                    display: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }],
+        ..settings()
+    };
+
+    for (name, server_url) in [
+        ("has.dot", "https://mcp.example.com/storage"),
+        ("storage", "ftp://mcp.example.com/storage"),
+    ] {
+        let error = client
+            .threads()
+            .create(declaring(name, server_url))
+            .await
+            .expect_err("should be refused");
+
+        assert_eq!(
+            error.code(),
+            Some(arsox_sdk::proto::error::v1::ErrorCode::RequestFieldInvalid),
+            "{name}"
+        );
+
+        let said = error.to_string();
+        assert!(said.contains("settings.mcp_servers"), "{said}");
+        assert!(said.contains(name), "{said}");
+        assert!(!said.contains("a-value-no-error-should-carry"), "{said}");
+    }
+
+    client
+        .threads()
+        .create(declaring("storage", "https://mcp.example.com/storage"))
+        .await
+        .expect("an ordinary server is fine");
 }
 
 #[tokio::test]

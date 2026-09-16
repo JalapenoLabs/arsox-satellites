@@ -12,6 +12,7 @@
 mod accounting;
 pub mod capabilities;
 mod checkers;
+pub mod mcp;
 pub mod runner;
 pub mod spawn;
 
