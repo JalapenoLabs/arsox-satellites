@@ -1197,8 +1197,10 @@ impl Runner {
         claimed: &ClaimedTurn,
         incidents: mpsc::UnboundedSender<Incident>,
     ) -> Option<crate::egress::Ticket> {
-        let policy =
-            crate::egress::policy::WebPolicy::for_thread(claimed.settings.permissions.as_ref())?;
+        let policy = crate::egress::policy::WebPolicy::for_thread(
+            claimed.settings.permissions.as_ref(),
+            &claimed.settings.mcp_servers,
+        )?;
 
         tracing::info!(
             event.name = "turn.egress.admitted",
@@ -1404,10 +1406,9 @@ impl Runner {
                 }),
                 exec_broker: context.shims.clone(),
             },
-            &claimed.settings.env,
             // Read per turn rather than held on the runner, so a thread's
-            // posture is whatever its settings say now.
-            claimed.settings.permissions.as_ref(),
+            // posture and its MCP servers are whatever its settings say now.
+            &claimed.settings,
         )
     }
 

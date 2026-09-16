@@ -923,7 +923,7 @@ Enforced today:
 | Privilege separation | always, in the image | The satellite runs as root and every process it spawns drops to the unprivileged `arsox` account: harness, `git`, setup commands, and checkers. Off root, the deterministic layer does not engage and boot says so. |
 | Push at all | allowed | A root-owned `pre-push` hook, installed outside every worktree and pointed at by `core.hooksPath`. A thread that denies pushing refuses every push with `PERMISSION_PUSH_DENIED`, recorded as a `blocked` incident. **Scope, stated plainly**: the hook runs as the agent, because the push does, so `git push --no-verify` or a `core.hooksPath` the agent sets on its own command line gets around it. What it holds is every push that does not set out to disable it. See [Deterministic enforcement](./docs/enforcement.md). |
 | Protected branches | none | The same hook, matching the ref as it will exist on the remote, so deleting a protected branch is refused exactly like writing to one. `PERMISSION_BRANCH_PROTECTED` carries `details.ref`. Same scope as the row above. |
-| Network egress | unspecified, ungated | A thread that declares `web` or names `additional_domains` has its agents pointed at the Arsox egress proxy, which decides every request on the host it names. A denied host is answered 403 with `PERMISSION_DOMAIN_DENIED` and recorded as a `blocked` incident carrying `details.host`. No TLS is intercepted: a `CONNECT` names its host, which is exactly what a domain list can express. **Scope, stated plainly**: pointing a process at a proxy is an environment variable, so a process can unset it and Node's built-in `fetch` never read it. Closing that needs the route closure, which is deployment configuration and is written out in [Deterministic enforcement](./docs/enforcement.md#the-route-closure-is-deployment-configuration). A thread that declared nothing reaches the network as it always has. |
+| Network egress | unspecified, ungated | A thread that declares `web` or names `additional_domains` has its agents pointed at the Arsox egress proxy, which decides every request on the host it names. A denied host is answered 403 with `PERMISSION_DOMAIN_DENIED` and recorded as a `blocked` incident carrying `details.host`. No TLS is intercepted: a `CONNECT` names its host, which is exactly what a domain list can express. **Scope, stated plainly**: pointing a process at a proxy is an environment variable, so a process can unset it and Node's built-in `fetch` never read it. Closing that needs the route closure, which is deployment configuration and is written out in [Deterministic enforcement](./docs/enforcement.md#the-route-closure-is-deployment-configuration). A thread that declared nothing reaches the network as it always has. A gated thread is admitted to the exact host of every [MCP server](#mcp) it declared. |
 | Secrets in pushed content | blocked | The same hook streams the outgoing commits, patch and messages alike, to the satellite, which holds the thread's secrets and answers. A hit refuses the push with `SECRET_IN_PUSH_BLOCKED`. Only the commits being sent are read, in bounded memory, and a credential inside a binary file is not text git renders. |
 
 On the roadmap, with the same deterministic bar:
@@ -949,7 +949,7 @@ Provide a global prompt, which is written into `/workspace/<thread-id>/AGENTS.md
 
 ### Secret redaction
 
-Anything marked `isSecret` in [custom env](#custom-remote-env) is redacted everywhere it could escape the satellite, not just in the log stream. The stream is the obvious channel and the least dangerous one. A secret committed to a repo and pushed to GitHub is the leak that actually hurts.
+Anything marked `isSecret` in [custom env](#custom-remote-env) is redacted everywhere it could escape the satellite, not just in the log stream. So is every credential the settings carry by type, each [MCP server](#mcp)'s header values included. The stream is the obvious channel and the least dangerous one. A secret committed to a repo and pushed to GitHub is the leak that actually hurts.
 
 Redaction applies to:
 - stream events and their payloads
@@ -1406,7 +1406,35 @@ Artifact totals are capped per thread. See [Resource limits](#resource-limits).
 
 ## MCP
 
-Satellites support MCP, so you can wire your own servers into the Claude and Codex sessions and let the agents use them for outbound work.
+Satellites support MCP, so you can wire your own servers into the Claude and Codex sessions and let the agents use them for outbound work. A thread declares them in `mcpServers`, as many as it needs, and every turn on either harness launches with all of them.
+
+```typescript
+mcpServers: [
+  {
+    name: 'storage',
+    url: 'https://elysium.example.com/mcp/storage',
+    headers: { Authorization: { value: `Bearer ${storageToken}` } }
+  }
+]
+```
+
+A server is a remote MCP server spoken to over **streamable HTTP**. A local stdio server is not something a thread can declare. Each server is checked when the thread is created, and one that does not fit is refused with `REQUEST_FIELD_INVALID` naming `settings.mcp_servers` and the server:
+
+| Field | Rule |
+|---|---|
+| the list | at most 16 servers, names unique ignoring case |
+| `name` | 1 to 64 of `A-Z a-z 0-9 _ -`, and not starting with `arsox`, which is reserved for Arsox's own tools |
+| `url` | `http` or `https`, with a host, no credentials in it, no `${`, and at most 2048 characters |
+| `headers` | at most 8 per server, valid HTTP header names of at most 128 characters, unique ignoring case |
+| a header value | at most 4096 bytes, with no line break and no NUL |
+
+**Header values are credentials.** They come back redacted on every thread response, they are masked out of everything the thread emits like any other secret, and a push carrying one is refused. On the way to the harness they travel in its environment and never on its command line, which anything on the host that can run `ps` can read. The agent's own process holds them in order to send them, so treat a header value as something the agent can see, exactly as you would a declared environment variable.
+
+**A Claude thread with servers loads only those servers.** A repo's own `.mcp.json` would otherwise connect without asking. Codex has no equivalent switch, so its own configuration still applies. The agents may call every tool a declared server offers, including under a restricted `exec` policy.
+
+**A thread with a web policy can reach its servers without naming them.** Each server's exact host is admitted to the [egress proxy](./docs/enforcement.md#a-declared-mcp-servers-host-is-admitted-exactly), and nothing beneath it. A server on loopback never goes through the proxy at all.
+
+The details, and the reasoning behind each, are in [the harness doc](./docs/harness.md#mcp-servers-reach-the-harness-as-launch-arguments).
 
 Arsox also provides its own MCP tools to the agents, including team spawn and despawn, `request_integration`, and `override_redaction`.
 

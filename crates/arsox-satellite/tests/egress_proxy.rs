@@ -32,13 +32,14 @@ use tokio::sync::mpsc::UnboundedReceiver;
 
 /// A policy naming exactly these hosts.
 fn allowing(hosts: &[&str]) -> WebPolicy {
-    WebPolicy::Only(
-        hosts
+    WebPolicy::Only {
+        domains: hosts
             .iter()
             .copied()
             .map(str::to_owned)
             .collect::<BTreeSet<String>>(),
-    )
+        hosts: BTreeSet::new(),
+    }
 }
 
 /// A proxy with one turn admitted, and the channel its refusals arrive on.

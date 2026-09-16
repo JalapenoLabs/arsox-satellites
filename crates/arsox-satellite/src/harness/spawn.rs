@@ -48,8 +48,9 @@
 //! cannot repoint an agent away from the LLM proxy or out from behind the egress
 //! proxy.
 
+use crate::harness::mcp;
 use arsox_sdk::proto::harness::v1::Harness;
-use arsox_sdk::proto::settings::v1::{EnvVar, ExecAccess, Permissions};
+use arsox_sdk::proto::settings::v1::{EnvVar, ExecAccess, Permissions, ThreadSettings};
 use std::path::PathBuf;
 
 /// Overrides the Claude CLI binary.
@@ -163,10 +164,12 @@ pub enum Session {
 
 /// Builds the command that runs one turn.
 ///
-/// `declared` is the thread's [`EnvVar`] list, which reaches the agent on top of
-/// the scrub. `permissions` are the thread's, absent when it declared none, and
-/// decide the posture the harness runs under. See the module docs for what
-/// "posture" buys and what it deliberately does not.
+/// `settings` are the thread's, read for three things: its declared [`EnvVar`]
+/// list, which reaches the agent on top of the scrub; its permissions, which
+/// decide the posture the harness runs under; and its MCP servers, which reach
+/// the harness as launch arguments with every header value in the environment.
+/// See the module docs for what "posture" buys and what it deliberately does not,
+/// and [`mcp`] for how a server is handed over.
 ///
 /// `grants` carries what the satellite lends the turn: its admission to the
 /// model, and the shim directory that becomes its `PATH` when the exec broker
@@ -178,8 +181,7 @@ pub fn command_for(
     session: &Session,
     working_dir: PathBuf,
     grants: &Grants,
-    declared: &[EnvVar],
-    permissions: Option<&Permissions>,
+    settings: &ThreadSettings,
 ) -> HarnessCommand {
     // Flags are rendered inside each arm rather than above the match, because
     // every one of them is a spelling rather than a decision. `--permission-mode`
@@ -191,11 +193,9 @@ pub fn command_for(
         // Unspecified means "the documented default", and the documented default
         // is Claude.
         Harness::Unspecified | Harness::Claude => {
-            claude_command(prompt, session, working_dir, grants, declared, permissions)
+            claude_command(prompt, session, working_dir, grants, settings)
         }
-        Harness::Codex => {
-            codex_command(prompt, session, working_dir, grants, declared, permissions)
-        }
+        Harness::Codex => codex_command(prompt, session, working_dir, grants, settings),
     }
 }
 
@@ -204,8 +204,7 @@ fn claude_command(
     session: &Session,
     working_dir: PathBuf,
     grants: &Grants,
-    declared: &[EnvVar],
-    permissions: Option<&Permissions>,
+    settings: &ThreadSettings,
 ) -> HarnessCommand {
     let mut args = vec![
         "--print".to_owned(),
@@ -227,7 +226,11 @@ fn claude_command(
         }
     }
 
-    args.extend(claude_permission_args(&posture_for(permissions)));
+    args.extend(claude_permission_args(
+        &posture_for(settings.permissions.as_ref()),
+        &mcp::names(&settings.mcp_servers),
+    ));
+    args.extend(mcp::claude_args(&settings.mcp_servers));
 
     let proxy = grants.model.clone().map(|access| {
         vec![
@@ -250,7 +253,7 @@ fn claude_command(
         program: claude_binary(),
         args,
         working_dir,
-        env: environment_for(declared, proxy.unwrap_or_default(), grants),
+        env: environment_for(settings, proxy.unwrap_or_default(), grants),
     }
 }
 
@@ -293,8 +296,7 @@ fn codex_command(
     session: &Session,
     working_dir: PathBuf,
     grants: &Grants,
-    declared: &[EnvVar],
-    permissions: Option<&Permissions>,
+    settings: &ThreadSettings,
 ) -> HarnessCommand {
     let mut args = vec!["exec".to_owned()];
 
@@ -304,7 +306,10 @@ fn codex_command(
 
     args.push("--json".to_owned());
     args.push("--skip-git-repo-check".to_owned());
-    args.extend(codex_permission_args(&posture_for(permissions)));
+    args.extend(codex_permission_args(&posture_for(
+        settings.permissions.as_ref(),
+    )));
+    args.extend(mcp::codex_args(&settings.mcp_servers));
 
     // Codex 0.147.0 does not read `OPENAI_BASE_URL`, so the address reaches it
     // as a declared provider rather than as an environment variable. The
@@ -344,7 +349,7 @@ fn codex_command(
         program: codex_binary(),
         args,
         working_dir,
-        env: environment_for(declared, proxy, grants),
+        env: environment_for(settings, proxy, grants),
     }
 }
 
@@ -386,19 +391,26 @@ fn proxy_v1(base_url: &str) -> String {
 
 /// Assembles the environment a harness child runs with.
 ///
-/// Five layers, in the one order that is safe: what the satellite hands every
+/// Six layers, in the one order that is safe: what the satellite hands every
 /// agent, then what the thread declared, then the LLM proxy's variables, then
-/// the egress proxy's, then the broker's `PATH`. Everything the satellite
-/// decides goes after everything the thread declared, because the last value set
-/// for a key is the one the child sees. A thread that could set
-/// `ANTHROPIC_BASE_URL` would route its agent out from under every budget
-/// ceiling, a thread that could set `PATH` would step around the exec broker by
-/// declaring a variable, and a thread that could set `HTTP_PROXY` would step out
-/// from behind the egress allowlist the same way.
-fn environment_for(declared: &[EnvVar], proxy: Vec<AgentVar>, grants: &Grants) -> Vec<AgentVar> {
+/// the MCP header values, then the egress proxy's, then the broker's `PATH`.
+/// Everything the satellite decides goes after everything the thread declared,
+/// because the last value set for a key is the one the child sees. A thread that
+/// could set `ANTHROPIC_BASE_URL` would route its agent out from under every
+/// budget ceiling, a thread that could set `PATH` would step around the exec
+/// broker by declaring a variable, and a thread that could set `HTTP_PROXY`
+/// would step out from behind the egress allowlist the same way. A declared
+/// variable named like an MCP header's would replace a header value with one the
+/// server never issued.
+fn environment_for(
+    settings: &ThreadSettings,
+    proxy: Vec<AgentVar>,
+    grants: &Grants,
+) -> Vec<AgentVar> {
     let mut env = agent_environment();
-    env.extend(declared_environment(declared));
+    env.extend(declared_environment(&settings.env));
     env.extend(proxy);
+    env.extend(mcp::environment(&settings.mcp_servers));
     env.extend(egress_environment(grants));
 
     if let Some(shims) = grants.exec_broker.as_deref() {
@@ -638,7 +650,15 @@ fn bash_rules(command: &str) -> [String; 2] {
 /// With no command named, the shell is refused by name rather than left to be
 /// refused by silence, so the harness reports a denial an operator can read
 /// instead of an unexplained tool failure.
-fn claude_permission_args(posture: &Posture) -> Vec<String> {
+///
+/// **A declared MCP server's tools are allowed by name under the narrow
+/// posture.** `acceptEdits` approves edits and nothing else, and a turn under
+/// `--print` cannot answer the prompt an MCP call raises, so without the rule a
+/// thread that restricted its shell would have every server it declared refused
+/// on first use. `mcp__<name>` is the CLI's rule for every tool one server
+/// offers. Under `bypassPermissions` nothing needs allowing, and no rule is
+/// emitted.
+fn claude_permission_args(posture: &Posture, mcp_servers: &[String]) -> Vec<String> {
     let mode = match posture.shell {
         ShellAccess::Unrestricted => "bypassPermissions",
         ShellAccess::Named => "acceptEdits",
@@ -646,18 +666,23 @@ fn claude_permission_args(posture: &Posture) -> Vec<String> {
 
     let mut args = vec!["--permission-mode".to_owned(), mode.to_owned()];
 
-    let allowed: Vec<String> = posture
+    let mut allowed: Vec<String> = posture
         .allowed_commands
         .iter()
         .flat_map(|command| bash_rules(command))
         .collect();
+    let no_command_named = allowed.is_empty();
+
+    if posture.shell == ShellAccess::Named {
+        allowed.extend(mcp_servers.iter().map(|name| format!("mcp__{name}")));
+    }
 
     if !allowed.is_empty() {
         args.push("--allowedTools".to_owned());
         args.push(allowed.join(","));
     }
 
-    if posture.shell == ShellAccess::Named && allowed.is_empty() {
+    if posture.shell == ShellAccess::Named && no_command_named {
         args.push("--disallowedTools".to_owned());
         args.push("Bash".to_owned());
     }
@@ -1094,6 +1119,16 @@ mod tests {
         );
     }
 
+    /// A thread that declared these variables and these permissions, and
+    /// nothing else.
+    fn declaring(env: Vec<EnvVar>, permissions: Option<&Permissions>) -> ThreadSettings {
+        ThreadSettings {
+            env,
+            permissions: permissions.cloned(),
+            ..ThreadSettings::default()
+        }
+    }
+
     /// A variable a thread declared, as the SDK would send one.
     fn declared(key: &str, value: &str, is_secret: Option<bool>) -> EnvVar {
         EnvVar {
@@ -1177,11 +1212,13 @@ mod tests {
                 base_url: "http://127.0.0.1:9/v1".to_owned(),
                 token: "the-turns-proxy-token".to_owned(),
             }),
-            &[
-                declared("NPM_TOKEN", "npm-the-real-token", None),
-                declared("DEPLOY_ENV", "staging", Some(false)),
-            ],
-            None,
+            &declaring(
+                vec![
+                    declared("NPM_TOKEN", "npm-the-real-token", None),
+                    declared("DEPLOY_ENV", "staging", Some(false)),
+                ],
+                None,
+            ),
         );
 
         let rendered = format!("{command:?}");
@@ -1272,12 +1309,14 @@ mod tests {
                 base_url: "http://127.0.0.1:9/v1".to_owned(),
                 token: "the-turns-proxy-token".to_owned(),
             }),
-            &[declared(
-                "ANTHROPIC_BASE_URL",
-                "https://elsewhere.invalid",
+            &declaring(
+                vec![declared(
+                    "ANTHROPIC_BASE_URL",
+                    "https://elsewhere.invalid",
+                    None,
+                )],
                 None,
-            )],
-            None,
+            ),
         );
 
         // The last value set for a key is the one the child sees.
@@ -1317,8 +1356,7 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             &Grants::default(),
-            &[],
-            None,
+            &ThreadSettings::default(),
         );
 
         assert!(command.args.contains(&"--session-id".to_owned()));
@@ -1341,8 +1379,7 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             &Grants::default(),
-            &[],
-            None,
+            &ThreadSettings::default(),
         );
 
         assert!(command.args.contains(&"--resume".to_owned()));
@@ -1362,8 +1399,7 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             &Grants::default(),
-            &[],
-            None,
+            &ThreadSettings::default(),
         );
 
         assert!(command.args.contains(&"; rm -rf / #".to_owned()));
@@ -1379,8 +1415,7 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             &Grants::default(),
-            &[],
-            permissions,
+            &declaring(Vec::new(), permissions),
         )
     }
 
@@ -1518,7 +1553,7 @@ mod tests {
         // the launch rather than restrict it, so the flags are appended inside
         // the Claude arm and nowhere above the match.
         let command = command_with(None);
-        let flags = claude_permission_args(&posture_for(None));
+        let flags = claude_permission_args(&posture_for(None), &[]);
 
         assert!(
             command.args.ends_with(&flags),
@@ -1542,8 +1577,7 @@ mod tests {
             session,
             PathBuf::from("/workspace/thread"),
             grants,
-            &[],
-            permissions,
+            &declaring(Vec::new(), permissions),
         )
     }
 
@@ -1644,8 +1678,7 @@ mod tests {
             },
             PathBuf::from("/workspace/thread"),
             &Grants::default(),
-            &[],
-            None,
+            &ThreadSettings::default(),
         );
 
         let separator = command
@@ -1726,12 +1759,14 @@ mod tests {
                 base_url: "http://127.0.0.1:9/t/the-token".to_owned(),
                 token: "the-turns-proxy-token".to_owned(),
             }),
-            &[declared(
-                "OPENAI_BASE_URL",
-                "https://elsewhere.invalid",
+            &declaring(
+                vec![declared(
+                    "OPENAI_BASE_URL",
+                    "https://elsewhere.invalid",
+                    None,
+                )],
                 None,
-            )],
-            None,
+            ),
         );
 
         let applied = command
@@ -1809,8 +1844,7 @@ mod tests {
                 exec_broker: Some(PathBuf::from("/opt/arsox/threads/x/bin")),
                 ..Grants::default()
             },
-            &[],
-            None,
+            &ThreadSettings::default(),
         );
 
         let path = command
@@ -1839,8 +1873,7 @@ mod tests {
                 exec_broker: Some(PathBuf::from("/opt/arsox/threads/x/bin")),
                 ..Grants::default()
             },
-            &[declared("PATH", "/usr/bin:/bin", Some(false))],
-            None,
+            &declaring(vec![declared("PATH", "/usr/bin:/bin", Some(false))], None),
         );
 
         let path = command
@@ -1886,6 +1919,146 @@ mod tests {
         assert_eq!(command.args, command_with(None).args);
     }
 
+    /// A thread that declared one MCP server carrying one credential header.
+    fn with_mcp_server(permissions: Option<&Permissions>) -> ThreadSettings {
+        ThreadSettings {
+            mcp_servers: vec![arsox_sdk::proto::settings::v1::McpServer {
+                name: "storage".to_owned(),
+                url: "https://elysium.example.com/mcp/storage".to_owned(),
+                headers: [(
+                    "Authorization".to_owned(),
+                    arsox_sdk::proto::common::v1::Secret {
+                        value: Some("Bearer the-storage-token".to_owned()),
+                        display: None,
+                    },
+                )]
+                .into_iter()
+                .collect(),
+            }],
+            ..declaring(
+                vec![declared(
+                    "MCP_HEADER_SECRET_0_0",
+                    "a-declared-imposter",
+                    None,
+                )],
+                permissions,
+            )
+        }
+    }
+
+    #[test]
+    fn a_declared_mcp_server_reaches_both_harnesses_with_its_value_off_argv() {
+        for harness in [Harness::Claude, Harness::Codex] {
+            let command = command_for(
+                harness,
+                "do the thing",
+                &Session::Start {
+                    session_id: "x".to_owned(),
+                },
+                PathBuf::from("/workspace/thread"),
+                &Grants::default(),
+                &with_mcp_server(None),
+            );
+
+            assert!(
+                command
+                    .args
+                    .iter()
+                    .any(|argument| argument.contains("elysium.example.com")),
+                "{harness:?} was not told about the server: {:?}",
+                command.args
+            );
+            assert!(
+                !command.args.concat().contains("the-storage-token"),
+                "{harness:?} carries a header value on its command line"
+            );
+
+            // The satellite's layer goes after the thread's, so a declared
+            // variable of the same name cannot replace the value the server
+            // issued.
+            assert_eq!(
+                applied(&command, "MCP_HEADER_SECRET_0_0").as_deref(),
+                Some("Bearer the-storage-token"),
+                "{harness:?}"
+            );
+            assert!(
+                !format!("{command:?}").contains("the-storage-token"),
+                "{harness:?} renders a header value where a command is logged"
+            );
+        }
+    }
+
+    #[test]
+    fn a_claude_thread_with_servers_loads_those_servers_and_no_others() {
+        // A repo's own `.mcp.json` connects without asking under
+        // `bypassPermissions`, so a thread that named its servers is held to them.
+        let command = command_for(
+            Harness::Claude,
+            "do the thing",
+            &Session::Start {
+                session_id: "x".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            &Grants::default(),
+            &with_mcp_server(None),
+        );
+
+        assert!(command.args.contains(&"--strict-mcp-config".to_owned()));
+        assert!(
+            value_of(&command, "--mcp-config")
+                .is_some_and(|config| config.contains("${MCP_HEADER_SECRET_0_0}"))
+        );
+
+        // And a thread that declared none is launched without either.
+        let plain = command_with(None);
+        assert!(!plain.args.contains(&"--strict-mcp-config".to_owned()));
+        assert!(!plain.args.contains(&"--mcp-config".to_owned()));
+    }
+
+    #[test]
+    fn a_restricted_claude_thread_may_still_call_the_servers_it_declared() {
+        // `acceptEdits` approves edits and nothing else, and `--print` cannot
+        // answer the prompt an MCP call raises, so without a rule every tool the
+        // thread declared would be refused on first use.
+        let none = Permissions {
+            exec: ExecAccess::None.into(),
+            ..Permissions::default()
+        };
+        let command = command_for(
+            Harness::Claude,
+            "do the thing",
+            &Session::Start {
+                session_id: "x".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            &Grants::default(),
+            &with_mcp_server(Some(&none)),
+        );
+
+        assert_eq!(
+            value_of(&command, "--allowedTools"),
+            Some("mcp__storage".to_owned())
+        );
+        // Allowing a server's tools is not allowing the shell.
+        assert_eq!(
+            value_of(&command, "--disallowedTools"),
+            Some("Bash".to_owned())
+        );
+
+        // Under the default posture nothing needs allowing.
+        let unrestricted = command_for(
+            Harness::Claude,
+            "do the thing",
+            &Session::Start {
+                session_id: "x".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            &Grants::default(),
+            &with_mcp_server(None),
+        );
+        assert_eq!(value_of(&unrestricted, "--allowedTools"), None);
+    }
+
     /// A turn's admission to the network, as the egress proxy issues one.
     fn egress_access() -> EgressAccess {
         EgressAccess {
@@ -1910,8 +2083,7 @@ mod tests {
                 egress: Some(egress_access()),
                 exec_broker: None,
             },
-            &[],
-            None,
+            &ThreadSettings::default(),
         )
     }
 
@@ -2019,12 +2191,14 @@ mod tests {
                 egress: Some(egress_access()),
                 ..Grants::default()
             },
-            &[
-                declared("HTTP_PROXY", "http://elsewhere.invalid:3128", Some(false)),
-                declared("https_proxy", "http://elsewhere.invalid:3128", Some(false)),
-                declared("NO_PROXY", "*", Some(false)),
-            ],
-            None,
+            &declaring(
+                vec![
+                    declared("HTTP_PROXY", "http://elsewhere.invalid:3128", Some(false)),
+                    declared("https_proxy", "http://elsewhere.invalid:3128", Some(false)),
+                    declared("NO_PROXY", "*", Some(false)),
+                ],
+                None,
+            ),
         );
 
         assert_eq!(
