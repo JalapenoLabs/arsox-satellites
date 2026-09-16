@@ -157,10 +157,11 @@ endpoint asking for the tool and the Rust SDK answering it on the relay:
 | session id | none sent, none needed | none sent, none needed |
 | the tool reaches the model as | `mcp__<server>__<tool>`, instructions in the system prompt | a `mcp__<server>` namespace whose description is the instructions |
 | `tools/call` round trip | verified | verified, with `model = "gpt-5"`; the default model calls tools through code mode, which a stub cannot drive |
-| tool call timeout | about 27 hours by default; nothing set | 60 seconds by default; `tool_timeout_sec` set to 960 |
+| tool call timeout | about 27 hours by default; nothing set | 60 seconds by its documentation; `tool_timeout_sec` set to 960 |
 
-Measured with a delayed answer: Codex honouring `tool_timeout_sec` past its
-60 second default. See the roadmap for what is not measured.
+Measured with a delayed answer: Codex honouring `tool_timeout_sec` by returning
+a 75 second answer. The 60 second default is Codex's documented value and was
+not measured here. See the roadmap for what else is not measured.
 
 ### Authorization
 
@@ -172,8 +173,9 @@ a process holding the URL lacks. No budget is checked: a tool call spends no
 tokens.
 
 An unknown or revoked token, and a server name the grant does not carry, both
-answer `404`. Model traffic gets a `401` for a bad token, and a `401` from an MCP
-server sends Claude's client off to OAuth discovery, a detour to nowhere. A `404`
+answer `404`. Model traffic gets a `401` for a bad token, but under the MCP
+authorization spec a `401` from an MCP server tells the client to start OAuth
+discovery, a detour to nowhere. A `404`
 still says nothing about whether a token was ever real.
 
 **The token is visible to the agent**, as it already was: it is in

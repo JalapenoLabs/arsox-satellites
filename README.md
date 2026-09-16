@@ -545,6 +545,23 @@ Each control gets its own code, because "denied" without saying which gate close
 | `STREAM_SEQUENCE_EXPIRED` | no | the requested `from_sequence` is older than retained history |
 | `STREAM_SUBPROTOCOL_UNSUPPORTED` | no | the requested WebSocket subprotocol is not offered |
 
+**Workspace files**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `WORKSPACE_PATH_INVALID` | no | the path is empty, absolute, holds an empty, `.`, or `..` component, or crosses a symbolic link |
+| `WORKSPACE_FILE_NOT_FOUND` | no | nothing exists at the path |
+| `WORKSPACE_FILE_NOT_REGULAR` | no | a directory, FIFO, socket, or device sits at the path or in its way |
+| `WORKSPACE_FILE_TOO_LARGE` | no | the declared length is over the 5 GiB write cap |
+| `WORKSPACE_FILE_LENGTH_REQUIRED` | no | a write arrived without `Content-Length` |
+
+**Tool relay**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `RELAY_CLIENT_REPLACED` | no | a newer relay connection for the thread took over; the close reason on code `4000` |
+| `RELAY_NOT_DECLARED` | no | the thread declared no `relayed_mcp_servers`, so there is no relay to open; stop reconnecting |
+
 **Internal**
 
 | Code | Retryable | Meaning |
