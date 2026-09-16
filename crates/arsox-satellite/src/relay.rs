@@ -452,3 +452,182 @@ fn deadline_timestamp() -> Timestamp {
         ..now
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arsox_sdk::proto::relay::v1::{ToolContent, tool_content};
+
+    const THREAD: &str = "019fd32f-a25f-7611-a4fe-c93cc2a6d782";
+
+    fn request() -> CallRequest {
+        CallRequest {
+            server: "elysium".to_owned(),
+            tool: "upload".to_owned(),
+            arguments_json: "{}".to_owned(),
+            turn_id: "the-turn".to_owned(),
+        }
+    }
+
+    /// The next frame a connection was sent, which must be one.
+    async fn next_frame(connection: &mut Connection) -> satellite_relay_frame::Frame {
+        match connection.outbound.recv().await {
+            Some(Outbound::Frame(SatelliteRelayFrame { frame: Some(frame) })) => frame,
+            other => panic!("expected a frame, got {other:?}"),
+        }
+    }
+
+    fn answer(call_id: String) -> ToolResult {
+        ToolResult {
+            call_id,
+            content: vec![ToolContent {
+                kind: Some(tool_content::Kind::Text("done".to_owned())),
+            }],
+            is_error: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_call_with_no_client_attached_fails_at_once() {
+        assert_eq!(
+            Hub::new().call(THREAD, request()).await,
+            Err(CallFailure::NotConnected)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_call_is_answered_by_the_attached_client() {
+        let hub = Hub::new();
+        let mut connection = hub.attach(THREAD);
+
+        let answering = async {
+            let satellite_relay_frame::Frame::Call(call) = next_frame(&mut connection).await else {
+                panic!("expected a call");
+            };
+            assert!(call.deadline.is_some());
+            hub.deliver(THREAD, connection.id, answer(call.call_id));
+        };
+
+        let (outcome, ()) = tokio::join!(hub.call(THREAD, request()), answering);
+
+        assert_eq!(outcome.expect("answered").content.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_replaced_client_is_told_and_its_calls_fail_as_disconnected() {
+        let hub = Hub::new();
+        let mut first = hub.attach(THREAD);
+
+        let replacing = async {
+            let satellite_relay_frame::Frame::Call(call) = next_frame(&mut first).await else {
+                panic!("expected a call");
+            };
+
+            let second = hub.attach(THREAD);
+
+            // The replaced socket's late answer must not reach anything.
+            hub.deliver(THREAD, first.id, answer(call.call_id));
+            second
+        };
+
+        let (outcome, second) = tokio::join!(hub.call(THREAD, request()), replacing);
+
+        assert_eq!(outcome, Err(CallFailure::Disconnected));
+        assert!(matches!(
+            first.outbound.recv().await,
+            Some(Outbound::Replaced)
+        ));
+
+        // The replaced socket winding down cannot detach its replacement.
+        hub.detach(THREAD, first.id);
+        let mut second = second;
+        let calling = hub.call(THREAD, request());
+        let answering = async {
+            let satellite_relay_frame::Frame::Call(call) = next_frame(&mut second).await else {
+                panic!("expected a call");
+            };
+            hub.deliver(THREAD, second.id, answer(call.call_id));
+        };
+        let (outcome, ()) = tokio::join!(calling, answering);
+        outcome.expect("the replacement still answers");
+    }
+
+    #[tokio::test]
+    async fn a_client_that_detaches_fails_its_calls() {
+        let hub = Hub::new();
+        let mut connection = hub.attach(THREAD);
+
+        let detaching = async {
+            next_frame(&mut connection).await;
+            hub.detach(THREAD, connection.id);
+        };
+
+        let (outcome, ()) = tokio::join!(hub.call(THREAD, request()), detaching);
+
+        assert_eq!(outcome, Err(CallFailure::Disconnected));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_call_past_its_deadline_times_out_and_the_client_is_told() {
+        let hub = Hub::new();
+        let mut connection = hub.attach(THREAD);
+
+        // The paused clock jumps to the deadline once nothing else can run.
+        assert_eq!(
+            hub.call(THREAD, request()).await,
+            Err(CallFailure::TimedOut)
+        );
+
+        let satellite_relay_frame::Frame::Call(call) = next_frame(&mut connection).await else {
+            panic!("expected the call first");
+        };
+        let satellite_relay_frame::Frame::Cancelled(cancelled) = next_frame(&mut connection).await
+        else {
+            panic!("expected the cancellation");
+        };
+        assert_eq!(cancelled.call_id, call.call_id);
+
+        // An answer arriving after the cancellation is ignored rather than
+        // delivered to anything.
+        hub.deliver(THREAD, connection.id, answer(call.call_id));
+    }
+
+    #[tokio::test]
+    async fn an_agent_that_stops_waiting_cancels_its_call() {
+        let hub = Hub::new();
+        let mut connection = hub.attach(THREAD);
+
+        {
+            let calling = hub.call(THREAD, request());
+            tokio::pin!(calling);
+
+            // Polled until the call is sent, then dropped, which is what a
+            // harness hanging up on its request does to the handler.
+            tokio::select! {
+                _never = &mut calling => panic!("nothing answers this call"),
+                frame = next_frame(&mut connection) => {
+                    assert!(matches!(frame, satellite_relay_frame::Frame::Call(_)));
+                }
+            }
+        }
+
+        assert!(matches!(
+            next_frame(&mut connection).await,
+            satellite_relay_frame::Frame::Cancelled(_)
+        ));
+    }
+
+    #[test]
+    fn in_flight_calls_are_counted_until_they_end() {
+        let calls = InFlight::default();
+        assert!(!calls.any());
+
+        let first = calls.clone().start();
+        let second = calls.start();
+        drop(first);
+        assert!(calls.any());
+
+        drop(second);
+        assert!(!calls.any());
+    }
+}

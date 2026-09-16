@@ -98,3 +98,6 @@ arsox-sdk = { path = "../arsox-sdk", features = [ "client" ] }
 # A real WebSocket client, so the stream is tested over an actual socket rather
 # than against a reimplementation of the handler's own logic.
 tokio-tungstenite = "0.24"
+# A paused clock, so a fifteen minute relay deadline is asserted in milliseconds
+# rather than slept through.
+tokio = { workspace = true, features = [ "test-util" ] }

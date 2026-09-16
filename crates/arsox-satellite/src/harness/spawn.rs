@@ -782,8 +782,15 @@ impl Grants {
 pub struct ModelAccess {
     pub base_url: String,
 
-    /// Identifies the turn. Not a credential: it authorizes nothing beyond
-    /// spending this turn's budget through this satellite.
+    /// Identifies the turn, and authorizes exactly what the turn's agents may
+    /// already do: spend this turn's budget through this satellite, and call
+    /// the relayed MCP tools its thread declared. It dies with the turn.
+    ///
+    /// It is carried in `base_url` too, and that URL reaches the agent in its
+    /// environment, in Codex's command line, and, for a thread with relayed
+    /// servers, in Claude's `--mcp-config`. The agent holding it is the point,
+    /// so it is not treated as a secret kept from the agent; it is masked where
+    /// the satellite renders the key it is sent as.
     pub token: String,
 }
 

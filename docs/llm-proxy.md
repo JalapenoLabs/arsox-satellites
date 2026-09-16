@@ -38,6 +38,13 @@ would be enough to route, so requiring both is deliberate: a process that
 guessed the URL still needs the token, and the CLI has a credential-shaped thing
 to send so it does not refuse to start.
 
+**The grant also authorizes the thread's relayed MCP servers**, served on this
+listener at `/t/{token}/mcp/{server}`. There the path token alone admits a
+request: neither CLI sends an API key to an MCP server, and no budget is checked
+because a tool call spends no tokens. An unknown token answers 404 rather than
+401, because a 401 sends Claude's MCP client off to OAuth discovery. See
+[the relay doc](./relay.md#the-agent-facing-mcp-server).
+
 **Revocation is a guard, not a call.** A turn can leave the runner by
 cancellation, by a harness crash, or by any error added later, and each of those
 is a path somebody could forget. `RevokeOnDrop` withdraws the grant however the

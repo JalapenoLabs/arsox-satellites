@@ -22,6 +22,13 @@ Repo directory names **do** come from the client, through `Repo.name`, and are
 checked the same way. An undeclared name is derived from the URL: the last
 segment, minus any `.git`, for both HTTPS and SSH remotes.
 
+A host application moves single files in and out of a thread's workspace with
+`GET` and `PUT /v1/threads/{id}/files/{path}`. Every component of the path is
+opened relative to the directory above it without following a link, because the
+workspace is the agent's and a path checked and then opened by name is a race
+the agent can win. A write lands through a staged file renamed into place and
+belongs to the agent account. See [the relay doc](./relay.md#workspace-files).
+
 ## Provisioning runs once, in the background
 
 Provisioning happens at thread creation and never again. Later turns inherit the

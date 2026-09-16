@@ -50,6 +50,17 @@
 //! `config.toml` the CLI reads. That is stated in `docs/harness.md` rather than
 //! papered over.
 //!
+//! # Relayed servers ride the same launch
+//!
+//! A thread's `relayed_mcp_servers` are served by the satellite itself, at
+//! `{grant}/mcp/{name}` on the proxy the harness already reaches its model
+//! through, and answered by the host application over the relay. See
+//! [`crate::relay`]. To a CLI each is one more streamable HTTP server with no
+//! headers, so it is rendered beside the declared ones, counts toward
+//! `--strict-mcp-config`, and is allowed by name under the narrow posture. The
+//! two lists share one namespace. Codex is also told to wait on a relayed call
+//! for longer than the relay's own deadline, because its default is a minute.
+//!
 //! # Validation happens twice
 //!
 //! [`refusal`] runs at thread creation, where the caller is still listening and

@@ -1436,6 +1436,23 @@ A server is a remote MCP server spoken to over **streamable HTTP**. A local stdi
 
 The details, and the reasoning behind each, are in [the harness doc](./docs/harness.md#mcp-servers-reach-the-harness-as-launch-arguments).
 
+### Relayed tools
+
+Your application may not be reachable from its satellites at all. It can still give the agents tools of its own: declare them in `relayedMcpServers`, open the thread's relay socket, and answer each call as it arrives. The satellite serves the tools to both harnesses on its own loopback proxy, lists them from the settings, and sends every call down the socket your application opened, so nothing ever has to dial in.
+
+```rust
+let mut relay = thread.relay().await?;
+let answerer = relay.answerer();
+
+while let Some(event) = relay.next().await {
+    if let RelayEvent::Call(call) = event? {
+        answerer.answer(run_tool(call).await).await?;
+    }
+}
+```
+
+One client is attached per thread and a new one replaces the old. A call made while nothing is attached fails at once as a tool error the agent reads, a call waits at most 15 minutes, and nothing is replayed. Files move the same direction: `read_file` and `write_file` stream one file out of or into the workspace, refusing any path that crosses a symbolic link. See [the relay doc](./docs/relay.md).
+
 Arsox also provides its own MCP tools to the agents, including team spawn and despawn, `request_integration`, and `override_redaction`.
 
 ## Order of operations
