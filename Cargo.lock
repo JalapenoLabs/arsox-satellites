@@ -67,6 +67,7 @@ dependencies = [
 name = "arsox-sdk"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "futures-util",
  "prost",
  "prost-types",

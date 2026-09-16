@@ -128,6 +128,26 @@ pub enum ErrorCode {
     StreamSubprotocolUnsupported = 1102,
     /// Internal. A satellite bug. `details.trace_id` identifies the run.
     Internal = 1200,
+    /// Workspace files, read and written through /v1/threads/{id}/files.
+    ///
+    /// The path was absolute, empty, held a `.` or `..` component or a NUL, or
+    /// crossed a symbolic link. The workspace belongs to the agent, so a link is
+    /// refused rather than followed wherever the agent pointed it.
+    WorkspacePathInvalid = 1300,
+    WorkspaceFileNotFound = 1301,
+    /// Something is at the path and it is not a regular file: a directory, a
+    /// socket, a FIFO, or a device.
+    WorkspaceFileNotRegular = 1302,
+    /// A write declared or streamed more than the satellite accepts in one request.
+    WorkspaceFileTooLarge = 1303,
+    /// A write arrived without a Content-Length, which is what lets the size
+    /// ceiling be checked before a byte is written.
+    WorkspaceFileLengthRequired = 1304,
+    /// Tool relay, over /v1/threads/{id}/relay.
+    ///
+    /// Another client attached to the same thread's relay. Carried in the close
+    /// reason of the socket it replaced.
+    RelayClientReplaced = 1400,
 }
 impl ErrorCode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -195,6 +215,12 @@ impl ErrorCode {
             Self::StreamSequenceExpired => "ERROR_CODE_STREAM_SEQUENCE_EXPIRED",
             Self::StreamSubprotocolUnsupported => "ERROR_CODE_STREAM_SUBPROTOCOL_UNSUPPORTED",
             Self::Internal => "ERROR_CODE_INTERNAL",
+            Self::WorkspacePathInvalid => "ERROR_CODE_WORKSPACE_PATH_INVALID",
+            Self::WorkspaceFileNotFound => "ERROR_CODE_WORKSPACE_FILE_NOT_FOUND",
+            Self::WorkspaceFileNotRegular => "ERROR_CODE_WORKSPACE_FILE_NOT_REGULAR",
+            Self::WorkspaceFileTooLarge => "ERROR_CODE_WORKSPACE_FILE_TOO_LARGE",
+            Self::WorkspaceFileLengthRequired => "ERROR_CODE_WORKSPACE_FILE_LENGTH_REQUIRED",
+            Self::RelayClientReplaced => "ERROR_CODE_RELAY_CLIENT_REPLACED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -259,6 +285,12 @@ impl ErrorCode {
             "ERROR_CODE_STREAM_SEQUENCE_EXPIRED" => Some(Self::StreamSequenceExpired),
             "ERROR_CODE_STREAM_SUBPROTOCOL_UNSUPPORTED" => Some(Self::StreamSubprotocolUnsupported),
             "ERROR_CODE_INTERNAL" => Some(Self::Internal),
+            "ERROR_CODE_WORKSPACE_PATH_INVALID" => Some(Self::WorkspacePathInvalid),
+            "ERROR_CODE_WORKSPACE_FILE_NOT_FOUND" => Some(Self::WorkspaceFileNotFound),
+            "ERROR_CODE_WORKSPACE_FILE_NOT_REGULAR" => Some(Self::WorkspaceFileNotRegular),
+            "ERROR_CODE_WORKSPACE_FILE_TOO_LARGE" => Some(Self::WorkspaceFileTooLarge),
+            "ERROR_CODE_WORKSPACE_FILE_LENGTH_REQUIRED" => Some(Self::WorkspaceFileLengthRequired),
+            "ERROR_CODE_RELAY_CLIENT_REPLACED" => Some(Self::RelayClientReplaced),
             _ => None,
         }
     }

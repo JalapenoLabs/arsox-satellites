@@ -38,6 +38,25 @@ pub struct WorkspaceFile {
     #[prost(message, optional, tag="4")]
     pub modified_at: ::core::option::Option<super::super::common::v1::Timestamp>,
 }
+/// PUT /v1/threads/{id}/files/{path}
+///
+/// The request body is the file's bytes as `application/octet-stream`, and this
+/// is the response. The bytes are written beside the destination and renamed
+/// over it, so a reader never sees a half-written file.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct WorkspaceFileWritten {
+    /// Path relative to the thread's workspace root, as it was requested.
+    #[prost(string, tag="1")]
+    pub path: ::prost::alloc::string::String,
+    #[prost(uint64, tag="2")]
+    pub size_bytes: u64,
+    /// Hex-encoded SHA-256 of the bytes written, so the writer can verify them.
+    #[prost(string, tag="3")]
+    pub sha256: ::prost::alloc::string::String,
+    /// Whether the write created the file rather than replacing one.
+    #[prost(bool, tag="4")]
+    pub created: bool,
+}
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListArtifactsRequest {
     #[prost(string, tag="1")]

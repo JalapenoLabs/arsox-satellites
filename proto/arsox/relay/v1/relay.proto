@@ -1,0 +1,94 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+// Tool calls the host application answers, over a socket it opens itself.
+//
+// A host application frequently cannot be reached from a satellite: it has no
+// public address, and nothing between the two was arranged for the satellite to
+// dial in. What always works is the direction every other SDK call already
+// travels, host to satellite. So the host application opens
+// `GET /v1/threads/{id}/relay` as a WebSocket, the satellite sends each tool call
+// an agent makes down it as a `SatelliteRelayFrame`, and the host answers up the
+// same socket with a `ClientRelayFrame`.
+//
+// Frames are binary protobuf, one message per WebSocket frame, behind the same
+// bearer check as every other authenticated route.
+//
+// The relay is live only. A call is meaningful while an agent is waiting on it,
+// so nothing is persisted and nothing is replayed to a client that attaches
+// later: a call made while no client is attached fails at once, as a tool error
+// the agent reads.
+package arsox.relay.v1;
+
+import "arsox/common/v1/common.proto";
+
+// One tool call an agent made, for the host application to answer.
+message ToolCall {
+  // Unique per call. The answer names it, and a result naming an id the
+  // satellite is not waiting on is ignored.
+  string call_id = 1;
+
+  // The relayed server's name, as declared in `relayed_mcp_servers`.
+  string server = 2;
+
+  // The tool's name within that server.
+  string tool = 3;
+
+  // The arguments the agent passed, as a JSON object. The satellite does not
+  // validate them against the tool's schema; the host application does.
+  string arguments_json = 4;
+
+  // The turn whose agent made the call.
+  string turn_id = 5;
+
+  // The team member that made the call, when one is attributable.
+  optional string member_id = 6;
+
+  // When the satellite stops waiting. Past it the agent is told the call timed
+  // out, a `ToolCallCancelled` is sent, and a late result is ignored.
+  arsox.common.v1.Timestamp deadline = 7;
+}
+
+// One piece of what a tool returned.
+message ToolContent {
+  oneof kind {
+    string text = 1;
+  }
+}
+
+// The host application's answer to one call.
+message ToolResult {
+  // The `ToolCall.call_id` this answers.
+  string call_id = 1;
+
+  repeated ToolContent content = 2;
+
+  // Whether the tool failed. The content is still shown to the agent, which is
+  // how it learns why.
+  bool is_error = 3;
+}
+
+// The satellite stopped waiting for a call.
+//
+// Sent when the deadline passed, the turn ended, or the agent hung up. A result
+// sent for it afterwards is ignored, so a host application can stop any work it
+// still has in flight for the call.
+message ToolCallCancelled {
+  string call_id = 1;
+}
+
+// Everything the satellite sends down the relay.
+message SatelliteRelayFrame {
+  oneof frame {
+    ToolCall call = 1;
+    ToolCallCancelled cancelled = 2;
+  }
+}
+
+// Everything the host application sends up the relay.
+message ClientRelayFrame {
+  oneof frame {
+    ToolResult result = 1;
+  }
+}

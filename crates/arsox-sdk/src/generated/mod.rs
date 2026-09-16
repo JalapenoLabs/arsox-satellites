@@ -49,6 +49,13 @@ pub mod arsox {
             // @@protoc_insertion_point(arsox.interaction.v1)
         }
     }
+    pub mod relay {
+        // @@protoc_insertion_point(attribute:arsox.relay.v1)
+        pub mod v1 {
+            include!("arsox/relay/v1/arsox.relay.v1.rs");
+            // @@protoc_insertion_point(arsox.relay.v1)
+        }
+    }
     pub mod satellite {
         // @@protoc_insertion_point(attribute:arsox.satellite.v1)
         pub mod v1 {

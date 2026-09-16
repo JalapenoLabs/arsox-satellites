@@ -916,6 +916,47 @@ pub struct McpServer {
     #[prost(map="string, message", tag="3")]
     pub headers: ::std::collections::HashMap<::prost::alloc::string::String, super::super::common::v1::Secret>,
 }
+/// A server whose tools the host application answers itself, over the relay.
+///
+/// A `McpServer` is something the satellite reaches. A relayed server runs the
+/// other way: the host application is frequently not reachable from a satellite
+/// at all, so it declares the tools here and answers each call over the relay
+/// socket it opened to the satellite, `/v1/threads/{id}/relay`. The satellite
+/// serves the server to the agents on its own loopback proxy, lists the tools
+/// from these settings, and forwards each call to whichever client is attached.
+///
+/// Names share one namespace with `mcp_servers`: the two lists may not declare
+/// the same name, ignoring case.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelayedMcpServer {
+    /// Same rule as `McpServer.name`: 1 to 64 of `A-Z a-z 0-9 _ -`, not starting
+    /// with `arsox`.
+    #[prost(string, tag="1")]
+    pub name: ::prost::alloc::string::String,
+    /// Shown to the agent when its harness connects, saying what the server is
+    /// for. Empty sends none.
+    #[prost(string, tag="2")]
+    pub instructions: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag="3")]
+    pub tools: ::prost::alloc::vec::Vec<RelayedTool>,
+}
+/// One tool a relayed server offers.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct RelayedTool {
+    /// 1 to 64 of `A-Z a-z 0-9 _ -`, unique within its server.
+    #[prost(string, tag="1")]
+    pub name: ::prost::alloc::string::String,
+    /// What the model reads to decide when to call the tool.
+    #[prost(string, tag="2")]
+    pub description: ::prost::alloc::string::String,
+    /// A JSON Schema object describing the tool's arguments, serialized as JSON.
+    ///
+    /// A string rather than a `google.protobuf.Struct`, because a schema is a JSON
+    /// document the host application already holds as JSON, and a round trip
+    /// through Struct turns every integer into a float.
+    #[prost(string, tag="3")]
+    pub input_schema_json: ::prost::alloc::string::String,
+}
 /// Headless Chrome, so frontend and QA work is not done blind.
 ///
 /// EXPERIMENTAL. Opt in, default off. Each member gets its own browser context
@@ -1056,5 +1097,9 @@ pub struct ThreadSettings {
     /// what happened first, which is why it is a choice rather than a behavior.
     #[prost(bool, tag="27")]
     pub resume_interrupted_turns: bool,
+    /// Servers whose tools the host application answers over the relay socket.
+    /// See RelayedMcpServer.
+    #[prost(message, repeated, tag="28")]
+    pub relayed_mcp_servers: ::prost::alloc::vec::Vec<RelayedMcpServer>,
 }
 // @@protoc_insertion_point(module)
