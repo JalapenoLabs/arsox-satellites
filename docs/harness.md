@@ -594,7 +594,9 @@ registry token for exactly the reason the agent that runs it later does.
 ### MCP servers reach the harness as launch arguments
 
 A thread's `mcp_servers` are remote MCP servers spoken to over streamable HTTP,
-and a thread may declare several. Both harnesses host all of them at once, and
+and a thread may declare several. Its `relayed_mcp_servers` are served by the
+satellite itself and answered by the host application over the relay; see
+[the relay doc](./relay.md). Both harnesses host all of them at once, and
 `src/harness/mcp.rs` is the one place that decides what a server must look like
 and how each CLI is told about it.
 
@@ -602,6 +604,7 @@ and how each CLI is told about it.
 |---|---|---|
 | the servers | `--mcp-config '{"mcpServers":{...}}'`, one JSON argument | `-c mcp_servers.<name>.url="<url>"` per server |
 | a header | `"<header>": "${MCP_HEADER_SECRET_<s>_<h>}"` inside that JSON | `-c mcp_servers.<name>.env_http_headers={"<header>"="MCP_HEADER_SECRET_<s>_<h>"}` |
+| a relayed server | `"url": "<grant>/mcp/<name>"`, no headers | the same URL, plus `-c mcp_servers.<name>.tool_timeout_sec=960` |
 | other servers | refused with `--strict-mcp-config` | merged, see below |
 
 **Header values never reach argv.** A command line is readable by anything on
@@ -660,6 +663,34 @@ Refused at thread creation with `REQUEST_FIELD_INVALID`, naming
 
 A header whose `Secret` carries no value is sent empty, the reading a declared
 variable gets.
+
+A name is unique ignoring case across `mcp_servers` and `relayed_mcp_servers`
+together, because both reach the agent as `mcp__<name>`. The rules a relayed
+server and its tools follow are in [the relay doc](./relay.md#declaring-relayed-tools).
+
+#### Relayed servers
+
+`<grant>` is the turn's proxy base URL, the one `ANTHROPIC_BASE_URL` and the
+Codex provider already carry, so the agent reaches a relayed server where it
+reaches its model: on loopback, exempt from the egress proxy, under the turn's
+token. A relayed server counts as a declared server everywhere else in this
+section: it switches on `--strict-mcp-config`, and under `NONE` or `CUSTOM` it is
+allowed by name with `mcp__<name>`.
+
+**Codex is told to wait longer.** Codex 0.147.0 abandons an MCP call after 60
+seconds, and one relayed call can carry a file transfer for up to the relay's
+15 minute deadline. `tool_timeout_sec` is set a minute past that deadline, so
+the answer the agent reads is the satellite's, which says what happened, rather
+than the CLI's generic timeout. Claude's default wait is about 27 hours and
+needs nothing.
+
+**The turn token now also reaches Claude's argv**, inside `--mcp-config`. It
+was already on Codex's, in the provider base URL, and in the agent's
+environment. It authorizes only what the turn's agents may already do and is
+revoked when the turn ends.
+
+A launch with no model grant, which no turn the runner drives is, cannot serve
+relayed servers and skips them with a `harness.mcp.relayed_ungranted` warning.
 
 The spawn applies the per-server rule again and skips a server that fails it,
 with a `harness.mcp.refused` warning, for settings stored before the API checked.

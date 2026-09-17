@@ -12,6 +12,13 @@ happened.
 Frames are binary protobuf. Both sit behind the same bearer check as every other
 authenticated route, so a socket is not a way around it.
 
+A third socket, `wss /v1/threads/{id}/relay`, carries frames both ways, because
+it is how a host application answers the tool calls its agents make. It is live
+only, with none of the replay below. See [the relay doc](./relay.md).
+
+Close reasons carry the contract code as the contract spells it, such as
+`STREAM_CONSUMER_LAGGED`.
+
 ## Subscribe before you replay
 
 This is the one ordering that matters, and getting it backwards produces a bug

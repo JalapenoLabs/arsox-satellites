@@ -104,4 +104,8 @@ message ThreadSettings {
   // an unattended fleet and the wrong one when a human would want to look at
   // what happened first, which is why it is a choice rather than a behavior.
   bool resume_interrupted_turns = 27;
+
+  // Servers whose tools the host application answers over the relay socket.
+  // See RelayedMcpServer.
+  repeated RelayedMcpServer relayed_mcp_servers = 28;
 }

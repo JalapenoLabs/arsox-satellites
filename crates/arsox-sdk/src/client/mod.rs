@@ -17,9 +17,16 @@
 //! survive a replica dying mid-turn.
 
 mod error;
+mod files;
+mod relay;
 
 pub use error::{Error, Result};
+#[doc(inline)]
+pub use files::{ByteStream, FileDownload};
+#[doc(inline)]
+pub use relay::{Relay, RelayAnswerer, RelayEvent};
 
+use crate::proto::artifact::v1::WorkspaceFileWritten;
 use crate::proto::common::v1::{PageRequest, Timestamp};
 use crate::proto::error::v1::Error as ContractError;
 use crate::proto::error::v1::ErrorCode;
@@ -61,11 +68,25 @@ const PROTOBUF: &str = "application/protobuf";
 /// has not necessarily subscribed and should not have to.
 const RESULT_POLL: Duration = Duration::from_millis(500);
 
-#[derive(Debug)]
 struct Inner {
     base: String,
     secret: String,
     http: reqwest::Client,
+}
+
+/// Written by hand so the bearer secret is never rendered.
+///
+/// Every handle the SDK hands out, [`Satellite`], [`Threads`], [`ThreadHandle`],
+/// [`TurnHandle`], and [`ThreadCreated`], reaches the secret through this, so
+/// a derived `Debug` on any of them prints what this one prints. The secret
+/// commands the whole satellite, and a handle formatted into a log line is the
+/// likeliest place for it to leak. Per M-PUBLIC-DEBUG.
+impl std::fmt::Debug for Inner {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Inner")
+            .field("base", &self.base)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A connection to one satellite.
@@ -211,43 +232,100 @@ impl Satellite {
 
         decode(response).await
     }
+
+    /// Opens an authenticated WebSocket to a path on this satellite.
+    ///
+    /// Both sockets sit behind the same bearer check as every other route, and a
+    /// browser-style WebSocket cannot set a header, which is why this goes
+    /// through tungstenite's request rather than a URL.
+    async fn open_socket(
+        &self,
+        path_and_query: &str,
+    ) -> Result<
+        tokio_tungstenite::WebSocketStream<
+            tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+        >,
+    > {
+        let base = self
+            .inner
+            .base
+            .replacen("https://", "wss://", 1)
+            .replacen("http://", "ws://", 1);
+
+        let mut request =
+            tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
+                format!("{base}{path_and_query}"),
+            )
+            .map_err(|error| Error::transport(error.to_string()))?;
+        request.headers_mut().insert(
+            "Authorization",
+            format!("Bearer {}", self.inner.secret)
+                .parse()
+                .map_err(|_invalid| Error::transport("the secret is not a valid header value"))?,
+        );
+
+        let (socket, _response) = tokio_tungstenite::connect_async(request)
+            .await
+            .map_err(|error| refused_handshake(&error))?;
+
+        Ok(socket)
+    }
+}
+
+/// The error a failed WebSocket handshake carries.
+///
+/// A satellite refuses a socket before the upgrade with an ordinary contract
+/// error, such as `THREAD_NOT_FOUND` or `RELAY_NOT_DECLARED`, so the body is
+/// read for one. Reporting every refusal as a transport failure would mark a
+/// permanent refusal retryable and send a client reconnecting forever.
+fn refused_handshake(error: &tokio_tungstenite::tungstenite::Error) -> Error {
+    let tokio_tungstenite::tungstenite::Error::Http(response) = error else {
+        return Error::transport(error.to_string());
+    };
+
+    response
+        .body()
+        .as_deref()
+        .and_then(|body| ContractError::decode(body).ok())
+        .map_or_else(
+            || Error::transport(format!("the satellite answered {}", response.status())),
+            Error::contract,
+        )
 }
 
 /// Decodes a response, turning a contract error into an [`Error`].
 async fn decode<M: prost::Message + Default>(response: reqwest::Response) -> Result<M> {
-    let status = response.status();
+    if !response.status().is_success() {
+        return Err(failure(response).await);
+    }
+
     let body = response
         .bytes()
         .await
         .map_err(|error| Error::transport(error.to_string()))?;
 
-    if status.is_success() {
-        return M::decode(body).map_err(|error| {
-            Error::transport(format!(
-                "the satellite sent an undecodable response: {error}"
-            ))
-        });
-    }
+    M::decode(body).map_err(|error| {
+        Error::transport(format!(
+            "the satellite sent an undecodable response: {error}"
+        ))
+    })
+}
+
+/// The error an unsuccessful response carries.
+async fn failure(response: reqwest::Response) -> Error {
+    let status = response.status();
+
+    let body = match response.bytes().await {
+        Ok(body) => body,
+        Err(error) => return Error::transport(error.to_string()),
+    };
 
     // Every failure on every transport is the same shape, so an error body that
     // will not decode means something other than a satellite answered.
-    ContractError::decode(body)
-        .map_or_else(
-            |_undecodable| Error::transport(format!("the satellite answered {status}")),
-            Error::contract,
-        )
-        .pipe_err()
-}
-
-/// Turns an error value into the `Err` arm, for readability at the call site.
-trait PipeErr {
-    fn pipe_err<T>(self) -> Result<T>;
-}
-
-impl PipeErr for Error {
-    fn pipe_err<T>(self) -> Result<T> {
-        Err(self)
-    }
+    ContractError::decode(body).map_or_else(
+        |_undecodable| Error::transport(format!("the satellite answered {status}")),
+        Error::contract,
+    )
 }
 
 /// Emits a one-time compatibility warning.
@@ -702,31 +780,13 @@ impl ThreadHandle {
     /// Returns an error when the socket cannot be opened, including when the
     /// requested sequence is older than retained history.
     pub async fn events_from(&self, from_sequence: u64) -> Result<EventStream> {
-        let base = self
+        let socket = self
             .satellite
-            .inner
-            .base
-            .replacen("https://", "wss://", 1)
-            .replacen("http://", "ws://", 1);
-
-        let url = format!(
-            "{base}/v1/threads/{}/stream?from_sequence={from_sequence}",
-            self.thread_id
-        );
-
-        let mut request =
-            tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(url)
-                .map_err(|error| Error::transport(error.to_string()))?;
-        request.headers_mut().insert(
-            "Authorization",
-            format!("Bearer {}", self.satellite.inner.secret)
-                .parse()
-                .map_err(|_invalid| Error::transport("the secret is not a valid header value"))?,
-        );
-
-        let (socket, _response) = tokio_tungstenite::connect_async(request)
-            .await
-            .map_err(|error| Error::transport(error.to_string()))?;
+            .open_socket(&format!(
+                "/v1/threads/{}/stream?from_sequence={from_sequence}",
+                self.thread_id
+            ))
+            .await?;
 
         // Boxed and pinned so the stream a caller receives is Unpin and can be
         // polled with an ordinary .
@@ -753,6 +813,168 @@ impl ThreadHandle {
                 Err(error) => Some(Err(Error::transport(error.to_string()))),
             }
         })))
+    }
+
+    /// Attaches to this thread's tool relay, to answer its relayed MCP tools.
+    ///
+    /// The thread's `relayed_mcp_servers` are served to its agents by the
+    /// satellite, and every call they make arrives on the returned [`Relay`].
+    /// One client is attached per thread: attaching replaces whichever client
+    /// was attached before, and a call made while none is attached fails at once
+    /// as a tool error the agent reads. See the [`relay`] module for the whole
+    /// protocol and an example.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the thread is unknown or the socket cannot be
+    /// opened.
+    pub async fn relay(&self) -> Result<Relay> {
+        let socket = self
+            .satellite
+            .open_socket(&format!("/v1/threads/{}/relay", self.thread_id))
+            .await?;
+
+        Ok(Relay::new(socket))
+    }
+
+    /// Streams a file out of this thread's workspace.
+    ///
+    /// `path` is relative to the workspace root and `/`-separated, such as
+    /// `repos/api/dist/report.pdf`. The satellite refuses to cross a symbolic
+    /// link on the way, because the workspace is the agent's and a link there
+    /// points wherever the agent chose.
+    ///
+    /// ```no_run
+    /// # async fn run(thread: arsox_sdk::client::ThreadHandle) -> arsox_sdk::client::Result<()> {
+    /// use futures_util::StreamExt as _;
+    ///
+    /// let download = thread.read_file("repos/api/dist/report.pdf").await?;
+    /// println!("{} bytes", download.content_length());
+    ///
+    /// let mut body = download.into_body();
+    /// while let Some(chunk) = body.next().await {
+    ///     let chunk = chunk?;
+    ///     // Write `chunk` wherever the file is going.
+    /// #   drop(chunk);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `WORKSPACE_PATH_INVALID` for an absolute path, a `.` or `..`
+    /// component, or a path through a symbolic link;
+    /// `WORKSPACE_FILE_NOT_FOUND` when nothing is there;
+    /// `WORKSPACE_FILE_NOT_REGULAR` for a directory or anything else that is not
+    /// a regular file; and an error when the thread is unknown or the satellite
+    /// is unreachable.
+    pub async fn read_file(&self, path: &str) -> Result<FileDownload> {
+        let url = files::file_url(&self.satellite.inner.base, &self.thread_id, path)?;
+
+        let response = self
+            .satellite
+            .inner
+            .http
+            .get(url)
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.satellite.inner.secret),
+            )
+            .send()
+            .await
+            .map_err(|error| Error::transport(error.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(failure(response).await);
+        }
+
+        let Some(content_length) = response.content_length() else {
+            return Err(Error::transport(
+                "the satellite sent a file without saying how long it is",
+            ));
+        };
+
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+
+        let body = response
+            .bytes_stream()
+            .map(|chunk| chunk.map_err(|error| Error::transport(error.to_string())));
+
+        Ok(FileDownload::new(
+            content_length,
+            content_type,
+            Box::pin(body),
+        ))
+    }
+
+    /// Streams a file into this thread's workspace, replacing any file there.
+    ///
+    /// `path` is relative to the workspace root, and missing directories on the
+    /// way are created. The bytes are written beside the destination and renamed
+    /// over it once all `content_length` of them have arrived, so the agent never
+    /// reads a half-written file. The new file belongs to the agent's account.
+    ///
+    /// `content_length` must be the exact number of bytes `body` yields. It is
+    /// sent ahead of the body so the satellite can refuse a file over its size
+    /// ceiling before a byte is written, and a body that yields a different
+    /// number of bytes fails the write rather than leaving a truncated file.
+    ///
+    /// ```no_run
+    /// # async fn run(thread: arsox_sdk::client::ThreadHandle) -> arsox_sdk::client::Result<()> {
+    /// let contents = bytes::Bytes::from_static(b"hello");
+    /// let body = futures_util::stream::iter([Ok::<_, std::io::Error>(contents)]);
+    ///
+    /// let written = thread.write_file("inbox/hello.txt", 5, body).await?;
+    /// assert_eq!(written.size_bytes, 5);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `WORKSPACE_PATH_INVALID` for an absolute path, a `.` or `..`
+    /// component, or a path through a symbolic link;
+    /// `WORKSPACE_FILE_NOT_REGULAR` when a directory or other non-file is at the
+    /// path or in the way of it; `WORKSPACE_FILE_TOO_LARGE` over the satellite's
+    /// ceiling; and an error when the body fails, the thread is unknown, or the
+    /// satellite is unreachable.
+    pub async fn write_file<Body, Failure>(
+        &self,
+        path: &str,
+        content_length: u64,
+        body: Body,
+    ) -> Result<WorkspaceFileWritten>
+    where
+        Body: Stream<Item = std::result::Result<bytes::Bytes, Failure>> + Send + 'static,
+        Failure: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
+    {
+        let url = files::file_url(&self.satellite.inner.base, &self.thread_id, path)?;
+
+        let response = self
+            .satellite
+            .inner
+            .http
+            .put(url)
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.satellite.inner.secret),
+            )
+            .header("Accept", PROTOBUF)
+            .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
+            // Stated explicitly. A streamed body is otherwise sent chunked, with
+            // no length for the satellite to check its ceiling against.
+            .header(reqwest::header::CONTENT_LENGTH, content_length)
+            .body(reqwest::Body::wrap_stream(body))
+            .send()
+            .await
+            .map_err(|error| Error::transport(error.to_string()))?;
+
+        decode(response).await
     }
 }
 
@@ -840,5 +1062,55 @@ impl TurnHandle {
         response
             .turn
             .ok_or_else(|| Error::transport("the satellite cancelled a turn without saying so"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_handle_renders_the_bearer_secret() {
+        // The secret commands the whole satellite, and a handle formatted into a
+        // log line is the likeliest way for it to leave the process.
+        const SECRET: &str = "the-satellite-bearer-secret";
+
+        let satellite = Satellite {
+            inner: Arc::new(Inner {
+                base: "http://satellite:8080".to_owned(),
+                secret: SECRET.to_owned(),
+                http: reqwest::Client::new(),
+            }),
+        };
+        let thread = ThreadHandle {
+            satellite: satellite.clone(),
+            thread_id: "019fd32f-a25f-7611-a4fe-c93cc2a6d782".to_owned(),
+        };
+        let turn = TurnHandle {
+            satellite: satellite.clone(),
+            thread_id: thread.thread_id.clone(),
+            turn_id: "the-turn".to_owned(),
+            turn: Turn::default(),
+        };
+
+        let rendered = [
+            format!("{satellite:?}"),
+            format!("{:?}", satellite.threads()),
+            format!("{thread:?}"),
+            format!("{turn:?}"),
+            format!(
+                "{:?}",
+                ThreadCreated {
+                    thread: Thread::default(),
+                    deduplicated: false,
+                    handle: thread.clone(),
+                }
+            ),
+        ];
+
+        for rendering in rendered {
+            assert!(!rendering.contains(SECRET), "{rendering}");
+            assert!(rendering.contains("satellite:8080"), "{rendering}");
+        }
     }
 }

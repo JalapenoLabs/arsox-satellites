@@ -512,6 +512,13 @@ struct TurnContext {
     /// The turn's admission to the model, minted once and revoked once.
     access: ModelAccess,
 
+    /// How many relayed tool calls this turn's agents are waiting on.
+    ///
+    /// Counted by the proxy, read by the idle bound: an agent waiting on the
+    /// host application produces no output, and that silence is bounded by the
+    /// relay's own deadline rather than mistaken for a harness that stopped.
+    relay_calls: crate::relay::InFlight,
+
     /// The turn's admission to the network, when its thread declared a web
     /// policy.
     ///
@@ -1138,20 +1145,22 @@ impl Runner {
         // they are tried. Resolving the list here rather than one destination is
         // what makes failover the proxy's to perform.
         let route = crate::proxy::failover::Route::resolve(&claimed.settings.models);
-        let token = self
-            .gates
-            .model
-            .grant(
-                crate::proxy::Grant::new(
-                    &claimed.turn.thread_id,
-                    &claimed.turn.turn_id,
-                    route,
-                    Arc::clone(&meter),
-                )
-                .bounded(bounds.llm_request)
-                .reporting_to(incidents.clone()),
-            )
-            .await;
+
+        // The relayed MCP servers ride on the grant, because the grant is what
+        // authorizes an agent to reach them. The count of calls waiting on them
+        // is taken before the grant is handed over, so the idle bound below can
+        // read what the proxy counts.
+        let grant = crate::proxy::Grant::new(
+            &claimed.turn.thread_id,
+            &claimed.turn.turn_id,
+            route,
+            Arc::clone(&meter),
+        )
+        .bounded(bounds.llm_request)
+        .reporting_to(incidents.clone())
+        .relaying(claimed.settings.relayed_mcp_servers.clone());
+        let relay_calls = grant.relay_calls();
+        let token = self.gates.model.grant(grant).await;
 
         // Absent for a thread that declared no web policy, which is what leaves
         // that thread's agents reaching the network exactly as they do today.
@@ -1162,6 +1171,7 @@ impl Runner {
             working_dir: prepared.working_dir,
             shims: prepared.shims,
             _scanner: prepared.scanner,
+            relay_calls,
             access: ModelAccess {
                 base_url: self.gates.model.base_url_for(&token),
                 token: token.clone(),
@@ -1736,6 +1746,7 @@ impl Runner {
             redactor,
             crossings,
             incidents,
+            relay_calls,
             ..
         } = context;
         let harness = *harness;
@@ -1845,15 +1856,17 @@ impl Runner {
                 }
 
                 () = tokio::time::sleep_until(silent_since + idle_bound) => {
-                    tracing::warn!(
-                        event.name = "turn.harness.idle",
-                        thread.id = thread_id,
-                        turn.id = turn_id,
-                        harness.idle_seconds = idle_bound.as_secs(),
-                        "the harness produced no output for {{harness.idle_seconds}} \
-                         seconds and is being torn down",
-                    );
+                    // An agent waiting on a relayed tool call is silent because
+                    // it was asked to wait, and the call ends at the relay's own
+                    // deadline. The silence is measured again from now, so a
+                    // harness that stays quiet after the call ends is still
+                    // noticed.
+                    if relay_calls.any() {
+                        silent_since = tokio::time::Instant::now();
+                        continue;
+                    }
 
+                    report_idle(thread_id, turn_id, idle_bound);
                     consumed.idle = true;
                     break;
                 }
@@ -2336,6 +2349,18 @@ impl Runner {
             );
         }
     }
+}
+
+/// Says that a harness went silent past its idle bound and is being torn down.
+fn report_idle(thread_id: &str, turn_id: &str, idle_bound: std::time::Duration) {
+    tracing::warn!(
+        event.name = "turn.harness.idle",
+        thread.id = thread_id,
+        turn.id = turn_id,
+        harness.idle_seconds = idle_bound.as_secs(),
+        "the harness produced no output for {{harness.idle_seconds}} seconds and is being torn \
+         down",
+    );
 }
 
 /// Maps one native line with the mapper the thread's harness speaks.

@@ -545,6 +545,23 @@ Each control gets its own code, because "denied" without saying which gate close
 | `STREAM_SEQUENCE_EXPIRED` | no | the requested `from_sequence` is older than retained history |
 | `STREAM_SUBPROTOCOL_UNSUPPORTED` | no | the requested WebSocket subprotocol is not offered |
 
+**Workspace files**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `WORKSPACE_PATH_INVALID` | no | the path is empty, absolute, holds an empty, `.`, or `..` component, or crosses a symbolic link |
+| `WORKSPACE_FILE_NOT_FOUND` | no | nothing exists at the path |
+| `WORKSPACE_FILE_NOT_REGULAR` | no | a directory, FIFO, socket, or device sits at the path or in its way |
+| `WORKSPACE_FILE_TOO_LARGE` | no | the declared length is over the 5 GiB write cap |
+| `WORKSPACE_FILE_LENGTH_REQUIRED` | no | a write arrived without `Content-Length` |
+
+**Tool relay**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `RELAY_CLIENT_REPLACED` | no | a newer relay connection for the thread took over; the close reason on code `4000` |
+| `RELAY_NOT_DECLARED` | no | the thread declared no `relayed_mcp_servers`, so there is no relay to open; stop reconnecting |
+
 **Internal**
 
 | Code | Retryable | Meaning |
@@ -1435,6 +1452,23 @@ A server is a remote MCP server spoken to over **streamable HTTP**. A local stdi
 **A thread with a web policy can reach its servers without naming them.** Each server's exact host is admitted to the [egress proxy](./docs/enforcement.md#a-declared-mcp-servers-host-is-admitted-exactly), and nothing beneath it. A server on loopback never goes through the proxy at all.
 
 The details, and the reasoning behind each, are in [the harness doc](./docs/harness.md#mcp-servers-reach-the-harness-as-launch-arguments).
+
+### Relayed tools
+
+Your application may not be reachable from its satellites at all. It can still give the agents tools of its own: declare them in `relayedMcpServers`, open the thread's relay socket, and answer each call as it arrives. The satellite serves the tools to both harnesses on its own loopback proxy, lists them from the settings, and sends every call down the socket your application opened, so nothing ever has to dial in.
+
+```rust
+let mut relay = thread.relay().await?;
+let answerer = relay.answerer();
+
+while let Some(event) = relay.next().await {
+    if let RelayEvent::Call(call) = event? {
+        answerer.answer(run_tool(call).await).await?;
+    }
+}
+```
+
+One client is attached per thread and a new one replaces the old. A call made while nothing is attached fails at once as a tool error the agent reads, a call waits at most 15 minutes, and nothing is replayed. Files move the same direction: `read_file` and `write_file` stream one file out of or into the workspace, refusing any path that crosses a symbolic link. See [the relay doc](./docs/relay.md).
 
 Arsox also provides its own MCP tools to the agents, including team spawn and despawn, `request_integration`, and `override_redaction`.
 

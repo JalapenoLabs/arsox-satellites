@@ -529,6 +529,7 @@ pub fn scrub_settings(settings: &mut ThreadSettings) {
         prompt: _,
         pull_requests: _,
         redaction: _,
+        relayed_mcp_servers: _,
         resource_limits: _,
         resume_interrupted_turns: _,
         self_review: _,

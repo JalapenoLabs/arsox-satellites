@@ -56,6 +56,15 @@ futures-util.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+# A file written into a workspace is answered with its SHA-256, so the host
+# application that sent it can verify what arrived.
+sha2 = "0.10"
+
+# The media type a workspace file is served with, guessed from its extension.
+# A table of extensions is the most thoroughly solved problem there is, and a
+# hand-written one would be the one that forgot `.webp`.
+mime_guess = "2"
+
 # Notably faster along allocating hot paths, which for this process means
 # request decoding and event fan-out. Per M-MIMALLOC-APPS.
 [target.'cfg(not(target_env = "msvc"))'.dependencies]
@@ -67,6 +76,13 @@ mimalloc = "0.1"
 # and getting that wrong is undefined behavior rather than a wrong number.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+# Workspace files are resolved one component at a time from a directory handle,
+# refusing every symbolic link, because the workspace belongs to the agent and a
+# path checked and then opened by name is a race the agent can win. `openat`,
+# `mkdirat`, `renameat`, and `fchown` are safe calls here rather than `unsafe`
+# ones through `libc`.
+rustix = { version = "1", features = [ "fs" ] }
 
 # The same measurement on the platform the satellite is developed on.
 [target.'cfg(windows)'.dependencies]
@@ -82,3 +98,6 @@ arsox-sdk = { path = "../arsox-sdk", features = [ "client" ] }
 # A real WebSocket client, so the stream is tested over an actual socket rather
 # than against a reimplementation of the handler's own logic.
 tokio-tungstenite = "0.24"
+# A paused clock, so a fifteen minute relay deadline is asserted in milliseconds
+# rather than slept through.
+tokio = { workspace = true, features = [ "test-util" ] }

@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/settings/v1/tool.proto.
  */
 export const file_arsox_settings_v1_tool: GenFile = /*@__PURE__*/
-  fileDesc("ChxhcnNveC9zZXR0aW5ncy92MS90b29sLnByb3RvEhFhcnNveC5zZXR0aW5ncy52MSKrAQoJTWNwU2VydmVyEgwKBG5hbWUYASABKAkSCwoDdXJsGAIgASgJEjoKB2hlYWRlcnMYAyADKAsyKS5hcnNveC5zZXR0aW5ncy52MS5NY3BTZXJ2ZXIuSGVhZGVyc0VudHJ5GkcKDEhlYWRlcnNFbnRyeRILCgNrZXkYASABKAkSJgoFdmFsdWUYAiABKAsyFy5hcnNveC5jb21tb24udjEuU2VjcmV0OgI4ASJoCg5WaXJ0dWFsQnJvd3NlchIPCgdlbmFibGVkGAEgASgIEhUKDWFsbG93ZWRfcm9sZXMYAiADKAkSLgoJdmlld3BvcnRzGAMgAygOMhsuYXJzb3guc2V0dGluZ3MudjEuVmlld3BvcnQqZAoIVmlld3BvcnQSGAoUVklFV1BPUlRfVU5TUEVDSUZJRUQQABITCg9WSUVXUE9SVF9NT0JJTEUQARITCg9WSUVXUE9SVF9UQUJMRVQQAhIUChBWSUVXUE9SVF9ERVNLVE9QEANCiAEKFWNvbS5hcnNveC5zZXR0aW5ncy52MUIJVG9vbFByb3RvUAGiAgNBU1iqAhFBcnNveC5TZXR0aW5ncy5WMcoCEUFyc294XFNldHRpbmdzXFYx4gIdQXJzb3hcU2V0dGluZ3NcVjFcR1BCTWV0YWRhdGHqAhNBcnNveDo6U2V0dGluZ3M6OlYxYgZwcm90bzM", [file_arsox_common_v1_common]);
+  fileDesc("ChxhcnNveC9zZXR0aW5ncy92MS90b29sLnByb3RvEhFhcnNveC5zZXR0aW5ncy52MSKrAQoJTWNwU2VydmVyEgwKBG5hbWUYASABKAkSCwoDdXJsGAIgASgJEjoKB2hlYWRlcnMYAyADKAsyKS5hcnNveC5zZXR0aW5ncy52MS5NY3BTZXJ2ZXIuSGVhZGVyc0VudHJ5GkcKDEhlYWRlcnNFbnRyeRILCgNrZXkYASABKAkSJgoFdmFsdWUYAiABKAsyFy5hcnNveC5jb21tb24udjEuU2VjcmV0OgI4ASJlChBSZWxheWVkTWNwU2VydmVyEgwKBG5hbWUYASABKAkSFAoMaW5zdHJ1Y3Rpb25zGAIgASgJEi0KBXRvb2xzGAMgAygLMh4uYXJzb3guc2V0dGluZ3MudjEuUmVsYXllZFRvb2wiSwoLUmVsYXllZFRvb2wSDAoEbmFtZRgBIAEoCRITCgtkZXNjcmlwdGlvbhgCIAEoCRIZChFpbnB1dF9zY2hlbWFfanNvbhgDIAEoCSJoCg5WaXJ0dWFsQnJvd3NlchIPCgdlbmFibGVkGAEgASgIEhUKDWFsbG93ZWRfcm9sZXMYAiADKAkSLgoJdmlld3BvcnRzGAMgAygOMhsuYXJzb3guc2V0dGluZ3MudjEuVmlld3BvcnQqZAoIVmlld3BvcnQSGAoUVklFV1BPUlRfVU5TUEVDSUZJRUQQABITCg9WSUVXUE9SVF9NT0JJTEUQARITCg9WSUVXUE9SVF9UQUJMRVQQAhIUChBWSUVXUE9SVF9ERVNLVE9QEANCiAEKFWNvbS5hcnNveC5zZXR0aW5ncy52MUIJVG9vbFByb3RvUAGiAgNBU1iqAhFBcnNveC5TZXR0aW5ncy5WMcoCEUFyc294XFNldHRpbmdzXFYx4gIdQXJzb3hcU2V0dGluZ3NcVjFcR1BCTWV0YWRhdGHqAhNBcnNveDo6U2V0dGluZ3M6OlYxYgZwcm90bzM", [file_arsox_common_v1_common]);
 
 /**
  * A server whose tools the agents may use.
@@ -53,6 +53,90 @@ export type McpServer = Message<"arsox.settings.v1.McpServer"> & {
  */
 export const McpServerSchema: GenMessage<McpServer> = /*@__PURE__*/
   messageDesc(file_arsox_settings_v1_tool, 0);
+
+/**
+ * A server whose tools the host application answers itself, over the relay.
+ *
+ * A `McpServer` is something the satellite reaches. A relayed server runs the
+ * other way: the host application is frequently not reachable from a satellite
+ * at all, so it declares the tools here and answers each call over the relay
+ * socket it opened to the satellite, `/v1/threads/{id}/relay`. The satellite
+ * serves the server to the agents on its own loopback proxy, lists the tools
+ * from these settings, and forwards each call to whichever client is attached.
+ *
+ * Names share one namespace with `mcp_servers`: the two lists may not declare
+ * the same name, ignoring case.
+ *
+ * @generated from message arsox.settings.v1.RelayedMcpServer
+ */
+export type RelayedMcpServer = Message<"arsox.settings.v1.RelayedMcpServer"> & {
+  /**
+   * Same rule as `McpServer.name`: 1 to 64 of `A-Z a-z 0-9 _ -`, not starting
+   * with `arsox`.
+   *
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * Shown to the agent when its harness connects, saying what the server is
+   * for. Empty sends none.
+   *
+   * @generated from field: string instructions = 2;
+   */
+  instructions: string;
+
+  /**
+   * @generated from field: repeated arsox.settings.v1.RelayedTool tools = 3;
+   */
+  tools: RelayedTool[];
+};
+
+/**
+ * Describes the message arsox.settings.v1.RelayedMcpServer.
+ * Use `create(RelayedMcpServerSchema)` to create a new message.
+ */
+export const RelayedMcpServerSchema: GenMessage<RelayedMcpServer> = /*@__PURE__*/
+  messageDesc(file_arsox_settings_v1_tool, 1);
+
+/**
+ * One tool a relayed server offers.
+ *
+ * @generated from message arsox.settings.v1.RelayedTool
+ */
+export type RelayedTool = Message<"arsox.settings.v1.RelayedTool"> & {
+  /**
+   * 1 to 64 of `A-Z a-z 0-9 _ -`, unique within its server.
+   *
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * What the model reads to decide when to call the tool.
+   *
+   * @generated from field: string description = 2;
+   */
+  description: string;
+
+  /**
+   * A JSON Schema object describing the tool's arguments, serialized as JSON.
+   *
+   * A string rather than a `google.protobuf.Struct`, because a schema is a JSON
+   * document the host application already holds as JSON, and a round trip
+   * through Struct turns every integer into a float.
+   *
+   * @generated from field: string input_schema_json = 3;
+   */
+  inputSchemaJson: string;
+};
+
+/**
+ * Describes the message arsox.settings.v1.RelayedTool.
+ * Use `create(RelayedToolSchema)` to create a new message.
+ */
+export const RelayedToolSchema: GenMessage<RelayedTool> = /*@__PURE__*/
+  messageDesc(file_arsox_settings_v1_tool, 2);
 
 /**
  * Headless Chrome, so frontend and QA work is not done blind.
@@ -96,7 +180,7 @@ export type VirtualBrowser = Message<"arsox.settings.v1.VirtualBrowser"> & {
  * Use `create(VirtualBrowserSchema)` to create a new message.
  */
 export const VirtualBrowserSchema: GenMessage<VirtualBrowser> = /*@__PURE__*/
-  messageDesc(file_arsox_settings_v1_tool, 1);
+  messageDesc(file_arsox_settings_v1_tool, 3);
 
 /**
  * @generated from enum arsox.settings.v1.Viewport

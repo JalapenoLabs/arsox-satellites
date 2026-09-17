@@ -59,9 +59,11 @@
 
 use crate::proxy::budget::{Meter, UsageReader};
 use crate::proxy::failover::{Attempt, Destination, GaveUp, Route, Waits};
+use crate::relay::{Hub, InFlight};
 use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::incident::v1::{Disposition, Incident};
+use arsox_sdk::proto::settings::v1::RelayedMcpServer;
 use axum::Router;
 use axum::body::{Body, Bytes};
 use axum::extract::{Path, Request, State};
@@ -143,6 +145,16 @@ pub struct Grant {
 
     /// How this turn waits between two attempts at the same endpoint.
     waits: Waits,
+
+    /// The relayed MCP servers this turn's agents are served under the grant.
+    ///
+    /// Shared rather than copied, because the grant is cloned per request and
+    /// a server's tool list is read, never changed, for the life of the turn.
+    relayed: Arc<Vec<RelayedMcpServer>>,
+
+    /// How many relayed calls this turn's agents are waiting on, which the
+    /// runner reads before deciding a silent harness has stopped.
+    relay_calls: InFlight,
 }
 
 impl Grant {
@@ -160,7 +172,45 @@ impl Grant {
             request_timeout: crate::timeouts::DEFAULT_LLM_REQUEST,
             incidents: nowhere,
             waits: Waits::Sleeping,
+            relayed: Arc::new(Vec::new()),
+            relay_calls: InFlight::default(),
         }
+    }
+
+    /// Serves `servers` to this turn's agents, under this grant's token.
+    ///
+    /// See [`crate::relay::mcp`] for the endpoint.
+    #[must_use]
+    pub fn relaying(mut self, servers: Vec<RelayedMcpServer>) -> Self {
+        self.relayed = Arc::new(servers);
+        self
+    }
+
+    /// The relayed MCP servers this turn's agents are served.
+    #[must_use]
+    pub fn relayed_servers(&self) -> &[RelayedMcpServer] {
+        &self.relayed
+    }
+
+    /// The count of relayed calls this turn's agents are waiting on.
+    ///
+    /// A handle onto one shared count: the runner takes one before granting, and
+    /// every clone of the grant counts into the same number.
+    #[must_use]
+    pub fn relay_calls(&self) -> InFlight {
+        self.relay_calls.clone()
+    }
+
+    /// The thread this grant belongs to.
+    #[must_use]
+    pub fn thread_id(&self) -> &str {
+        &self.thread_id
+    }
+
+    /// The turn this grant belongs to.
+    #[must_use]
+    pub fn turn_id(&self) -> &str {
+        &self.turn_id
     }
 
     /// Bounds each of this turn's requests by `request_timeout`.
@@ -333,6 +383,10 @@ pub struct LlmProxy {
     grants: Arc<RwLock<HashMap<String, Grant>>>,
     client: reqwest::Client,
 
+    /// Where a relayed MCP server's tool calls are sent, shared with the API
+    /// that host applications attach to it through.
+    relay: Hub,
+
     /// Where the harness is pointed. Loopback only: this listener has no
     /// authentication beyond the per-turn token, and it holds a real provider
     /// credential, so it must never be reachable off the container.
@@ -353,10 +407,15 @@ impl std::fmt::Debug for LlmProxy {
 impl LlmProxy {
     /// Binds the proxy to loopback and starts serving.
     ///
+    /// `relay` is where relayed MCP tool calls are sent. The proxy serves those
+    /// servers to the agents because it already holds the one thing that
+    /// authorizes them, the turn's grant, on the one address every harness
+    /// already reaches. See [`crate::relay`].
+    ///
     /// # Errors
     ///
     /// Returns an error when the loopback listener cannot be bound.
-    pub async fn start() -> anyhow::Result<Self> {
+    pub async fn start(relay: Hub) -> anyhow::Result<Self> {
         // Port zero: the operator never configures this and nothing outside the
         // container connects to it, so a fixed port would only be a collision
         // waiting to happen on a host running several satellites.
@@ -372,10 +431,14 @@ impl LlmProxy {
                 // and one of them must not decide the limit for the rest.
                 .timeout(Duration::from_hours(1))
                 .build()?,
+            relay,
             address,
         };
 
+        // The MCP route is matched ahead of the catch-all by being more
+        // specific, so no model API path is shadowed: none begins `mcp/`.
         let router = Router::new()
+            .route("/t/{token}/mcp/{server}", any(relayed_mcp))
             .route("/t/{token}/{*path}", any(forward))
             .with_state(proxy.clone());
 
@@ -505,6 +568,37 @@ async fn forward(
     };
 
     try_endpoints(&proxy.client, &grant, &relayed).await
+}
+
+/// Serves one request to a relayed MCP server under a turn's grant.
+///
+/// **The token in the path is the whole authorization**, unlike model traffic,
+/// which must also present it as an API key. Neither CLI sends a model API key
+/// to an MCP server, and the URL carrying the token reaches the harness by the
+/// same route its model base URL does, so a second carrier would add a header
+/// to configure and nothing a process holding the URL lacks. No budget is
+/// checked either: a tool call spends no tokens.
+///
+/// An unknown or revoked token answers 404 rather than the 401 model traffic
+/// gets. A 401 from an MCP server starts an OAuth discovery in Claude's client,
+/// which is a detour to nowhere, and 404 still says nothing about whether a
+/// token was ever real.
+async fn relayed_mcp(
+    State(proxy): State<LlmProxy>,
+    Path((token, server)): Path<(String, String)>,
+    request: Request,
+) -> Response {
+    let Some(grant) = proxy.grant_for(&token).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let (parts, body) = request.into_parts();
+
+    let Ok(body) = axum::body::to_bytes(body, crate::relay::mcp::MAX_REQUEST_BODY).await else {
+        return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+    };
+
+    crate::relay::mcp::serve(&proxy.relay, &grant, &server, &parts.method, &body).await
 }
 
 /// Walks the turn's endpoints in the declared order until one answers.

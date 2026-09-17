@@ -36,6 +36,26 @@ class McpServer(_message.Message):
     headers: _containers.MessageMap[str, _common_pb2.Secret]
     def __init__(self, name: _Optional[str] = ..., url: _Optional[str] = ..., headers: _Optional[_Mapping[str, _common_pb2.Secret]] = ...) -> None: ...
 
+class RelayedMcpServer(_message.Message):
+    __slots__ = ()
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    INSTRUCTIONS_FIELD_NUMBER: _ClassVar[int]
+    TOOLS_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    instructions: str
+    tools: _containers.RepeatedCompositeFieldContainer[RelayedTool]
+    def __init__(self, name: _Optional[str] = ..., instructions: _Optional[str] = ..., tools: _Optional[_Iterable[_Union[RelayedTool, _Mapping]]] = ...) -> None: ...
+
+class RelayedTool(_message.Message):
+    __slots__ = ()
+    NAME_FIELD_NUMBER: _ClassVar[int]
+    DESCRIPTION_FIELD_NUMBER: _ClassVar[int]
+    INPUT_SCHEMA_JSON_FIELD_NUMBER: _ClassVar[int]
+    name: str
+    description: str
+    input_schema_json: str
+    def __init__(self, name: _Optional[str] = ..., description: _Optional[str] = ..., input_schema_json: _Optional[str] = ...) -> None: ...
+
 class VirtualBrowser(_message.Message):
     __slots__ = ()
     ENABLED_FIELD_NUMBER: _ClassVar[int]

@@ -92,6 +92,43 @@ and on a thread handle. Reaching the rest of the example needs artifacts,
 suggestions, plan approval, question answering, and the settings those features
 carry. The SDK grows to match as the satellite does.
 
+## Relayed tools and workspace files
+
+`ThreadHandle::relay` attaches to a thread's tool relay. The `Relay` it returns
+yields `RelayEvent::Call` and `RelayEvent::Cancelled` from `next`, and
+`Relay::answerer` hands out a cloneable `RelayAnswerer` whose `answer` sends a
+`ToolResult`. Reading and answering are separate so one loop keeps reading while
+calls are answered from whatever tasks handle them, and both halves are `Send`,
+asserted at compile time in the crate rather than discovered in a consumer's
+spawn.
+
+A replaced relay ends with an error whose code is `RELAY_CLIENT_REPLACED`, and a
+thread with nothing to relay is refused with `RELAY_NOT_DECLARED`, which
+`Error::is_relay_not_declared` names because it is permanent: a client that
+meets it should stop reconnecting. **Any socket refused before its upgrade is
+read for the contract error in the refusal**, the event stream included, so a
+permanent refusal is not reported as a retryable transport failure.
+
+`ThreadHandle::read_file` returns a `FileDownload`: the length, known before the
+first byte, a best-effort media type, and the bytes as a pinned stream.
+`ThreadHandle::write_file` takes a path, the exact length, and a stream of
+`Bytes`, and sends the length as `Content-Length` explicitly, because reqwest
+otherwise sends a streamed body chunked and the satellite requires the length to
+check its ceiling first.
+
+**A path with an empty, `.`, or `..` component is refused in the SDK** with
+`WORKSPACE_PATH_INVALID`, before anything is sent. It has to be: the URL crate
+drops a `..` segment rather than encoding it, so `a/../secret` would quietly
+address `secret`. The satellite refuses the same paths itself.
+
+## No handle renders the secret
+
+`Satellite`, `Threads`, `ThreadHandle`, `TurnHandle`, and `ThreadCreated` all
+reach the bearer secret through one inner struct whose `Debug` is written by hand
+and leaves it out, with a test asserting it is absent from every one of them. A
+handle formatted into a log line is the likeliest way for the secret to leave a
+process, and the secret commands the whole satellite.
+
 ## Listings return one page
 
 `threads().list` and `incidents` return the first page rather than every match,
@@ -289,3 +326,5 @@ series follows the runtime it describes.
   satellite is handled rather than surfaced.
 - **`arsox-testkit`**, a fake satellite so a consumer can test their integration
   without running a container.
+- **The relay and the workspace file routes in Node and Python.** Both packages
+  already carry the contract for them; the clients do not call them yet.

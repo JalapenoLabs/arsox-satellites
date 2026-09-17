@@ -213,7 +213,7 @@ async fn start_prepared(
         1,
         Arc::clone(&collector),
         arsox_satellite::harness::runner::Gates {
-            model: arsox_satellite::proxy::LlmProxy::start()
+            model: arsox_satellite::proxy::LlmProxy::start(arsox_satellite::relay::Hub::new())
                 .await
                 .expect("should start the llm proxy"),
             network: arsox_satellite::egress::EgressProxy::start()

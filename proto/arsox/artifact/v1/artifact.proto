@@ -48,6 +48,24 @@ message WorkspaceFile {
   arsox.common.v1.Timestamp modified_at = 4;
 }
 
+// PUT /v1/threads/{id}/files/{path}
+//
+// The request body is the file's bytes as `application/octet-stream`, and this
+// is the response. The bytes are written beside the destination and renamed
+// over it, so a reader never sees a half-written file.
+message WorkspaceFileWritten {
+  // Path relative to the thread's workspace root, as it was requested.
+  string path = 1;
+
+  uint64 size_bytes = 2;
+
+  // Hex-encoded SHA-256 of the bytes written, so the writer can verify them.
+  string sha256 = 3;
+
+  // Whether the write created the file rather than replacing one.
+  bool created = 4;
+}
+
 message ListArtifactsRequest {
   string thread_id = 1;
   arsox.common.v1.PageRequest page = 2;

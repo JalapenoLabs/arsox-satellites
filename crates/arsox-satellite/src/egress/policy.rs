@@ -192,7 +192,7 @@ impl WebPolicy {
         // Already validated at thread creation and again at launch, so a host
         // that will not normalize here is an IPv6 literal, which nothing in the
         // policy can name.
-        let hosts = crate::harness::mcp::Launch::of(mcp_servers)
+        let hosts = crate::harness::mcp::Launch::of(mcp_servers, &[], None)
             .hosts()
             .iter()
             .filter_map(|host| normalized_host(host))

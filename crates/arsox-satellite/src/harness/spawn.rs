@@ -226,7 +226,11 @@ fn claude_command(
         }
     }
 
-    let servers = mcp::Launch::of(&settings.mcp_servers);
+    let servers = mcp::Launch::of(
+        &settings.mcp_servers,
+        &settings.relayed_mcp_servers,
+        grants.model.as_ref().map(|access| access.base_url.as_str()),
+    );
     args.extend(claude_permission_args(
         &posture_for(settings.permissions.as_ref()),
         &servers.names(),
@@ -307,7 +311,11 @@ fn codex_command(
 
     args.push("--json".to_owned());
     args.push("--skip-git-repo-check".to_owned());
-    let servers = mcp::Launch::of(&settings.mcp_servers);
+    let servers = mcp::Launch::of(
+        &settings.mcp_servers,
+        &settings.relayed_mcp_servers,
+        grants.model.as_ref().map(|access| access.base_url.as_str()),
+    );
     args.extend(codex_permission_args(&posture_for(
         settings.permissions.as_ref(),
     )));
@@ -774,8 +782,15 @@ impl Grants {
 pub struct ModelAccess {
     pub base_url: String,
 
-    /// Identifies the turn. Not a credential: it authorizes nothing beyond
-    /// spending this turn's budget through this satellite.
+    /// Identifies the turn, and authorizes exactly what the turn's agents may
+    /// already do: spend this turn's budget through this satellite, and call
+    /// the relayed MCP tools its thread declared. It dies with the turn.
+    ///
+    /// It is carried in `base_url` too, and that URL reaches the agent in its
+    /// environment, in Codex's command line, and, for a thread with relayed
+    /// servers, in Claude's `--mcp-config`. The agent holding it is the point,
+    /// so it is not treated as a secret kept from the agent; it is masked where
+    /// the satellite renders the key it is sent as.
     pub token: String,
 }
 

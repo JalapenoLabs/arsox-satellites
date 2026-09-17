@@ -37,6 +37,18 @@ class WorkspaceFile(_message.Message):
     modified_at: _common_pb2.Timestamp
     def __init__(self, path: _Optional[str] = ..., size_bytes: _Optional[int] = ..., is_artifact: _Optional[bool] = ..., modified_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ...) -> None: ...
 
+class WorkspaceFileWritten(_message.Message):
+    __slots__ = ()
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    SHA256_FIELD_NUMBER: _ClassVar[int]
+    CREATED_FIELD_NUMBER: _ClassVar[int]
+    path: str
+    size_bytes: int
+    sha256: str
+    created: bool
+    def __init__(self, path: _Optional[str] = ..., size_bytes: _Optional[int] = ..., sha256: _Optional[str] = ..., created: _Optional[bool] = ...) -> None: ...
+
 class ListArtifactsRequest(_message.Message):
     __slots__ = ()
     THREAD_ID_FIELD_NUMBER: _ClassVar[int]

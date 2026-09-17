@@ -118,6 +118,36 @@ enum ErrorCode {
 
   // Internal. A satellite bug. `details.trace_id` identifies the run.
   ERROR_CODE_INTERNAL = 1200;
+
+  // Workspace files, read and written through /v1/threads/{id}/files.
+  //
+  // The path was absolute, empty, held a `.` or `..` component or a NUL, or
+  // crossed a symbolic link. The workspace belongs to the agent, so a link is
+  // refused rather than followed wherever the agent pointed it.
+  ERROR_CODE_WORKSPACE_PATH_INVALID = 1300;
+  ERROR_CODE_WORKSPACE_FILE_NOT_FOUND = 1301;
+
+  // Something is at the path and it is not a regular file: a directory, a
+  // socket, a FIFO, or a device.
+  ERROR_CODE_WORKSPACE_FILE_NOT_REGULAR = 1302;
+
+  // A write declared or streamed more than the satellite accepts in one request.
+  ERROR_CODE_WORKSPACE_FILE_TOO_LARGE = 1303;
+
+  // A write arrived without a Content-Length, which is what lets the size
+  // ceiling be checked before a byte is written.
+  ERROR_CODE_WORKSPACE_FILE_LENGTH_REQUIRED = 1304;
+
+  // Tool relay, over /v1/threads/{id}/relay.
+  //
+  // Another client attached to the same thread's relay. Carried in the close
+  // reason of the socket it replaced.
+  ERROR_CODE_RELAY_CLIENT_REPLACED = 1400;
+
+  // The thread declared no `relayed_mcp_servers`, so its relay has nothing to
+  // carry. Refused before the upgrade, and permanent: a thread's settings do not
+  // change, so reconnecting cannot succeed.
+  ERROR_CODE_RELAY_NOT_DECLARED = 1401;
 }
 
 // The single error shape, on every transport.

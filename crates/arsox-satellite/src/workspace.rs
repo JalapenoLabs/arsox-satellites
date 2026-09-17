@@ -47,6 +47,7 @@
 //! create request has long since answered, which is precisely why incidents
 //! exist.
 
+pub mod files;
 mod instructions;
 mod repos;
 

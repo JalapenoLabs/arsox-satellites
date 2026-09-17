@@ -139,7 +139,9 @@ async fn post_completion(base_url: &str, token: &str) -> reqwest::Response {
 #[tokio::test]
 async fn the_real_credential_is_attached_and_the_agents_token_never_leaves() {
     let (upstream_url, provider) = stub_upstream().await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
@@ -172,7 +174,9 @@ async fn the_real_credential_is_attached_and_the_agents_token_never_leaves() {
 #[tokio::test]
 async fn a_request_carrying_no_valid_token_is_refused() {
     let (upstream_url, provider) = stub_upstream().await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
@@ -208,7 +212,9 @@ async fn a_request_carrying_no_valid_token_is_refused() {
 #[tokio::test]
 async fn a_revoked_token_stops_working_the_moment_its_turn_ends() {
     let (upstream_url, _provider) = stub_upstream().await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
@@ -243,7 +249,9 @@ async fn the_path_token_and_the_presented_key_must_agree() {
     // Routing on the path alone would let a process that guessed a URL spend a
     // turn's budget without ever holding its token.
     let (upstream_url, provider) = stub_upstream().await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
@@ -276,7 +284,9 @@ async fn a_credential_the_agent_supplied_is_replaced_rather_than_passed_along() 
     // the provider, or an agent with a stolen key could spend it through the
     // satellite and inherit the satellite's network access.
     let (upstream_url, provider) = stub_upstream().await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let token = proxy
@@ -341,7 +351,9 @@ async fn the_usage_a_response_reports_is_counted_against_the_turn() {
     // buffering the stream: the whole point of counting here rather than after.
     let (upstream_url, _provider) =
         stub_replying("text/event-stream", &streamed_usage(300, 40)).await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let (meter, _reported) = metered(10_000);
     let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
@@ -369,7 +381,9 @@ async fn a_turn_is_warned_at_eighty_percent_of_its_token_ceiling() {
     // wall, so it has to arrive while the turn is still running.
     let (upstream_url, _provider) =
         stub_replying("text/event-stream", &streamed_usage(700, 100)).await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let (meter, mut reported) = metered(1_000);
     let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
@@ -403,7 +417,9 @@ async fn a_turn_past_its_token_ceiling_is_refused_before_it_reaches_the_provider
     // upstream would be a ceiling that costs exactly as much as no ceiling.
     let (upstream_url, provider) =
         stub_replying("text/event-stream", &streamed_usage(400, 100)).await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let (meter, mut reported) = metered(500);
     let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
@@ -449,7 +465,9 @@ async fn usage_is_counted_from_a_response_that_did_not_stream() {
         r#"{"type":"message","usage":{"input_tokens":90,"output_tokens":10}}"#,
     )
     .await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let (meter, _reported) = metered(10_000);
     let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
@@ -562,7 +580,9 @@ async fn a_request_the_endpoint_never_answers_is_abandoned_at_the_bound() {
     // on the harness, which is the hung thread the whole timeout table exists to
     // prevent.
     let (upstream_url, reached) = stub_that_never_answers().await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let (grant, mut reported) = bounded_grant(route, 300);
@@ -596,7 +616,9 @@ async fn a_response_still_streaming_past_the_bound_is_cut_off() {
     // token a minute for an hour has failed, and a bound on the handshake alone
     // would call that a success.
     let upstream_url = stub_that_stalls_mid_stream().await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let (grant, mut reported) = bounded_grant(route, 500);
@@ -627,7 +649,9 @@ async fn a_request_answered_inside_its_bound_reports_nothing() {
     // A bound that fired on healthy traffic would fill the incident log with the
     // one thing an operator most needs to be able to trust.
     let (upstream_url, _provider) = stub_upstream().await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
     let (grant, mut reported) = bounded_grant(route, 30_000);
@@ -646,7 +670,9 @@ async fn a_turn_that_declared_no_ceiling_is_never_refused() {
     // caller may genuinely mean. Counting must not become refusing on its own.
     let (upstream_url, provider) =
         stub_replying("text/event-stream", &streamed_usage(100_000, 50_000)).await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let meter = Arc::new(Meter::unmetered());
     let route = Route::resolve(&[endpoint_at(&upstream_url, "sk-ant-real-key")]);
@@ -670,7 +696,9 @@ async fn a_formatted_proxy_never_prints_a_live_token() {
     // The grant map is keyed by turn tokens, and a derived Debug would print
     // every one of them into any log line that ever formatted the proxy. The
     // egress proxy renders itself the same way for the same reason.
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
     let token = proxy
         .grant(Grant::new(
             "thread-1",
