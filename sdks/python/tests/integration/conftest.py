@@ -159,6 +159,9 @@ def satellite_url() -> Iterator[str]:
             # CLI.
             "ARSOX_CLAUDE_BIN": str(FAKE_HARNESS_BINARY),
             "ARSOX_FAKE_TRANSCRIPT": str(TRANSCRIPT),
+            # A path nothing is at, so the harness list the suite asserts on does
+            # not depend on whether the host running it has `codex` installed.
+            "ARSOX_CODEX_BIN": str(scratch / "codex-not-installed"),
         },
     )
 

@@ -152,7 +152,10 @@ export async function startSatellite(): Promise<RunningSatellite> {
       ARSOX_COLLECT_INTERVAL: '3600',
       // The stand-in harness, replaying a recorded transcript in place of a CLI.
       ARSOX_CLAUDE_BIN: fakeHarnessBinary,
-      ARSOX_FAKE_TRANSCRIPT: transcript
+      ARSOX_FAKE_TRANSCRIPT: transcript,
+      // A path nothing is at, so the harness list the suite asserts on does not
+      // depend on whether the host running it happens to have `codex` installed.
+      ARSOX_CODEX_BIN: join(scratch, 'codex-not-installed')
     }
   })
 
