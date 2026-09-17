@@ -290,6 +290,31 @@ pub fn give_to_agent(_path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+/// Hands an open file or directory to the agent account, where there is one.
+///
+/// By handle rather than by path, for inodes created inside the agent's own
+/// workspace. A path there can be swapped for a link between creating the inode
+/// and changing its owner, and a root satellite following that link would hand
+/// the agent whatever the link pointed at. A handle refers to the inode that
+/// was created and nothing else.
+///
+/// # Errors
+///
+/// Returns the underlying I/O error when ownership cannot be changed.
+#[cfg(unix)]
+pub fn give_handle_to_agent(handle: impl rustix::fd::AsFd) -> std::io::Result<()> {
+    let Some(account) = descent().account() else {
+        return Ok(());
+    };
+
+    rustix::fs::fchown(
+        handle,
+        Some(rustix::fs::Uid::from_raw(account.uid)),
+        Some(rustix::fs::Gid::from_raw(account.gid)),
+    )
+    .map_err(std::io::Error::from)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

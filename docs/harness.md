@@ -421,6 +421,7 @@ one setting, and two of anything is one more thing that can disagree.
 | `exec: NONE` | `--permission-mode acceptEdits --disallowedTools Bash` | `-c sandbox_mode=workspace-write` |
 | `exec: CUSTOM` | `--permission-mode acceptEdits --allowedTools Bash(cmd),Bash(cmd *)` | `-c sandbox_mode=workspace-write`, and the list is dropped |
 | `allowed_commands` | the same pair of rules, added to whatever `exec` set | not expressible |
+| `mcp_servers`, under `NONE` or `CUSTOM` | `mcp__<name>` per server, added to `--allowedTools` | nothing needed: `approval_policy=never` |
 | always | | `-c approval_policy=never` |
 | `web`, `additional_domains` | none | none |
 | `allow_git_push`, `protected_branches` | none | none |
@@ -432,7 +433,7 @@ for every thread that never asked for a policy. The curated preset list is
 defined in `broker::PRESET_COMMANDS` regardless, so that change has one
 definition to reach for rather than one invented at the time.
 
-Three decisions in that table are worth their reasoning.
+Four decisions in that table are worth their reasoning.
 
 **The default is `bypassPermissions` because the narrower posture protects
 nothing.** The alternative grants the shell and withholds the rest, and an agent
@@ -449,6 +450,14 @@ that allowed `yarn install` means both, and emitting one form would refuse the
 bare invocation of the command it just permitted. The CLI also accepts a `:*`
 prefix form; its own validator calls that legacy, so the wildcard spelling is
 what the satellite emits.
+
+**A declared MCP server is allowed by name under the narrow posture.**
+`acceptEdits` approves edits and nothing else, and a turn under `--print` cannot
+answer the prompt an MCP call raises, so a thread that restricted its shell
+would otherwise have every server it declared refused on first use. The thread
+named the server, which is the decision the rule records; `mcp__<name>` is the
+CLI's rule for every tool one server offers. Under `bypassPermissions` nothing
+needs allowing and no rule is emitted.
 
 **Egress and push policy are not rendered as tool rules.** A push can be spelled
 a dozen ways in argv and a protected ref is frequently not in the argv at all, so
@@ -613,6 +622,111 @@ See [the redaction doc](./redaction.md).
 The same list reaches a repo's setup commands, because `yarn install` needs the
 registry token for exactly the reason the agent that runs it later does.
 
+### MCP servers reach the harness as launch arguments
+
+A thread's `mcp_servers` are remote MCP servers spoken to over streamable HTTP,
+and a thread may declare several. Its `relayed_mcp_servers` are served by the
+satellite itself and answered by the host application over the relay; see
+[the relay doc](./relay.md). Both harnesses host all of them at once, and
+`src/harness/mcp.rs` is the one place that decides what a server must look like
+and how each CLI is told about it.
+
+| | Claude | Codex |
+|---|---|---|
+| the servers | `--mcp-config '{"mcpServers":{...}}'`, one JSON argument | `-c mcp_servers.<name>.url="<url>"` per server |
+| a header | `"<header>": "${MCP_HEADER_SECRET_<s>_<h>}"` inside that JSON | `-c mcp_servers.<name>.env_http_headers={"<header>"="MCP_HEADER_SECRET_<s>_<h>"}` |
+| a relayed server | `"url": "<grant>/mcp/<name>"`, no headers | the same URL, plus `-c mcp_servers.<name>.tool_timeout_sec=960` |
+| other servers | refused with `--strict-mcp-config` | merged, see below |
+
+**Header values never reach argv.** A command line is readable by anything on
+the host that can run `ps`, and a header value is a credential far more often
+than not. So every value travels in the harness's environment under a name the
+satellite assigns, `MCP_HEADER_SECRET_<server>_<header>`, numbered by position
+with headers ordered by name, and the command line names the variable. Both CLIs
+expand the reference into the request they send. That was measured against the
+pinned versions, Claude 2.1.235 and Codex 0.147.0, with a stub server recording
+the headers that arrived, rather than read from a schema.
+
+The variables are applied in the satellite's own layer, after everything the
+thread declared, so a declared variable of the same name cannot replace a value
+the server issued. Every one is `secret`, so none is rendered in a log line that
+formats a command.
+
+**Nothing is written to disk.** Claude reads `--mcp-config` from a string as
+readily as from a file, and a configuration that carries only references has no
+secret for a file to protect. A file would also be something an agent could
+rewrite between the sessions of one turn, since a restart and a checker fix cycle
+each launch the harness again and would load whatever the file then said, with
+the real values expanded into it. An argument cannot be rewritten, and there is
+nothing to clean up when the turn ends.
+
+**What this does not do is keep a value from the agent.** The harness is the
+agent's own process, running as the agent's account, and it must hold a value to
+send it. That is the standing a declared variable has, and it is why every
+header value is also indexed by the thread's redactor: what an agent prints is
+masked on its way out, and a push carrying one is refused. See
+[the redaction doc](./redaction.md#what-counts-as-a-secret).
+
+**A Claude thread that declared servers loads those servers and no others.** A
+Claude session otherwise also loads a repo's own `.mcp.json` and the agent's user
+settings, and under `bypassPermissions` it connects to them without asking: a
+stub server recorded eight requests from a `.mcp.json` it was never told about,
+and none once `--strict-mcp-config` was passed. So a checkout cannot add a server
+the host application never saw. A thread that declared no servers is launched
+without either flag, and keeps whatever its checkout configures.
+
+**Codex has no equivalent switch.** A `-c` override merges into the
+`config.toml` the CLI reads rather than replacing it, so a server an operator
+configured in the agent's own Codex home is loaded alongside the declared ones.
+
+#### What a server must look like
+
+Refused at thread creation with `REQUEST_FIELD_INVALID`, naming
+`settings.mcp_servers` and the server, and never a header value:
+
+| Field | Rule | Why |
+|---|---|---|
+| the list | at most 16 servers, names unique ignoring case | every server lands in one argument, and Linux caps one at 128 KiB |
+| `name` | 1 to 64 of `A-Z a-z 0-9 _ -`, not starting with `arsox` | a dot would nest inside Codex's dotted config path, the name is part of every tool name, and `arsox` is reserved for the tools Arsox offers itself |
+| `url` | `http` or `https`, a host, no userinfo, no `${`, at most 2048 characters | streamable HTTP is the transport served; a credential belongs in a header; Claude would expand `${` from the environment |
+| `headers` | at most 8, names HTTP tokens of at most 128 characters and unique ignoring case | a header name is also a JSON key and a TOML key |
+| a header value | at most 4096 bytes, no line break and no NUL | a line break would split one header into two, and an environment variable cannot carry a NUL |
+
+A header whose `Secret` carries no value is sent empty, the reading a declared
+variable gets.
+
+A name is unique ignoring case across `mcp_servers` and `relayed_mcp_servers`
+together, because both reach the agent as `mcp__<name>`. The rules a relayed
+server and its tools follow are in [the relay doc](./relay.md#declaring-relayed-tools).
+
+#### Relayed servers
+
+`<grant>` is the turn's proxy base URL, the one `ANTHROPIC_BASE_URL` and the
+Codex provider already carry, so the agent reaches a relayed server where it
+reaches its model: on loopback, exempt from the egress proxy, under the turn's
+token. A relayed server counts as a declared server everywhere else in this
+section: it switches on `--strict-mcp-config`, and under `NONE` or `CUSTOM` it is
+allowed by name with `mcp__<name>`.
+
+**Codex is told to wait longer.** Codex 0.147.0 abandons an MCP call after 60
+seconds, and one relayed call can carry a file transfer for up to the relay's
+15 minute deadline. `tool_timeout_sec` is set a minute past that deadline, so
+the answer the agent reads is the satellite's, which says what happened, rather
+than the CLI's generic timeout. Claude's default wait is about 27 hours and
+needs nothing.
+
+**The turn token now also reaches Claude's argv**, inside `--mcp-config`. It
+was already on Codex's, in the provider base URL, and in the agent's
+environment. It authorizes only what the turn's agents may already do and is
+revoked when the turn ends.
+
+A launch with no model grant, which no turn the runner drives is, cannot serve
+relayed servers and skips them with a `harness.mcp.relayed_ungranted` warning.
+
+The spawn applies the per-server rule again and skips a server that fails it,
+with a `harness.mcp.refused` warning, for settings stored before the API checked.
+A name reaches a config key unescaped, so the second gate is load-bearing.
+
 ### Testing it without a model
 
 Two stand-in harnesses replay a recorded transcript in place of a real CLI:
@@ -639,9 +753,10 @@ vocabulary. Replaying a Claude recording through the Codex mapper produces a tur
 made entirely of unrecognized events rather than an obvious failure. Both are set
 once for a process and never change, so neither is a knob.
 
-Two directives report from the child's own seat, which is the only vantage point
-that can answer what the CLI actually got: `[[report_env=NAME]]` for the
-environment, and `[[record_argv=FILE]]` for the command line. Asserting on the
+Three directives report from the child's own seat, which is the only vantage
+point that can answer what the CLI actually got: `[[report_env=NAME]]` and
+`[[record_env=FILE]]` for the environment, and `[[record_argv=FILE]]` for the
+command line. Asserting on the
 satellite's side would be asserting on intent, and "did this turn resume a
 session" is precisely the kind of question that has to be answered by the thing
 that was asked to do it.
@@ -697,3 +812,7 @@ advertised one it cannot run would have a caller learn the truth as
   mean something to Codex rather than being dropped.
 - **Pairing `tool.completed` back to `tool.started`** for the elapsed duration
   and the tool name, neither of which the native result event carries.
+- **A Codex thread held to the MCP servers it declared.** A `-c` override merges
+  into the CLI's own configuration, so the equivalent of Claude's
+  `--strict-mcp-config` means launching Codex against a configuration home the
+  satellite owns rather than the agent's.

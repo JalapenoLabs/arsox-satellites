@@ -97,13 +97,6 @@ message ThreadSettings {
   ResourceLimits resource_limits = 25;
   Timeouts timeouts = 26;
 
-  // What every turn on this thread asks for unless the turn says otherwise.
-  //
-  // The one part of this message a turn may override, because which model
-  // answers is a decision per instruction rather than per thread. See
-  // TurnOverrides.
-  TurnOverrides turn_defaults = 28;
-
   // Restart a turn the satellite interrupted, without waiting to be asked.
   //
   // Default off. When the satellite restarts mid-turn the thread and its
@@ -112,4 +105,15 @@ message ThreadSettings {
   // an unattended fleet and the wrong one when a human would want to look at
   // what happened first, which is why it is a choice rather than a behavior.
   bool resume_interrupted_turns = 27;
+
+  // Servers whose tools the host application answers over the relay socket.
+  // See RelayedMcpServer.
+  repeated RelayedMcpServer relayed_mcp_servers = 28;
+
+  // What every turn on this thread asks for unless the turn says otherwise.
+  //
+  // The one part of this message a turn may override, because which model
+  // answers is a decision per instruction rather than per thread. See
+  // TurnOverrides.
+  TurnOverrides turn_defaults = 29;
 }

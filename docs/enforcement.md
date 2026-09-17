@@ -540,6 +540,7 @@ whole of what it buys.
 | Declared | Gate | Agent environment |
 |---|---|---|
 | nothing at all | no | no proxy variables |
+| `mcp_servers` alone | no | no proxy variables |
 | `additional_domains` alone | yes, on top of the preset | pointed at the proxy |
 | `PRESET`, `ALL`, `NONE`, `CUSTOM` | yes | pointed at the proxy |
 
@@ -580,6 +581,40 @@ configured.
 
 An IPv6 literal destination cannot be allowed, because nothing in the contract can
 name one. It is denied and the incident names the address that was tried.
+
+#### A declared MCP server's host is admitted exactly
+
+A gated thread is admitted to the host of every MCP server it declared, without
+naming that host again in `additional_domains`. The server's URL already says
+which host its agents must reach to use it, and a thread whose allowlist starts
+from `NONE` or `CUSTOM` would otherwise have declared a server its agents could
+never call.
+
+**Exactly that host, and nothing one label deeper.** An entry in
+`additional_domains` is a domain an operator chose to trust, which is what the
+one-label rule reads it as. A server URL names one machine, so reading
+`mcp.example.com` as an entry would also grant `anything.mcp.example.com`, which
+nobody wrote down. The port is not matched, for the reason an entry's is not.
+
+Three limits, each a consequence of the rule rather than an exception to it:
+
+- **Declaring a server does not engage the gate.** A thread with no web policy
+  reaches its servers the way it reaches everything else, unproxied.
+- **A server the launch skips opens no host.** The same per-server rule decides
+  both, in `harness::mcp`, so a server that never reaches the agent never widens
+  what the agent can reach.
+- **An IPv6 literal host is not admitted**, for the reason above.
+
+Both CLIs route their MCP traffic through the proxy variables: measured against
+Claude 2.1.235 and Codex 0.147.0, each sent its MCP requests to a stand-in proxy
+rather than to the server.
+
+**A server on loopback never reaches the proxy.** `NO_PROXY` names `localhost`,
+`127.0.0.1`, and `::1` for every gated agent, so a request to a server spelled
+any of those ways goes straight to it, and the route closure accepts everything
+on loopback. Nothing about a loopback server needs admitting. A server on another
+loopback address, such as `127.0.0.2`, is not in that list, goes through the
+proxy, and is admitted by its host like any other.
 
 #### The preset domain list
 
@@ -877,6 +912,7 @@ a suggestion.
 | pointing a checkout at the hooks it must run | `src/workspace/repos.rs` |
 | the forward proxy, its admissions, and what it refuses | `src/egress.rs` |
 | the preset, the entry rule, and how a policy resolves | `src/egress/policy.rs` |
+| which MCP servers a turn launches with, and their hosts | `src/harness/mcp.rs` |
 | pointing an agent at the proxy, and exempting the model | `src/harness/spawn.rs` |
 | the route closure, as a file rather than a code block | `scripts/close-the-route.sh` |
 
@@ -920,8 +956,10 @@ on Windows. So the layers are split deliberately:
 
   The policy itself is pure and unit-tested everywhere: what each `web` value
   resolves to, that domains are additive on top of it, what an entry matches and
-  refuses to match, that the preset names the forges and refuses every provider
-  host, and that the environment handoff exempts the LLM proxy.
+  refuses to match, that a declared MCP server's host is admitted exactly and
+  never engages the gate on its own, that the preset names the forges and
+  refuses every provider host, and that the environment handoff exempts the LLM
+  proxy.
 
 - **The route closure is not asserted anywhere**, and cannot be from inside a
   test. It is two `iptables` rules in a container run with `NET_ADMIN`, so

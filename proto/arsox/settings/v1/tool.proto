@@ -22,6 +22,45 @@ message McpServer {
   map<string, arsox.common.v1.Secret> headers = 3;
 }
 
+// A server whose tools the host application answers itself, over the relay.
+//
+// A `McpServer` is something the satellite reaches. A relayed server runs the
+// other way: the host application is frequently not reachable from a satellite
+// at all, so it declares the tools here and answers each call over the relay
+// socket it opened to the satellite, `/v1/threads/{id}/relay`. The satellite
+// serves the server to the agents on its own loopback proxy, lists the tools
+// from these settings, and forwards each call to whichever client is attached.
+//
+// Names share one namespace with `mcp_servers`: the two lists may not declare
+// the same name, ignoring case.
+message RelayedMcpServer {
+  // Same rule as `McpServer.name`: 1 to 64 of `A-Z a-z 0-9 _ -`, not starting
+  // with `arsox`.
+  string name = 1;
+
+  // Shown to the agent when its harness connects, saying what the server is
+  // for. Empty sends none.
+  string instructions = 2;
+
+  repeated RelayedTool tools = 3;
+}
+
+// One tool a relayed server offers.
+message RelayedTool {
+  // 1 to 64 of `A-Z a-z 0-9 _ -`, unique within its server.
+  string name = 1;
+
+  // What the model reads to decide when to call the tool.
+  string description = 2;
+
+  // A JSON Schema object describing the tool's arguments, serialized as JSON.
+  //
+  // A string rather than a `google.protobuf.Struct`, because a schema is a JSON
+  // document the host application already holds as JSON, and a round trip
+  // through Struct turns every integer into a float.
+  string input_schema_json = 3;
+}
+
 enum Viewport {
   VIEWPORT_UNSPECIFIED = 0;
   VIEWPORT_MOBILE = 1;

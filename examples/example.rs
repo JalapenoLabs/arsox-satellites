@@ -253,7 +253,7 @@ fn build_settings() -> Result<ThreadSettings> {
          Never use em dashes in user-facing text.\n\
          Update docs/ in the same change as the code.",
     )
-    .mcp_servers([McpServer::builder("internal-search", "https://mcp.internal.jalapenolabs.io/sse")
+    .mcp_servers([McpServer::builder("internal-search", "https://mcp.internal.jalapenolabs.io/mcp")
         .header(
             "Authorization",
             format!("Bearer {}", std::env::var("INTERNAL_MCP_TOKEN")?),

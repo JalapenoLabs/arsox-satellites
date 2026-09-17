@@ -27,6 +27,7 @@ client = [
   "dep:tokio",
   "dep:tokio-tungstenite",
   "dep:futures-util",
+  "dep:bytes",
 ]
 
 [dependencies]
@@ -36,9 +37,14 @@ prost-types.workspace = true
 # The client half. Optional so a satellite can depend on this crate for the
 # contract types alone and never link an HTTP stack it is already serving.
 reqwest = { workspace = true, optional = true }
-tokio = { version = "1", default-features = false, features = [ "time" ], optional = true }
+# `net` names the socket type the relay's two halves share.
+tokio = { version = "1", default-features = false, features = [ "time", "net" ], optional = true }
 tokio-tungstenite = { version = "0.24", features = [ "rustls-tls-webpki-roots" ], optional = true }
-futures-util = { version = "0.3", optional = true }
+# `sink` splits the relay socket so answers can be sent from many tasks at once.
+futures-util = { version = "0.3", features = [ "sink" ], optional = true }
+# File transfers stream `Bytes`, the chunk type reqwest and hyper already speak,
+# so a download can be forwarded into another HTTP body without a copy.
+bytes = { version = "1", optional = true }
 
 [lints]
 workspace = true

@@ -44,6 +44,11 @@
 //!   resumed a session is a fact about what the CLI was asked to do, and the CLI
 //!   is the only thing that can report it. A test names a different file per
 //!   turn so a later spawn does not overwrite the evidence from an earlier one.
+//! - `[[record_env=FILE]]` writes the environment this replay was launched
+//!   with, one `KEY=VALUE` per line, to `FILE` in the working directory. The
+//!   durable twin of `report_env`, for a test that has to read what a variable
+//!   held after the turn is over, such as the MCP header values a launch hands
+//!   over by reference.
 //! - `[[complete=N]]` sends N completion requests through the satellite's own
 //!   proxy before the transcript, exactly as a CLI would. Nothing else in a test
 //!   can make the proxy route a request, so this is the only way to exercise
@@ -197,6 +202,16 @@ async fn main() {
         && let Err(error) = std::fs::write(&file, arguments.join("\n"))
     {
         eprintln!("could not record the command line to {file}: {error}");
+    }
+
+    if let Some(file) = text_directive(&prompt, "record_env") {
+        let environment: Vec<String> = std::env::vars()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect();
+
+        if let Err(error) = std::fs::write(&file, environment.join("\n")) {
+            eprintln!("could not record the environment to {file}: {error}");
+        }
     }
 
     // Before the replay, because a turn that failed to reach a model has nothing

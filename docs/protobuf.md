@@ -39,7 +39,7 @@ proto/
                    prefetch            Prefetch, PrefetchInjection
                    secret              EnvVar, Redaction, RedactionMode, StarCount
                    permission          Permissions, WebAccess, ExecAccess
-                   tool                McpServer, VirtualBrowser, Viewport
+                   tool                McpServer, RelayedMcpServer, RelayedTool, VirtualBrowser, Viewport
                    limits              StreamSettings, ResourceLimits, Timeouts
     thread/v1/     thread              Thread, ThreadState, thread endpoints
     turn/v1/       turn                TurnStatus, Turn, report vocabulary, endpoints
@@ -48,7 +48,8 @@ proto/
     interaction/v1/ question           Question, QuestionSet, QuestionAnswer
                    plan                Plan, PlanDecision
     suggestion/v1/ suggestion          Suggestion, SetupScriptSuggestion
-    artifact/v1/   artifact            Artifact, WorkspaceFile
+    artifact/v1/   artifact            Artifact, WorkspaceFile, WorkspaceFileWritten
+    relay/v1/      relay               ToolCall, ToolResult, the relay socket's frames
     event/v1/      author              AuthorKind, Author
                    agent               agent messages and tool calls
                    team                spawn, despawn, chat, direct messages
@@ -303,7 +304,12 @@ here:
 - **File upload and download** are byte-stream HTTP endpoints, not protobuf
   messages. Framing a 90 MiB artifact as a proto field would mean buffering it
   whole on both ends. `ListArtifacts` and `ListWorkspaceFiles` are the proto
-  half; the transfer itself is `application/octet-stream`.
+  half; the transfer itself is `application/octet-stream`, and a write is
+  answered with `WorkspaceFileWritten`. See [the relay doc](./relay.md#workspace-files).
+- **The relayed MCP servers as the agents see them.** `RelayedMcpServer` is
+  what a thread declares and `arsox.relay.v1` is what travels between the
+  satellite and the host application. The MCP JSON-RPC the harness speaks to
+  the satellite is MCP's own contract, not this one.
 - **The agent-facing MCP tools** (`request_integration`, `override_redaction`,
   team spawn and despawn) are MCP JSON schemas offered to the harnesses. They are
   a different audience with a different contract. Their *effects* appear here, as

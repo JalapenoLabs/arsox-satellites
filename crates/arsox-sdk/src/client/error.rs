@@ -124,15 +124,33 @@ impl Error {
     pub fn is_incompatible(&self) -> bool {
         matches!(self.inner.kind, Kind::Incompatible { .. })
     }
+
+    /// Whether a relay was refused because its thread declared no relayed
+    /// servers.
+    ///
+    /// Permanent: a thread's settings do not change, so a client that meets
+    /// this should stop reconnecting to that thread rather than retry. The code
+    /// is `RELAY_NOT_DECLARED`.
+    #[must_use]
+    pub fn is_relay_not_declared(&self) -> bool {
+        self.code() == Some(ErrorCode::RelayNotDeclared)
+    }
 }
 
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match &self.inner.kind {
             Kind::Contract(error) => {
+                // The contract's own spelling, `WORKSPACE_FILE_NOT_FOUND`, which
+                // is the name a reader can look up and every SDK matches on.
                 let code = ErrorCode::try_from(error.code).map_or_else(
                     |_unknown| format!("code {}", error.code),
-                    |named| format!("{named:?}").to_uppercase(),
+                    |named| {
+                        named
+                            .as_str_name()
+                            .trim_start_matches("ERROR_CODE_")
+                            .to_owned()
+                    },
                 );
                 write!(f, "{code}: {}", error.message)
             }
@@ -159,3 +177,24 @@ impl std::error::Error for Error {}
 
 /// The client's result type.
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_contract_error_renders_its_code_as_the_contract_spells_it() {
+        let error = Error::contract(ContractError {
+            code: ErrorCode::WorkspaceFileNotFound.into(),
+            message: "nothing is there".to_owned(),
+            retryable: false,
+            details: None,
+            trace_id: None,
+        });
+
+        assert_eq!(
+            error.to_string(),
+            "WORKSPACE_FILE_NOT_FOUND: nothing is there"
+        );
+    }
+}

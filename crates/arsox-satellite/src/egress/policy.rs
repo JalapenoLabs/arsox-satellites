@@ -27,8 +27,17 @@
 //! both are read as `example.com` rather than as a literal host no request can
 //! ever match. An entry that cannot be a hostname at all, a URL or a path, is
 //! dropped with a warning: it would otherwise be a lockout with no explanation.
+//!
+//! # A declared MCP server's host is admitted exactly
+//!
+//! A thread that declares an MCP server has already named the host its agents
+//! must reach to use it, so a gated thread is admitted to that host without
+//! naming it again in `additional_domains`. **Exactly that host**, and nothing
+//! one label deeper: the server's URL names one machine rather than a domain an
+//! operator chose to trust, so reading it as an entry would grant every sibling
+//! under it that nobody wrote down.
 
-use arsox_sdk::proto::settings::v1::{Permissions, WebAccess};
+use arsox_sdk::proto::settings::v1::{McpServer, Permissions, WebAccess};
 use std::collections::BTreeSet;
 
 /// The curated host set `WebAccess::PRESET` names.
@@ -87,7 +96,7 @@ pub const PRESET_DOMAINS: &[&str] = &[
 
 /// Which hosts one thread's agents may reach.
 ///
-/// `Only` with an empty set is `WebAccess::NONE`. A second variant meaning the
+/// `Only` with both sets empty is `WebAccess::NONE`. A second variant meaning the
 /// same thing would be a second thing to match on, and every caller that asks
 /// "may this host be reached" gets the same answer from either spelling.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,8 +109,15 @@ pub enum WebPolicy {
     /// satellite gave rather than a gate that was never there.
     Everything,
 
-    /// Only these hosts, matched by the rule in the module docs.
-    Only(BTreeSet<String>),
+    /// Only these hosts.
+    Only {
+        /// Entries matched by the rule in the module docs: exactly, or one label
+        /// deeper.
+        domains: BTreeSet<String>,
+
+        /// Hosts matched exactly and never beneath: every declared MCP server's.
+        hosts: BTreeSet<String>,
+    },
 }
 
 impl WebPolicy {
@@ -127,8 +143,15 @@ impl WebPolicy {
     /// follows. So `PRESET` plus a domain is the preset and that domain, `CUSTOM`
     /// plus domains is those domains alone, and `NONE` plus a domain is a grant
     /// rather than a contradiction to resolve.
+    ///
+    /// Every host in `mcp_servers` is added the same way, exactly, once the gate
+    /// has engaged. Declaring a server does not engage it: a thread that declared
+    /// no web policy reaches its servers the way it reaches everything else.
     #[must_use]
-    pub fn for_thread(permissions: Option<&Permissions>) -> Option<Self> {
+    pub fn for_thread(
+        permissions: Option<&Permissions>,
+        mcp_servers: &[McpServer],
+    ) -> Option<Self> {
         let permissions = permissions?;
         let web = WebAccess::try_from(permissions.web).unwrap_or(WebAccess::Unspecified);
 
@@ -144,7 +167,7 @@ impl WebPolicy {
         // the preset. It reaches here only for a thread that named domains
         // without naming a base, which is the reading that "never silently drops
         // the preset" asks for.
-        let mut hosts: BTreeSet<String> = match web {
+        let mut domains: BTreeSet<String> = match web {
             WebAccess::Unspecified | WebAccess::Preset => {
                 PRESET_DOMAINS.iter().copied().map(str::to_owned).collect()
             }
@@ -163,10 +186,19 @@ impl WebPolicy {
                 continue;
             };
 
-            hosts.insert(usable);
+            domains.insert(usable);
         }
 
-        Some(Self::Only(hosts))
+        // Already validated at thread creation and again at launch, so a host
+        // that will not normalize here is an IPv6 literal, which nothing in the
+        // policy can name.
+        let hosts = crate::harness::mcp::Launch::of(mcp_servers, &[], None)
+            .hosts()
+            .iter()
+            .filter_map(|host| normalized_host(host))
+            .collect();
+
+        Some(Self::Only { domains, hosts })
     }
 
     /// Whether this policy permits reaching `host`.
@@ -179,13 +211,14 @@ impl WebPolicy {
     pub fn permits(&self, host: &str) -> bool {
         match self {
             Self::Everything => true,
-            Self::Only(hosts) => {
+            Self::Only { domains, hosts } => {
                 let Some(host) = normalized_host(host) else {
                     return false;
                 };
 
                 hosts.contains(&host)
-                    || parent_domain(&host).is_some_and(|parent| hosts.contains(parent))
+                    || domains.contains(&host)
+                    || parent_domain(&host).is_some_and(|parent| domains.contains(parent))
             }
         }
     }
@@ -198,7 +231,7 @@ impl WebPolicy {
     pub fn named(&self) -> Option<usize> {
         match self {
             Self::Everything => None,
-            Self::Only(hosts) => Some(hosts.len()),
+            Self::Only { domains, hosts } => Some(domains.len() + hosts.len()),
         }
     }
 }
@@ -278,14 +311,14 @@ mod tests {
 
     /// The policy a thread with these permissions runs under.
     fn policy(web: WebAccess, domains: &[&str]) -> Option<WebPolicy> {
-        WebPolicy::for_thread(Some(&permissions(web, domains)))
+        WebPolicy::for_thread(Some(&permissions(web, domains)), &[])
     }
 
     #[test]
     fn a_thread_that_declared_nothing_is_not_gated() {
         // The whole opt-in claim. A thread that asked for no policy reaches the
         // network exactly as it does today, with no proxy in front of it.
-        assert_eq!(WebPolicy::for_thread(None), None);
+        assert_eq!(WebPolicy::for_thread(None, &[]), None);
         assert_eq!(policy(WebAccess::Unspecified, &[]), None);
     }
 
@@ -294,7 +327,7 @@ mod tests {
         // "Always additive on top of `web`, so setting this never silently drops
         // the preset." A thread that named one host and no base meant the preset
         // and that host, not that host alone.
-        let Some(WebPolicy::Only(hosts)) =
+        let Some(WebPolicy::Only { domains: hosts, .. }) =
             policy(WebAccess::Unspecified, &["internal.example.com"])
         else {
             panic!("naming a domain should engage the gate");
@@ -309,7 +342,7 @@ mod tests {
         // Deliberately unlike the exec broker's reading of PRESET: an explicit
         // value is a value the operator wrote down, and honouring it changes
         // nothing for a thread that wrote nothing.
-        let Some(WebPolicy::Only(hosts)) = policy(WebAccess::Preset, &[]) else {
+        let Some(WebPolicy::Only { domains: hosts, .. }) = policy(WebAccess::Preset, &[]) else {
             panic!("an explicit preset should engage the gate");
         };
 
@@ -419,7 +452,7 @@ mod tests {
     fn an_entry_that_cannot_be_a_hostname_is_dropped_rather_than_kept() {
         // Kept, it would be a line that never matches. Dropped, it is a warning
         // an operator can act on, and the policy still fails closed.
-        let Some(WebPolicy::Only(hosts)) = policy(
+        let Some(WebPolicy::Only { domains: hosts, .. }) = policy(
             WebAccess::Custom,
             &[
                 "https://example.com/path",
@@ -447,6 +480,80 @@ mod tests {
 
         assert!(resolved.permits("10.1.2.3"));
         assert!(!resolved.permits("10.1.2.4"));
+    }
+
+    /// A declared MCP server at `url`, with no headers.
+    fn mcp_server(name: &str, url: &str) -> McpServer {
+        McpServer {
+            name: name.to_owned(),
+            url: url.to_owned(),
+            ..McpServer::default()
+        }
+    }
+
+    #[test]
+    fn a_gated_thread_reaches_its_mcp_servers_without_naming_them_again() {
+        // The server's URL already names the host its agents must reach, so a
+        // thread whose allowlist starts from nothing can still use it.
+        let resolved = WebPolicy::for_thread(
+            Some(&permissions(WebAccess::None, &[])),
+            &[
+                mcp_server("storage", "https://mcp.elysium.example.com:8443/storage"),
+                mcp_server("local", "http://elysium-api:8080/mcp"),
+            ],
+        )
+        .expect("should engage");
+
+        assert!(resolved.permits("mcp.elysium.example.com"));
+        assert!(resolved.permits("elysium-api"));
+        assert!(!resolved.permits("github.com"));
+    }
+
+    #[test]
+    fn an_mcp_server_host_is_admitted_exactly_and_nothing_beneath_or_beside_it() {
+        // A URL names one machine rather than a domain an operator chose to
+        // trust, so the one-label rule an entry follows does not apply to it.
+        let resolved = WebPolicy::for_thread(
+            Some(&permissions(WebAccess::Custom, &[])),
+            &[mcp_server("storage", "https://mcp.example.com/storage")],
+        )
+        .expect("should engage");
+
+        assert!(resolved.permits("mcp.example.com"));
+        assert!(resolved.permits("MCP.example.com."));
+        assert!(!resolved.permits("deeper.mcp.example.com"));
+        assert!(!resolved.permits("example.com"));
+        assert!(!resolved.permits("other.example.com"));
+    }
+
+    #[test]
+    fn declaring_an_mcp_server_does_not_engage_the_gate() {
+        // The opt-in holds: a thread that declared no web policy reaches its
+        // servers the way it reaches everything else, with no proxy in front.
+        let servers = [mcp_server("storage", "https://mcp.example.com/storage")];
+
+        assert_eq!(WebPolicy::for_thread(None, &servers), None);
+        assert_eq!(
+            WebPolicy::for_thread(Some(&permissions(WebAccess::Unspecified, &[])), &servers),
+            None
+        );
+    }
+
+    #[test]
+    fn a_server_the_launch_would_skip_is_not_admitted_either() {
+        // The same rule decides both, so a server that never reaches the agent
+        // never opens a host for it.
+        let resolved = WebPolicy::for_thread(
+            Some(&permissions(WebAccess::None, &[])),
+            &[
+                mcp_server("bad.name", "https://skipped.example.com/mcp"),
+                mcp_server("six", "http://[::1]:9000/mcp"),
+            ],
+        )
+        .expect("should engage");
+
+        assert_eq!(resolved.named(), Some(0));
+        assert!(!resolved.permits("skipped.example.com"));
     }
 
     #[test]

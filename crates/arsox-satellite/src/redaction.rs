@@ -18,9 +18,10 @@
 //!   same rule the spawn applies, absent included: absent means secret.
 //! - every credential the caller handed the satellite: a repo's personal access
 //!   token or SSH private key, the agents repo's, the GitHub and Jira tokens,
-//!   and every LLM endpoint's key. **None of these carries an `is_secret` flag,
-//!   so none of them is optional.** They are credentials by type rather than by
-//!   declaration, and a thread cannot ask for one to be printed.
+//!   every LLM endpoint's key, and every MCP server's header values. **None of
+//!   these carries an `is_secret` flag, so none of them is optional.** They are
+//!   credentials by type rather than by declaration, and a thread cannot ask for
+//!   one to be printed.
 //!
 //! # The modes and the two rules that override them
 //!
@@ -218,6 +219,9 @@ impl Redactor {
         for endpoint in &settings.models {
             collect_llm(&mut values, endpoint.auth.as_ref());
         }
+        for server in &settings.mcp_servers {
+            collect_mcp(&mut values, server);
+        }
 
         Self::for_values(values, settings.redaction.as_ref())
     }
@@ -374,6 +378,52 @@ fn collect_llm(into: &mut Vec<String>, auth: Option<&LlmAuth>) {
     }
 }
 
+/// Collects every header value an MCP server is sent.
+///
+/// Every value is a credential, whatever the header is called: the contract
+/// types them as one, and the harness holds them in its environment where an
+/// agent can print them.
+///
+/// **A value shaped `<scheme> <credential>` is indexed twice**, whole and as its
+/// credential alone. `Authorization: Bearer <token>` is the ordinary header, and
+/// an agent that prints the token without its scheme would otherwise print it in
+/// the clear, since the whole value is not in that text to be found.
+///
+/// A value too short to index is skipped with a warning naming the server and
+/// the header and never the value, for the reason [`MIN_SCANNABLE`] gives.
+fn collect_mcp(into: &mut Vec<String>, server: &McpServer) {
+    for (header, secret) in &server.headers {
+        let value = secret.value.as_deref().unwrap_or_default();
+
+        if !value.is_empty() && value.chars().count() < MIN_SCANNABLE {
+            tracing::warn!(
+                event.name = "redaction.secret.too_short",
+                mcp.server = server.name,
+                mcp.header = header,
+                redaction.minimum_length = MIN_SCANNABLE,
+                "the {{mcp.header}} header of MCP server {{mcp.server}} is shorter than \
+                 {{redaction.minimum_length}} characters, so it is not masked: a value that \
+                 short is not a credential and indexing it would mask ordinary text everywhere \
+                 it appears",
+            );
+            continue;
+        }
+
+        push_secret(into, Some(secret));
+
+        if let Some((scheme, credential)) = value.split_once(' ')
+            && !scheme.is_empty()
+            && scheme
+                .chars()
+                .all(|character| character.is_ascii_alphabetic())
+            && !credential.is_empty()
+            && !credential.contains(char::is_whitespace)
+        {
+            into.push(credential.to_owned());
+        }
+    }
+}
+
 /// Pushes a credential's plaintext, when it has one.
 fn push_secret(into: &mut Vec<String>, secret: Option<&Secret>) {
     if let Some(value) = secret.and_then(|secret| secret.value.as_deref())
@@ -479,6 +529,7 @@ pub fn scrub_settings(settings: &mut ThreadSettings) {
         prompt: _,
         pull_requests: _,
         redaction: _,
+        relayed_mcp_servers: _,
         resource_limits: _,
         resume_interrupted_turns: _,
         self_review: _,
@@ -1622,6 +1673,55 @@ mod tests {
             masked.contains("ssh-ed25519 AAAA"),
             "a public key is not a credential: {masked}"
         );
+    }
+
+    #[test]
+    fn every_mcp_header_value_is_masked_whatever_the_header_is_called() {
+        // Header values carry the credential type in the contract and sit in
+        // the harness's environment, where an agent can print them.
+        let redactor = Redactor::for_thread(&ThreadSettings {
+            mcp_servers: vec![McpServer {
+                name: "storage".to_owned(),
+                url: "https://elysium.example.com/mcp".to_owned(),
+                headers: [
+                    (
+                        "Authorization".to_owned(),
+                        Secret {
+                            value: Some("Bearer the-storage-token".to_owned()),
+                            display: None,
+                        },
+                    ),
+                    (
+                        "X-Workspace".to_owned(),
+                        Secret {
+                            value: Some("workspace-seven".to_owned()),
+                            display: None,
+                        },
+                    ),
+                    (
+                        "X-Short".to_owned(),
+                        Secret {
+                            value: Some("abc".to_owned()),
+                            display: None,
+                        },
+                    ),
+                ]
+                .into_iter()
+                .collect(),
+            }],
+            ..ThreadSettings::default()
+        });
+
+        let masked = redactor.redact(
+            "sent Bearer the-storage-token, then the-storage-token alone, for workspace-seven abc",
+        );
+
+        assert!(!masked.contains("the-storage-token"), "{masked}");
+        assert!(!masked.contains("workspace-seven"), "{masked}");
+        // Too short to be a credential, and indexing it would mask ordinary text.
+        assert!(masked.contains(" abc"), "{masked}");
+        // The same set answers the push scan, so a push carrying one is refused.
+        assert!(redactor.contains_secret("git log: the-storage-token"));
     }
 
     #[test]

@@ -19,10 +19,25 @@ in `src/redaction.rs`, applied at the doors text goes out through.
 - Every credential the caller handed the satellite: each repo's personal access
   token or SSH private key, the agents repo's, the GitHub and Jira tokens, and
   every LLM endpoint's key, access token, and refresh token.
+- Every MCP server's header values, whatever the header is called.
 
-**The second group is not optional.** None of it came from an `EnvVar` and none
-of it carries an `is_secret` flag, so a thread has no way to ask for its own
-deploy key to be printed. A public SSH key is not a credential and is left alone.
+**The second and third groups are not optional.** None of it came from an
+`EnvVar` and none of it carries an `is_secret` flag, so a thread has no way to
+ask for its own deploy key to be printed. A public SSH key is not a credential
+and is left alone.
+
+**An MCP header value sits where an agent can print it.** The harness holds it
+in its own environment to send it, so the agent that harness is can read it too.
+See [the harness doc](./harness.md#mcp-servers-reach-the-harness-as-launch-arguments).
+Masking it is what keeps a value printed there from leaving the satellite, and
+the push scan asks the same set, so a commit carrying one is refused.
+
+**A value shaped `<scheme> <credential>` is indexed twice**, whole and as the
+credential alone. `Authorization: Bearer <token>` is the ordinary header, and
+an agent that prints the token without its scheme prints text the whole value is
+not in. The split applies only when the first word is letters and the second
+holds no whitespace, so a header carrying a sentence is indexed whole and not
+word by word.
 
 ### A very short value is not indexed
 
@@ -34,6 +49,8 @@ a credential.
 
 Values shorter than four characters are therefore not indexed, and a declared one
 gets a `redaction.secret.too_short` warning naming the key and never the value.
+An MCP header value that short gets the same warning, naming the server and the
+header.
 
 ## The modes, and the two rules above them
 

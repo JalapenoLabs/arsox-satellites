@@ -25,7 +25,7 @@ _sym_db = _symbol_database.Default()
 from arsox.common.v1 import common_pb2 as arsox_dot_common_dot_v1_dot_common__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n arsox/artifact/v1/artifact.proto\x12\x11\x61rsox.artifact.v1\x1a\x1c\x61rsox/common/v1/common.proto\"\x8d\x02\n\x08\x41rtifact\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n\x04path\x18\x02 \x01(\tR\x04path\x12\x1d\n\nsize_bytes\x18\x03 \x01(\x04R\tsizeBytes\x12&\n\x0c\x63ontent_type\x18\x04 \x01(\tH\x00R\x0b\x63ontentType\x88\x01\x01\x12\x16\n\x06sha256\x18\x05 \x01(\tR\x06sha256\x12\x39\n\ncreated_at\x18\x06 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\tcreatedAt\x12 \n\tmember_id\x18\x07 \x01(\tH\x01R\x08memberId\x88\x01\x01\x42\x0f\n\r_content_typeB\x0c\n\n_member_id\"\xa0\x01\n\rWorkspaceFile\x12\x12\n\x04path\x18\x01 \x01(\tR\x04path\x12\x1d\n\nsize_bytes\x18\x02 \x01(\x04R\tsizeBytes\x12\x1f\n\x0bis_artifact\x18\x03 \x01(\x08R\nisArtifact\x12;\n\x0bmodified_at\x18\x04 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\nmodifiedAt\"e\n\x14ListArtifactsRequest\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x30\n\x04page\x18\x02 \x01(\x0b\x32\x1c.arsox.common.v1.PageRequestR\x04page\"\x85\x01\n\x15ListArtifactsResponse\x12\x39\n\tartifacts\x18\x01 \x03(\x0b\x32\x1b.arsox.artifact.v1.ArtifactR\tartifacts\x12\x31\n\x04page\x18\x02 \x01(\x0b\x32\x1d.arsox.common.v1.PageResponseR\x04page\"\x8b\x01\n\x19ListWorkspaceFilesRequest\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x1f\n\x0bpath_prefix\x18\x02 \x01(\tR\npathPrefix\x12\x30\n\x04page\x18\x03 \x01(\x0b\x32\x1c.arsox.common.v1.PageRequestR\x04page\"\x87\x01\n\x1aListWorkspaceFilesResponse\x12\x36\n\x05\x66iles\x18\x01 \x03(\x0b\x32 .arsox.artifact.v1.WorkspaceFileR\x05\x66iles\x12\x31\n\x04page\x18\x02 \x01(\x0b\x32\x1d.arsox.common.v1.PageResponseR\x04pageB\x8c\x01\n\x15\x63om.arsox.artifact.v1B\rArtifactProtoP\x01\xa2\x02\x03\x41\x41X\xaa\x02\x11\x41rsox.Artifact.V1\xca\x02\x11\x41rsox\\Artifact\\V1\xe2\x02\x1d\x41rsox\\Artifact\\V1\\GPBMetadata\xea\x02\x13\x41rsox::Artifact::V1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n arsox/artifact/v1/artifact.proto\x12\x11\x61rsox.artifact.v1\x1a\x1c\x61rsox/common/v1/common.proto\"\x8d\x02\n\x08\x41rtifact\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x12\n\x04path\x18\x02 \x01(\tR\x04path\x12\x1d\n\nsize_bytes\x18\x03 \x01(\x04R\tsizeBytes\x12&\n\x0c\x63ontent_type\x18\x04 \x01(\tH\x00R\x0b\x63ontentType\x88\x01\x01\x12\x16\n\x06sha256\x18\x05 \x01(\tR\x06sha256\x12\x39\n\ncreated_at\x18\x06 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\tcreatedAt\x12 \n\tmember_id\x18\x07 \x01(\tH\x01R\x08memberId\x88\x01\x01\x42\x0f\n\r_content_typeB\x0c\n\n_member_id\"\xa0\x01\n\rWorkspaceFile\x12\x12\n\x04path\x18\x01 \x01(\tR\x04path\x12\x1d\n\nsize_bytes\x18\x02 \x01(\x04R\tsizeBytes\x12\x1f\n\x0bis_artifact\x18\x03 \x01(\x08R\nisArtifact\x12;\n\x0bmodified_at\x18\x04 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\nmodifiedAt\"{\n\x14WorkspaceFileWritten\x12\x12\n\x04path\x18\x01 \x01(\tR\x04path\x12\x1d\n\nsize_bytes\x18\x02 \x01(\x04R\tsizeBytes\x12\x16\n\x06sha256\x18\x03 \x01(\tR\x06sha256\x12\x18\n\x07\x63reated\x18\x04 \x01(\x08R\x07\x63reated\"e\n\x14ListArtifactsRequest\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x30\n\x04page\x18\x02 \x01(\x0b\x32\x1c.arsox.common.v1.PageRequestR\x04page\"\x85\x01\n\x15ListArtifactsResponse\x12\x39\n\tartifacts\x18\x01 \x03(\x0b\x32\x1b.arsox.artifact.v1.ArtifactR\tartifacts\x12\x31\n\x04page\x18\x02 \x01(\x0b\x32\x1d.arsox.common.v1.PageResponseR\x04page\"\x8b\x01\n\x19ListWorkspaceFilesRequest\x12\x1b\n\tthread_id\x18\x01 \x01(\tR\x08threadId\x12\x1f\n\x0bpath_prefix\x18\x02 \x01(\tR\npathPrefix\x12\x30\n\x04page\x18\x03 \x01(\x0b\x32\x1c.arsox.common.v1.PageRequestR\x04page\"\x87\x01\n\x1aListWorkspaceFilesResponse\x12\x36\n\x05\x66iles\x18\x01 \x03(\x0b\x32 .arsox.artifact.v1.WorkspaceFileR\x05\x66iles\x12\x31\n\x04page\x18\x02 \x01(\x0b\x32\x1d.arsox.common.v1.PageResponseR\x04pageB\x8c\x01\n\x15\x63om.arsox.artifact.v1B\rArtifactProtoP\x01\xa2\x02\x03\x41\x41X\xaa\x02\x11\x41rsox.Artifact.V1\xca\x02\x11\x41rsox\\Artifact\\V1\xe2\x02\x1d\x41rsox\\Artifact\\V1\\GPBMetadata\xea\x02\x13\x41rsox::Artifact::V1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -37,12 +37,14 @@ if not _descriptor._USE_C_DESCRIPTORS:
   _globals['_ARTIFACT']._serialized_end=355
   _globals['_WORKSPACEFILE']._serialized_start=358
   _globals['_WORKSPACEFILE']._serialized_end=518
-  _globals['_LISTARTIFACTSREQUEST']._serialized_start=520
-  _globals['_LISTARTIFACTSREQUEST']._serialized_end=621
-  _globals['_LISTARTIFACTSRESPONSE']._serialized_start=624
-  _globals['_LISTARTIFACTSRESPONSE']._serialized_end=757
-  _globals['_LISTWORKSPACEFILESREQUEST']._serialized_start=760
-  _globals['_LISTWORKSPACEFILESREQUEST']._serialized_end=899
-  _globals['_LISTWORKSPACEFILESRESPONSE']._serialized_start=902
-  _globals['_LISTWORKSPACEFILESRESPONSE']._serialized_end=1037
+  _globals['_WORKSPACEFILEWRITTEN']._serialized_start=520
+  _globals['_WORKSPACEFILEWRITTEN']._serialized_end=643
+  _globals['_LISTARTIFACTSREQUEST']._serialized_start=645
+  _globals['_LISTARTIFACTSREQUEST']._serialized_end=746
+  _globals['_LISTARTIFACTSRESPONSE']._serialized_start=749
+  _globals['_LISTARTIFACTSRESPONSE']._serialized_end=882
+  _globals['_LISTWORKSPACEFILESREQUEST']._serialized_start=885
+  _globals['_LISTWORKSPACEFILESREQUEST']._serialized_end=1024
+  _globals['_LISTWORKSPACEFILESRESPONSE']._serialized_start=1027
+  _globals['_LISTWORKSPACEFILESRESPONSE']._serialized_end=1162
 # @@protoc_insertion_point(module_scope)

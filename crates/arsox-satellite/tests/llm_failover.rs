@@ -300,7 +300,9 @@ async fn a_rate_limited_endpoint_is_retried_on_its_own_schedule_then_failed_over
     // policy says, then move on rather than waiting forever.
     let (limited_url, limited) = serving(Provider::answering(429)).await;
     let (spare_url, spare) = serving(Provider::streaming(streamed_usage(10, 5))).await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let mut driven = unhurried(Route::resolve(&[
         endpoint("primary", &limited_url, 3),
@@ -341,7 +343,9 @@ async fn an_endpoint_that_rejects_the_credential_is_given_up_on_without_retrying
     // endpoint carrying different credentials is what the list exists for.
     let (rejecting_url, rejecting) = serving(Provider::answering(401)).await;
     let (spare_url, spare) = serving(Provider::streaming(streamed_usage(10, 5))).await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let mut driven = unhurried(Route::resolve(&[
         // Ten attempts allowed, and an auth rejection must still spend one.
@@ -372,7 +376,9 @@ async fn every_endpoint_exhausted_says_why_each_one_was_given_up_on() {
     // and how. Without it the aggregate code says "everything broke" and stops.
     let (first_url, first) = serving(Provider::answering(429)).await;
     let (second_url, second) = serving(Provider::answering(401)).await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let mut driven = unhurried(Route::resolve(&[
         endpoint("primary", &first_url, 2),
@@ -419,7 +425,9 @@ async fn an_endpoint_that_says_when_to_come_back_is_waited_for_that_long() {
     // A provider knows better than our schedule does when it will serve again.
     let (limited_url, _limited) = serving(Provider::answering(429).asking_to_wait("2")).await;
     let (spare_url, _spare) = serving(Provider::streaming(streamed_usage(10, 5))).await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let driven = unhurried(Route::resolve(&[
         endpoint("primary", &limited_url, 2),
@@ -444,7 +452,9 @@ async fn a_policy_of_one_attempt_sends_exactly_one_request() {
     // "Zero disables retries" and one attempt mean the same thing: the endpoint
     // is tried, once, and then the satellite moves on.
     let (limited_url, limited) = serving(Provider::answering(429)).await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let mut driven = unhurried(Route::resolve(&[endpoint("only", &limited_url, 1)]));
     let token = proxy.grant(driven.grant.clone()).await;
@@ -474,7 +484,9 @@ async fn usage_is_metered_from_the_endpoint_that_answered() {
     // over once spends the rest of its life unmetered.
     let (limited_url, _limited) = serving(Provider::answering(429)).await;
     let (spare_url, _spare) = serving(Provider::streaming(streamed_usage(300, 40))).await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let driven = driven(
         Route::resolve(&[
@@ -506,7 +518,9 @@ async fn a_turn_past_its_ceiling_reaches_no_endpoint_at_all() {
     // the endpoint list would cost exactly as much as no ceiling.
     let (first_url, first) = serving(Provider::streaming(streamed_usage(400, 100))).await;
     let (second_url, second) = serving(Provider::streaming(streamed_usage(10, 5))).await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let driven = driven(
         Route::resolve(&[
@@ -544,7 +558,9 @@ async fn a_timed_out_endpoint_feeds_failover_rather_than_only_the_harness() {
     // against the failure the bound exists for.
     let silent_url = stub_that_never_answers().await;
     let (spare_url, spare) = serving(Provider::streaming(streamed_usage(10, 5))).await;
-    let proxy = LlmProxy::start().await.expect("should start");
+    let proxy = LlmProxy::start(arsox_satellite::relay::Hub::new())
+        .await
+        .expect("should start");
 
     let mut driven = driven(
         Route::resolve(&[

@@ -214,7 +214,7 @@ async fn start_prepared(
         1,
         Arc::clone(&collector),
         arsox_satellite::harness::runner::Gates {
-            model: arsox_satellite::proxy::LlmProxy::start()
+            model: arsox_satellite::proxy::LlmProxy::start(arsox_satellite::relay::Hub::new())
                 .await
                 .expect("should start the llm proxy"),
             network: arsox_satellite::egress::EgressProxy::start()
@@ -2145,4 +2145,78 @@ fn argv_field(details: &prost_types::Struct) -> Vec<String> {
             _other => None,
         })
         .collect()
+}
+
+/// A thread declaring one MCP server that carries a credential header.
+fn with_mcp_server(base: ThreadSettings) -> ThreadSettings {
+    ThreadSettings {
+        mcp_servers: vec![arsox_sdk::proto::settings::v1::McpServer {
+            name: "storage".to_owned(),
+            url: "https://elysium.example.com/mcp/storage".to_owned(),
+            headers: [(
+                "Authorization".to_owned(),
+                arsox_sdk::proto::common::v1::Secret {
+                    value: Some("Bearer the-storage-token".to_owned()),
+                    display: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        }],
+        ..base
+    }
+}
+
+#[tokio::test]
+async fn a_declared_mcp_server_reaches_the_harness_with_its_header_in_the_environment() {
+    // Asserted from the child's seat for both harnesses: the command line names
+    // the server and a variable, and the variable holds the value. A value on
+    // the command line would be readable by anything on the host that runs `ps`.
+    for (label, base) in [
+        ("claude", ThreadSettings::default()),
+        ("codex", codex_thread()),
+    ] {
+        let (harness, thread_id, turn_id) = start_with(
+            "run the probe [[record_argv=mcp.argv]] [[record_env=mcp.env]]",
+            with_mcp_server(base),
+        )
+        .await;
+
+        assert_eq!(
+            settle(&harness.store, &thread_id, &turn_id).await,
+            TurnStatus::Completed,
+            "{label}"
+        );
+
+        let argv = recorded_argv(harness.workspace.path(), &thread_id, "mcp.argv");
+        let joined = argv.join(" ");
+
+        assert!(
+            joined.contains("elysium.example.com/mcp/storage"),
+            "{label}: {argv:?}"
+        );
+        assert!(
+            joined.contains("MCP_HEADER_SECRET_0_0"),
+            "{label}: {argv:?}"
+        );
+        assert!(!joined.contains("the-storage-token"), "{label}: {argv:?}");
+
+        if label == "claude" {
+            assert!(
+                argv.contains(&"--strict-mcp-config".to_owned()),
+                "a thread that named its servers is held to them: {argv:?}"
+            );
+        }
+
+        let environment =
+            std::fs::read_to_string(harness.workspace.path().join(&thread_id).join("mcp.env"))
+                .expect("the stand-in should have recorded its environment");
+
+        assert!(
+            environment
+                .lines()
+                .any(|line| line == "MCP_HEADER_SECRET_0_0=Bearer the-storage-token"),
+            "{label}: the header value should reach the harness's environment"
+        );
+    }
 }

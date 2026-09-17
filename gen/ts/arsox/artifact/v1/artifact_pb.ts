@@ -21,7 +21,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/artifact/v1/artifact.proto.
  */
 export const file_arsox_artifact_v1_artifact: GenFile = /*@__PURE__*/
-  fileDesc("CiBhcnNveC9hcnRpZmFjdC92MS9hcnRpZmFjdC5wcm90bxIRYXJzb3guYXJ0aWZhY3QudjEizAEKCEFydGlmYWN0EgwKBG5hbWUYASABKAkSDAoEcGF0aBgCIAEoCRISCgpzaXplX2J5dGVzGAMgASgEEhkKDGNvbnRlbnRfdHlwZRgEIAEoCUgAiAEBEg4KBnNoYTI1NhgFIAEoCRIuCgpjcmVhdGVkX2F0GAYgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBIWCgltZW1iZXJfaWQYByABKAlIAYgBAUIPCg1fY29udGVudF90eXBlQgwKCl9tZW1iZXJfaWQidwoNV29ya3NwYWNlRmlsZRIMCgRwYXRoGAEgASgJEhIKCnNpemVfYnl0ZXMYAiABKAQSEwoLaXNfYXJ0aWZhY3QYAyABKAgSLwoLbW9kaWZpZWRfYXQYBCABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wIlUKFExpc3RBcnRpZmFjdHNSZXF1ZXN0EhEKCXRocmVhZF9pZBgBIAEoCRIqCgRwYWdlGAIgASgLMhwuYXJzb3guY29tbW9uLnYxLlBhZ2VSZXF1ZXN0InQKFUxpc3RBcnRpZmFjdHNSZXNwb25zZRIuCglhcnRpZmFjdHMYASADKAsyGy5hcnNveC5hcnRpZmFjdC52MS5BcnRpZmFjdBIrCgRwYWdlGAIgASgLMh0uYXJzb3guY29tbW9uLnYxLlBhZ2VSZXNwb25zZSJvChlMaXN0V29ya3NwYWNlRmlsZXNSZXF1ZXN0EhEKCXRocmVhZF9pZBgBIAEoCRITCgtwYXRoX3ByZWZpeBgCIAEoCRIqCgRwYWdlGAMgASgLMhwuYXJzb3guY29tbW9uLnYxLlBhZ2VSZXF1ZXN0InoKGkxpc3RXb3Jrc3BhY2VGaWxlc1Jlc3BvbnNlEi8KBWZpbGVzGAEgAygLMiAuYXJzb3guYXJ0aWZhY3QudjEuV29ya3NwYWNlRmlsZRIrCgRwYWdlGAIgASgLMh0uYXJzb3guY29tbW9uLnYxLlBhZ2VSZXNwb25zZUKMAQoVY29tLmFyc294LmFydGlmYWN0LnYxQg1BcnRpZmFjdFByb3RvUAGiAgNBQViqAhFBcnNveC5BcnRpZmFjdC5WMcoCEUFyc294XEFydGlmYWN0XFYx4gIdQXJzb3hcQXJ0aWZhY3RcVjFcR1BCTWV0YWRhdGHqAhNBcnNveDo6QXJ0aWZhY3Q6OlYxYgZwcm90bzM", [file_arsox_common_v1_common]);
+  fileDesc("CiBhcnNveC9hcnRpZmFjdC92MS9hcnRpZmFjdC5wcm90bxIRYXJzb3guYXJ0aWZhY3QudjEizAEKCEFydGlmYWN0EgwKBG5hbWUYASABKAkSDAoEcGF0aBgCIAEoCRISCgpzaXplX2J5dGVzGAMgASgEEhkKDGNvbnRlbnRfdHlwZRgEIAEoCUgAiAEBEg4KBnNoYTI1NhgFIAEoCRIuCgpjcmVhdGVkX2F0GAYgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBIWCgltZW1iZXJfaWQYByABKAlIAYgBAUIPCg1fY29udGVudF90eXBlQgwKCl9tZW1iZXJfaWQidwoNV29ya3NwYWNlRmlsZRIMCgRwYXRoGAEgASgJEhIKCnNpemVfYnl0ZXMYAiABKAQSEwoLaXNfYXJ0aWZhY3QYAyABKAgSLwoLbW9kaWZpZWRfYXQYBCABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wIlkKFFdvcmtzcGFjZUZpbGVXcml0dGVuEgwKBHBhdGgYASABKAkSEgoKc2l6ZV9ieXRlcxgCIAEoBBIOCgZzaGEyNTYYAyABKAkSDwoHY3JlYXRlZBgEIAEoCCJVChRMaXN0QXJ0aWZhY3RzUmVxdWVzdBIRCgl0aHJlYWRfaWQYASABKAkSKgoEcGFnZRgCIAEoCzIcLmFyc294LmNvbW1vbi52MS5QYWdlUmVxdWVzdCJ0ChVMaXN0QXJ0aWZhY3RzUmVzcG9uc2USLgoJYXJ0aWZhY3RzGAEgAygLMhsuYXJzb3guYXJ0aWZhY3QudjEuQXJ0aWZhY3QSKwoEcGFnZRgCIAEoCzIdLmFyc294LmNvbW1vbi52MS5QYWdlUmVzcG9uc2UibwoZTGlzdFdvcmtzcGFjZUZpbGVzUmVxdWVzdBIRCgl0aHJlYWRfaWQYASABKAkSEwoLcGF0aF9wcmVmaXgYAiABKAkSKgoEcGFnZRgDIAEoCzIcLmFyc294LmNvbW1vbi52MS5QYWdlUmVxdWVzdCJ6ChpMaXN0V29ya3NwYWNlRmlsZXNSZXNwb25zZRIvCgVmaWxlcxgBIAMoCzIgLmFyc294LmFydGlmYWN0LnYxLldvcmtzcGFjZUZpbGUSKwoEcGFnZRgCIAEoCzIdLmFyc294LmNvbW1vbi52MS5QYWdlUmVzcG9uc2VCjAEKFWNvbS5hcnNveC5hcnRpZmFjdC52MUINQXJ0aWZhY3RQcm90b1ABogIDQUFYqgIRQXJzb3guQXJ0aWZhY3QuVjHKAhFBcnNveFxBcnRpZmFjdFxWMeICHUFyc294XEFydGlmYWN0XFYxXEdQQk1ldGFkYXRh6gITQXJzb3g6OkFydGlmYWN0OjpWMWIGcHJvdG8z", [file_arsox_common_v1_common]);
 
 /**
  * A file an agent promoted to an artifact.
@@ -122,6 +122,50 @@ export const WorkspaceFileSchema: GenMessage<WorkspaceFile> = /*@__PURE__*/
   messageDesc(file_arsox_artifact_v1_artifact, 1);
 
 /**
+ * PUT /v1/threads/{id}/files/{path}
+ *
+ * The request body is the file's bytes as `application/octet-stream`, and this
+ * is the response. The bytes are written beside the destination and renamed
+ * over it, so a reader never sees a half-written file.
+ *
+ * @generated from message arsox.artifact.v1.WorkspaceFileWritten
+ */
+export type WorkspaceFileWritten = Message<"arsox.artifact.v1.WorkspaceFileWritten"> & {
+  /**
+   * Path relative to the thread's workspace root, as it was requested.
+   *
+   * @generated from field: string path = 1;
+   */
+  path: string;
+
+  /**
+   * @generated from field: uint64 size_bytes = 2;
+   */
+  sizeBytes: bigint;
+
+  /**
+   * Hex-encoded SHA-256 of the bytes written, so the writer can verify them.
+   *
+   * @generated from field: string sha256 = 3;
+   */
+  sha256: string;
+
+  /**
+   * Whether the write created the file rather than replacing one.
+   *
+   * @generated from field: bool created = 4;
+   */
+  created: boolean;
+};
+
+/**
+ * Describes the message arsox.artifact.v1.WorkspaceFileWritten.
+ * Use `create(WorkspaceFileWrittenSchema)` to create a new message.
+ */
+export const WorkspaceFileWrittenSchema: GenMessage<WorkspaceFileWritten> = /*@__PURE__*/
+  messageDesc(file_arsox_artifact_v1_artifact, 2);
+
+/**
  * @generated from message arsox.artifact.v1.ListArtifactsRequest
  */
 export type ListArtifactsRequest = Message<"arsox.artifact.v1.ListArtifactsRequest"> & {
@@ -141,7 +185,7 @@ export type ListArtifactsRequest = Message<"arsox.artifact.v1.ListArtifactsReque
  * Use `create(ListArtifactsRequestSchema)` to create a new message.
  */
 export const ListArtifactsRequestSchema: GenMessage<ListArtifactsRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_artifact_v1_artifact, 2);
+  messageDesc(file_arsox_artifact_v1_artifact, 3);
 
 /**
  * @generated from message arsox.artifact.v1.ListArtifactsResponse
@@ -163,7 +207,7 @@ export type ListArtifactsResponse = Message<"arsox.artifact.v1.ListArtifactsResp
  * Use `create(ListArtifactsResponseSchema)` to create a new message.
  */
 export const ListArtifactsResponseSchema: GenMessage<ListArtifactsResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_artifact_v1_artifact, 3);
+  messageDesc(file_arsox_artifact_v1_artifact, 4);
 
 /**
  * @generated from message arsox.artifact.v1.ListWorkspaceFilesRequest
@@ -193,7 +237,7 @@ export type ListWorkspaceFilesRequest = Message<"arsox.artifact.v1.ListWorkspace
  * Use `create(ListWorkspaceFilesRequestSchema)` to create a new message.
  */
 export const ListWorkspaceFilesRequestSchema: GenMessage<ListWorkspaceFilesRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_artifact_v1_artifact, 4);
+  messageDesc(file_arsox_artifact_v1_artifact, 5);
 
 /**
  * @generated from message arsox.artifact.v1.ListWorkspaceFilesResponse
@@ -215,5 +259,5 @@ export type ListWorkspaceFilesResponse = Message<"arsox.artifact.v1.ListWorkspac
  * Use `create(ListWorkspaceFilesResponseSchema)` to create a new message.
  */
 export const ListWorkspaceFilesResponseSchema: GenMessage<ListWorkspaceFilesResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_artifact_v1_artifact, 5);
+  messageDesc(file_arsox_artifact_v1_artifact, 6);
 

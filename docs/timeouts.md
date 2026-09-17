@@ -13,6 +13,12 @@ So each carries a bound, and every bound is per thread.
 | one exec command | 30 minutes | the command is killed, and its outcome returns to the agent as a failure that says it timed out |
 | one model request | 10 minutes | the attempt is abandoned, its endpoint is given up on, and a `degraded` incident records it; the harness gets a 504 only once every endpoint has been tried |
 | harness idle, meaning no output at all | 15 minutes | the harness is torn down and started once on the same session; a second expiry fails the turn with `HARNESS_IDLE_TIMEOUT` |
+| one relayed tool call | 15 minutes, not per thread | the agent reads a tool error saying the call timed out, and the host application is sent `ToolCallCancelled` |
+
+The relayed call's bound is a constant, `relay::CALL_DEADLINE`, rather than a
+thread setting. It bounds a host application's answer rather than anything the
+thread's own work does, and it is what the harness idle bound defers to below.
+See [the relay doc](./relay.md#how-a-call-ends).
 
 The turn wall clock is deliberately not in this table. Exceeding it is a budget
 outcome rather than a hung operation, so it lives in `Budget` beside the token
@@ -108,6 +114,21 @@ at debug.
 The bound belongs to the session rather than to the turn, unlike the wall clock:
 a fresh process that has said nothing yet has not been idle for however long its
 predecessor was.
+
+### A relayed call is not silence
+
+An agent waiting on a relayed tool call writes nothing, because it was asked to
+wait, and one call can carry a file transfer that takes minutes. Left alone, the
+idle bound would tear down a harness for doing what it was told, at exactly the
+15 minutes a long transfer is allowed.
+
+So the proxy counts the relayed calls each turn is waiting on, and when the idle
+bound expires with one in flight the silence is measured again from that moment
+instead. It cannot be dodged forever: every call ends at the relay's own
+deadline, and a harness that stays quiet once its calls have ended meets the
+idle bound as usual. The count rides on the grant, beside the meter, for the
+same reason the meter does: the proxy sees the call and the runner decides the
+turn.
 
 ### Restarted once, never twice, and once per turn
 
