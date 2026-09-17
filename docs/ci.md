@@ -29,12 +29,15 @@ checksum-verified each run.
 | Python | `.github/workflows/python.yml` | pushes and PRs touching `sdks/python/`, `gen/python/`, `crates/`, the workspace manifest, or the toolchain pin |
 | Docker | `.github/workflows/docker.yml` | pushes and PRs touching the `Dockerfile`, `crates/`, the workspace manifest, or the toolchain pin |
 | Release | `.github/workflows/release.yml` | `v*` tags, and `workflow_dispatch` with a version |
+| PR review | `.github/workflows/pull-review.yml` | every pull request from a branch of this repository |
 
 Each workflow is path-filtered, so editing a README never queues a proto build.
 `workflow_dispatch` is enabled on all of them for manual runs, and
 `cancel-in-progress` concurrency means a second push supersedes the first rather
 than racing it. Release is the exception on both counts: it is triggered by a
-tag rather than a path, and it is never cancelled.
+tag rather than a path, and it is never cancelled. PR review is the other: it
+runs on every pull request, since any change is worth reviewing, and has no
+manual trigger.
 
 ## Proto
 
@@ -293,6 +296,36 @@ The token never lands on disk. The `.npmrc` the publish uses holds the literal
 string `${NPM_TOKEN}`, which npm expands out of the environment, and it is written
 under `RUNNER_TEMP` so a persistent runner is not left holding a registry
 credential. Docker is logged out for the same reason.
+
+## PR review
+
+Every pull request from a branch of this repository gets an automated Claude and
+Codex review. `pull-review.yml` is the organization's standard consumer file,
+identical in every JalapenoLabs repository, and holds no review logic: it checks
+out the pull request, checks out the private `JalapenoLabs/github-actions`
+repository into `.reviewer/` for the length of the job, and runs its `review-pr`
+action. Nothing from that repository is committed here. The review pipeline, its
+models, and its policy live there, in `docs/review-pr/guide.md`.
+
+It is the one workflow here that does not run on the build pool. It targets
+`[ self-hosted, reviewer ]`, a dedicated runner that holds the reviewers'
+credentials, and it takes every credential from organization secrets and
+variables, so this repository configures nothing.
+
+**Fork pull requests are never reviewed.** This repository is public and the
+reviewer runner holds credentials, so a fork's code must never be checked out
+there. The job-level `if:` guard is what enforces that; do not remove it.
+
+The workflow triggers on `pull_request_target`, which runs the copy of the file
+on the pull request's base branch. A pull request cannot change how it is
+reviewed by editing the workflow, and a change to this file only takes effect
+once it reaches the base branch: `develop` for day-to-day pull requests, `main`
+for promotions.
+
+Drafts are skipped until marked ready, pushes that only merge the base branch
+are skipped once both reviewers have reviewed the pull request, and a head commit
+whose subject starts with `[REVIEW]`, or a re-run of the workflow, forces a full
+review.
 
 ## Roadmap
 
