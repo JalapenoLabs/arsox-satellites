@@ -1,4 +1,5 @@
 from arsox.common.v1 import common_pb2 as _common_pb2
+from arsox.settings.v1 import overrides_pb2 as _overrides_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
@@ -55,6 +56,7 @@ class Turn(_message.Message):
     FINISHED_AT_FIELD_NUMBER: _ClassVar[int]
     TRIGGERED_BY_TURN_ID_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
+    OVERRIDES_FIELD_NUMBER: _ClassVar[int]
     turn_id: str
     thread_id: str
     status: TurnStatus
@@ -65,7 +67,8 @@ class Turn(_message.Message):
     finished_at: _common_pb2.Timestamp
     triggered_by_turn_id: str
     metadata: _containers.ScalarMap[str, str]
-    def __init__(self, turn_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., status: _Optional[_Union[TurnStatus, str]] = ..., prompt: _Optional[str] = ..., satellite_initiated: _Optional[bool] = ..., queued_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., started_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., triggered_by_turn_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    overrides: _overrides_pb2.TurnOverrides
+    def __init__(self, turn_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., status: _Optional[_Union[TurnStatus, str]] = ..., prompt: _Optional[str] = ..., satellite_initiated: _Optional[bool] = ..., queued_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., started_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., triggered_by_turn_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., overrides: _Optional[_Union[_overrides_pb2.TurnOverrides, _Mapping]] = ...) -> None: ...
 
 class TeamMember(_message.Message):
     __slots__ = ()
@@ -124,11 +127,13 @@ class StartTurnRequest(_message.Message):
     PROMPT_FIELD_NUMBER: _ClassVar[int]
     IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
+    OVERRIDES_FIELD_NUMBER: _ClassVar[int]
     thread_id: str
     prompt: str
     idempotency_key: str
     metadata: _containers.ScalarMap[str, str]
-    def __init__(self, thread_id: _Optional[str] = ..., prompt: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ...) -> None: ...
+    overrides: _overrides_pb2.TurnOverrides
+    def __init__(self, thread_id: _Optional[str] = ..., prompt: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., overrides: _Optional[_Union[_overrides_pb2.TurnOverrides, _Mapping]] = ...) -> None: ...
 
 class StartTurnResponse(_message.Message):
     __slots__ = ()

@@ -890,6 +890,16 @@ Shapes are not the whole contract. A harness might have no plan mode, or no sub-
 
 #### The model axis
 
+**Which model answers is a decision per turn, not per thread.** `TurnOverrides`
+carries a model and an effort, and it appears twice: as `ThreadSettings.turn_defaults`,
+what every turn on the thread asks for, and on `StartTurnRequest`, what one turn
+asks for instead. Absent fields inherit, so a turn naming only an effort keeps
+the thread's model. Asking a cheap model to rename a variable and an expensive
+one to design a migration is the same conversation, and a caller that had to open
+a second thread to change model would lose the first one's context to say so.
+See [the harness doc](./docs/harness.md#choosing-the-model-and-the-effort) for
+how each CLI is told.
+
 As we expand we plan to support more models, including but not limited to:
 - Deepseek
 - Bedrock

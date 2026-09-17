@@ -350,7 +350,7 @@ mod store_behaviour {
     use arsox_sdk::proto::common::v1::Duration;
     use arsox_sdk::proto::event::v1::{AgentMessage, thread_event::Payload};
     use arsox_sdk::proto::incident::v1::{Disposition, Incident};
-    use arsox_sdk::proto::settings::v1::{ResourceLimits, ThreadSettings};
+    use arsox_sdk::proto::settings::v1::{Effort, ResourceLimits, ThreadSettings, TurnOverrides};
     use arsox_sdk::proto::thread::v1::{ThreadOrder, ThreadState};
     use arsox_sdk::proto::turn::v1::{TurnOrder, TurnStatus};
     use std::collections::BTreeMap;
@@ -376,9 +376,41 @@ mod store_behaviour {
             prompt: "work".to_owned(),
             metadata: BTreeMap::new(),
             idempotency_key: None,
+            overrides: None,
             satellite_initiated: false,
             triggered_by_turn_id: None,
         }
+    }
+
+    #[tokio::test]
+    async fn a_turn_remembers_what_it_asked_to_change() {
+        let store = store().await;
+        let thread = store
+            .create_thread(thread_named("acme"))
+            .await
+            .expect("should create")
+            .thread;
+
+        let mut submit = work_on(&thread.thread_id);
+        submit.overrides = Some(TurnOverrides {
+            model: Some("opus".to_owned()),
+            effort: Some(Effort::Max.into()),
+        });
+
+        let queued = store.create_turn(submit).await.expect("should queue");
+        let (stored, _result) = store
+            .turn(&thread.thread_id, &queued.turn.turn_id)
+            .await
+            .expect("should read back");
+
+        // Read back rather than trusted from the insert: the column is what a
+        // claim reads, and a turn that lost its choice on the way to disk would
+        // run as something the caller never asked for.
+        assert_eq!(stored.overrides, queued.turn.overrides);
+        assert_eq!(
+            stored.overrides.and_then(|overrides| overrides.model),
+            Some("opus".to_owned())
+        );
     }
 
     #[tokio::test]

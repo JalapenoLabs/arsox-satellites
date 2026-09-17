@@ -541,6 +541,37 @@ is one a later version might read, and a value the satellite inherited or a
 thread declared would then be the one it obeys. That is a route around every
 ceiling, closed the same way `ANTHROPIC_BASE_URL` is.
 
+#### Choosing the model and the effort
+
+A turn may name the model that answers it and how hard to think, and both are
+rendered per arm exactly like the permission posture. `TurnOverrides` carries
+them, a turn's own overrides win over the thread's `turn_defaults` field by
+field, and what neither names is left to the CLI's own default rather than to a
+value invented here.
+
+| | Claude | Codex |
+|---|---|---|
+| model | `--model <name>` | `-c model=<name>` |
+| effort | `--effort <level>` | `-c model_reasoning_effort=<level>` |
+| named nothing | no flag | no override |
+
+**Claude's scale is the contract's**, measured against 2.1.235: `--effort` takes
+`low`, `medium`, `high`, `xhigh`, and `max`, and `--model` takes an alias such as
+`opus` or a full name. **Codex's `model_reasoning_effort` stops at `high`**, so
+`XHIGH` and `MAX` reach it as `high`. Narrowing in the arm rather than in the
+contract keeps the wider scale available to the harness that has it, and passing
+a level through that the CLI refuses would read as a broken turn rather than as
+a setting one harness cannot express.
+
+Model names are not validated. They are the provider's to change, and a
+satellite that refused an unknown one would need a release to accept a model that
+shipped that morning. An endpoint that does not serve the name answers 404,
+which the proxy already records as `LLM_MODEL_UNKNOWN`.
+
+`ModelEndpoint.model` is not part of that chain. It names what an endpoint
+serves, and which endpoint answers is not known until one does, so a flag fixed
+at spawn cannot be read from a list the proxy may fail over.
+
 ### The agent's environment is built, not inherited
 
 **No `ARSOX_*` variable reaches an agent.** A spawned process inherits its

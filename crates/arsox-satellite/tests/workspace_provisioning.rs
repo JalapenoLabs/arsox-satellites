@@ -412,6 +412,7 @@ async fn a_clone_failure_becomes_an_incident_and_parks_the_thread_with_its_queue
             prompt: "work".to_owned(),
             metadata: BTreeMap::new(),
             idempotency_key: None,
+            overrides: None,
             satellite_initiated: false,
             triggered_by_turn_id: None,
         })
@@ -578,6 +579,7 @@ async fn a_provisioned_thread_goes_idle_and_releases_the_turns_that_waited() {
             prompt: "work".to_owned(),
             metadata: BTreeMap::new(),
             idempotency_key: None,
+            overrides: None,
             satellite_initiated: false,
             triggered_by_turn_id: None,
         })

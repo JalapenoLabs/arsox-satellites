@@ -537,6 +537,7 @@ pub fn scrub_settings(settings: &mut ThreadSettings) {
         suggestions: _,
         team_mode: _,
         timeouts: _,
+        turn_defaults: _,
         virtual_browser: _,
         watch_pull_requests: _,
     } = settings;

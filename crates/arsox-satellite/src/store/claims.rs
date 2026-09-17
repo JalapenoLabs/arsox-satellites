@@ -9,6 +9,7 @@
 
 use super::{Store, StoreError, from_nanos, to_nanos};
 use arsox_sdk::proto::common::v1::Timestamp;
+use arsox_sdk::proto::settings::v1::TurnOverrides;
 use arsox_sdk::proto::thread::v1::ThreadState;
 use arsox_sdk::proto::turn::v1::{Turn, TurnResult, TurnStatus};
 use prost::Message as _;
@@ -145,6 +146,9 @@ impl Store {
                 started_at: Some(from_nanos(now)),
                 finished_at: None,
                 metadata: metadata.into_iter().collect(),
+                overrides: row
+                    .get::<Option<Vec<u8>>, _>("overrides")
+                    .and_then(|bytes| TurnOverrides::decode(bytes.as_slice()).ok()),
             },
         }))
     }

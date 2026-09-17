@@ -406,6 +406,7 @@ async fn start_turn(
             prompt: request.prompt,
             metadata: request.metadata.into_iter().collect(),
             idempotency_key: request.idempotency_key,
+            overrides: request.overrides,
             // Only a pull request watch starts a turn the SDK did not ask for,
             // and that path does not come through here.
             satellite_initiated: false,

@@ -50,7 +50,7 @@
 
 use crate::harness::mcp;
 use arsox_sdk::proto::harness::v1::Harness;
-use arsox_sdk::proto::settings::v1::{EnvVar, ExecAccess, Permissions, ThreadSettings};
+use arsox_sdk::proto::settings::v1::{Effort, EnvVar, ExecAccess, Permissions, ThreadSettings};
 use std::path::PathBuf;
 
 /// Overrides the Claude CLI binary.
@@ -237,6 +237,17 @@ fn claude_command(
     ));
     args.extend(servers.claude_args());
 
+    // Measured against Claude Code 2.1.235: `--model` takes an alias or a full
+    // name, and `--effort` takes the five levels the contract's enum names.
+    if let Some(model) = &grants.choice.model {
+        args.push("--model".to_owned());
+        args.push(model.clone());
+    }
+    if let Some(level) = grants.choice.effort.and_then(claude_effort) {
+        args.push("--effort".to_owned());
+        args.push(level.to_owned());
+    }
+
     let proxy = grants.model.clone().map(|access| {
         vec![
             AgentVar {
@@ -320,6 +331,7 @@ fn codex_command(
         settings.permissions.as_ref(),
     )));
     args.extend(servers.codex_args());
+    args.extend(codex_choice_args(&grants.choice));
 
     // Codex 0.147.0 does not read `OPENAI_BASE_URL`, so the address reaches it
     // as a declared provider rather than as an environment variable. The
@@ -361,6 +373,54 @@ fn codex_command(
         working_dir,
         env: environment_for(settings, &servers, proxy, grants),
     }
+}
+
+/// What `claude --effort` calls each level. The contract's scale is Claude's, so
+/// every level renders as itself.
+const fn claude_effort(effort: Effort) -> Option<&'static str> {
+    match effort {
+        Effort::Unspecified => None,
+        Effort::Low => Some("low"),
+        Effort::Medium => Some("medium"),
+        Effort::High => Some("high"),
+        Effort::Xhigh => Some("xhigh"),
+        Effort::Max => Some("max"),
+    }
+}
+
+/// What Codex's `model_reasoning_effort` calls each level.
+///
+/// Its scale stops at high, so the two levels above it arrive as high rather
+/// than as a value the CLI would refuse. Narrowing here rather than in the
+/// contract keeps the wider scale available to the harness that has it.
+const fn codex_effort(effort: Effort) -> Option<&'static str> {
+    match effort {
+        Effort::Unspecified => None,
+        Effort::Low => Some("low"),
+        Effort::Medium => Some("medium"),
+        Effort::High | Effort::Xhigh | Effort::Max => Some("high"),
+    }
+}
+
+/// The turn's model and effort, as `codex exec` config overrides.
+///
+/// `-c` rather than a flag for the same reason the provider is: an override
+/// outranks anything in a `config.toml`, so an operator's own defaults are left
+/// intact and the turn still runs as the caller asked.
+fn codex_choice_args(choice: &TurnChoice) -> Vec<String> {
+    let mut settings = Vec::new();
+
+    if let Some(model) = &choice.model {
+        settings.push(format!("model={model}"));
+    }
+    if let Some(level) = choice.effort.and_then(codex_effort) {
+        settings.push(format!("model_reasoning_effort={level}"));
+    }
+
+    settings
+        .into_iter()
+        .flat_map(|setting| ["-c".to_owned(), setting])
+        .collect()
 }
 
 /// Points Codex at the satellite's proxy through a declared model provider.
@@ -751,6 +811,10 @@ pub struct Grants {
     /// The turn's admission to the model.
     pub model: Option<ModelAccess>,
 
+    /// What this turn asked to run as. Default for a turn that named nothing,
+    /// which leaves both choices to the harness CLI.
+    pub choice: TurnChoice,
+
     /// The turn's admission to the network.
     ///
     /// Absent for every thread that declared no web policy, which is the default
@@ -775,6 +839,22 @@ impl Grants {
             ..Self::default()
         }
     }
+}
+
+/// Which model answers this turn, and how hard it is asked to think.
+///
+/// Resolved before the command is built, from the turn's own overrides over the
+/// thread's defaults, so each harness arm renders a decision rather than making
+/// one. Separate from [`ModelAccess`] because admission and choice are different
+/// things: a turn is admitted to the proxy whether or not it named a model.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct TurnChoice {
+    /// The model identifier, in the harness's own vocabulary. Absent leaves the
+    /// CLI's own default.
+    pub model: Option<String>,
+
+    /// Absent leaves the CLI's own default.
+    pub effort: Option<Effort>,
 }
 
 /// One turn's admission to the model, by way of the satellite's proxy.
@@ -2100,6 +2180,7 @@ mod tests {
                 }),
                 egress: Some(egress_access()),
                 exec_broker: None,
+                choice: TurnChoice::default(),
             },
             &ThreadSettings::default(),
         )
@@ -2241,5 +2322,97 @@ mod tests {
         // The exemption is an address list and reads plainly, which is what
         // makes a turn that cannot reach its proxy debuggable at all.
         assert!(rendered.contains("127.0.0.1"), "{rendered}");
+    }
+
+    /// A turn that named a model and an effort, for either harness.
+    fn choosing(model: &str, effort: Effort) -> Grants {
+        Grants {
+            choice: TurnChoice {
+                model: Some(model.to_owned()),
+                effort: Some(effort),
+            },
+            ..Grants::default()
+        }
+    }
+
+    fn turn_with(harness: Harness, grants: &Grants) -> HarnessCommand {
+        command_for(
+            harness,
+            "do the thing",
+            &Session::Start {
+                session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            grants,
+            &ThreadSettings::default(),
+        )
+    }
+
+    /// The argument that follows `flag`, which is how a flag taking a value is
+    /// asserted on without depending on where in the list it landed.
+    fn value_after(command: &HarnessCommand, flag: &str) -> Option<String> {
+        let at = command.args.iter().position(|argument| argument == flag)?;
+        command.args.get(at + 1).cloned()
+    }
+
+    #[test]
+    fn a_turn_names_its_model_and_effort_to_claude() {
+        // Measured against Claude Code 2.1.235, which takes an alias or a full
+        // name for `--model` and the contract's five levels for `--effort`.
+        let command = turn_with(Harness::Claude, &choosing("opus", Effort::Xhigh));
+
+        assert_eq!(value_after(&command, "--model").as_deref(), Some("opus"));
+        assert_eq!(value_after(&command, "--effort").as_deref(), Some("xhigh"));
+    }
+
+    #[test]
+    fn a_turn_that_chooses_nothing_leaves_both_to_the_cli() {
+        // Absent is not the same as a default written here: a flag naming a
+        // model would override whatever the operator configured, and a thread
+        // that never asked for one has said nothing about it.
+        for harness in [Harness::Claude, Harness::Codex] {
+            let command = turn_with(harness, &Grants::default());
+
+            assert!(
+                !command.args.iter().any(|argument| argument == "--model"
+                    || argument == "--effort"
+                    || argument.starts_with("model=")
+                    || argument.starts_with("model_reasoning_effort=")),
+                "{:?}",
+                command.args
+            );
+        }
+    }
+
+    #[test]
+    fn a_codex_turn_carries_its_choice_as_config_overrides() {
+        // `-c` rather than flags, so an operator's own config.toml is left
+        // intact and the override still wins for this turn.
+        let command = turn_with(Harness::Codex, &choosing("gpt-5-codex", Effort::Low));
+
+        assert!(command.args.contains(&"model=gpt-5-codex".to_owned()));
+        assert!(
+            command
+                .args
+                .contains(&"model_reasoning_effort=low".to_owned())
+        );
+    }
+
+    #[test]
+    fn codex_narrows_the_two_levels_its_own_scale_does_not_have() {
+        // Its scale stops at high. Passing xhigh through would be a value the
+        // CLI refuses, which reads as a broken turn rather than as a setting
+        // one harness cannot express.
+        for above in [Effort::Xhigh, Effort::Max] {
+            let command = turn_with(Harness::Codex, &choosing("gpt-5-codex", above));
+
+            assert!(
+                command
+                    .args
+                    .contains(&"model_reasoning_effort=high".to_owned()),
+                "{:?}",
+                command.args
+            );
+        }
     }
 }
