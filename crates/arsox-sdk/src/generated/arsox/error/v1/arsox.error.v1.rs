@@ -152,6 +152,13 @@ pub enum ErrorCode {
     /// carry. Refused before the upgrade, and permanent: a thread's settings do not
     /// change, so reconnecting cannot succeed.
     RelayNotDeclared = 1401,
+    /// Satellite setup, the host application's script set with PUT /v1/setup.
+    ///
+    /// The script exited nonzero, ran past its bound, or could not start. Recorded
+    /// as a satellite-scoped incident with no thread, carrying the script's hash,
+    /// its exit code, and the tail of its output. Work proceeds without whatever
+    /// the script was meant to install.
+    SetupFailed = 1500,
 }
 impl ErrorCode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -226,6 +233,7 @@ impl ErrorCode {
             Self::WorkspaceFileLengthRequired => "ERROR_CODE_WORKSPACE_FILE_LENGTH_REQUIRED",
             Self::RelayClientReplaced => "ERROR_CODE_RELAY_CLIENT_REPLACED",
             Self::RelayNotDeclared => "ERROR_CODE_RELAY_NOT_DECLARED",
+            Self::SetupFailed => "ERROR_CODE_SETUP_FAILED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -297,6 +305,7 @@ impl ErrorCode {
             "ERROR_CODE_WORKSPACE_FILE_LENGTH_REQUIRED" => Some(Self::WorkspaceFileLengthRequired),
             "ERROR_CODE_RELAY_CLIENT_REPLACED" => Some(Self::RelayClientReplaced),
             "ERROR_CODE_RELAY_NOT_DECLARED" => Some(Self::RelayNotDeclared),
+            "ERROR_CODE_SETUP_FAILED" => Some(Self::SetupFailed),
             _ => None,
         }
     }

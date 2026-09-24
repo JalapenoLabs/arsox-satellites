@@ -10,6 +10,8 @@ import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
 import type { Timestamp } from "../../common/v1/common_pb.js";
 import { file_arsox_common_v1_common } from "../../common/v1/common_pb.js";
+import type { SetupStatus } from "./setup_pb.js";
+import { file_arsox_satellite_v1_setup } from "./setup_pb.js";
 import type { ThreadSummary } from "../../thread/v1/thread_pb.js";
 import { file_arsox_thread_v1_thread } from "../../thread/v1/thread_pb.js";
 import type { Message } from "@bufbuild/protobuf";
@@ -18,7 +20,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/satellite/v1/satellite.proto.
  */
 export const file_arsox_satellite_v1_satellite: GenFile = /*@__PURE__*/
-  fileDesc("CiJhcnNveC9zYXRlbGxpdGUvdjEvc2F0ZWxsaXRlLnByb3RvEhJhcnNveC5zYXRlbGxpdGUudjEiWQoSR2V0VmVyc2lvblJlc3BvbnNlEhkKEXNhdGVsbGl0ZV92ZXJzaW9uGAEgASgJEhMKC3Byb3RvX21ham9yGAIgASgNEhMKC3Byb3RvX21pbm9yGAMgASgNIk8KDlJlYWRpbmVzc0NoZWNrEgwKBG5hbWUYASABKAkSDwoHcGFzc2luZxgCIAEoCBITCgZkZXRhaWwYAyABKAlIAIgBAUIJCgdfZGV0YWlsIlkKFEdldFJlYWRpbmVzc1Jlc3BvbnNlEg0KBXJlYWR5GAEgASgIEjIKBmNoZWNrcxgCIAMoCzIiLmFyc294LnNhdGVsbGl0ZS52MS5SZWFkaW5lc3NDaGVjayKTAQoJRGlza1VzYWdlEhcKD3dvcmtzcGFjZV9ieXRlcxgBIAEoBBIXCg9hdmFpbGFibGVfYnl0ZXMYAiABKAQSIgoVYWdncmVnYXRlX3F1b3RhX2J5dGVzGAMgASgESACIAQESFgoOZGF0YWJhc2VfYnl0ZXMYBCABKARCGAoWX2FnZ3JlZ2F0ZV9xdW90YV9ieXRlcyKMAgoRR2V0U3RhdHVzUmVzcG9uc2USGQoRc2F0ZWxsaXRlX3ZlcnNpb24YASABKAkSHgoWbWF4X2NvbmN1cnJlbnRfdGhyZWFkcxgCIAEoDRIXCg9ydW5uaW5nX3RocmVhZHMYAyABKA0SLwoHdGhyZWFkcxgEIAMoCzIeLmFyc294LnRocmVhZC52MS5UaHJlYWRTdW1tYXJ5Ei4KCnN0YXJ0ZWRfYXQYBSABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wEhUKDWluc2VjdXJlX21vZGUYBiABKAgSKwoEZGlzaxgHIAEoCzIdLmFyc294LnNhdGVsbGl0ZS52MS5EaXNrVXNhZ2VCkgEKFmNvbS5hcnNveC5zYXRlbGxpdGUudjFCDlNhdGVsbGl0ZVByb3RvUAGiAgNBU1iqAhJBcnNveC5TYXRlbGxpdGUuVjHKAhJBcnNveFxTYXRlbGxpdGVcVjHiAh5BcnNveFxTYXRlbGxpdGVcVjFcR1BCTWV0YWRhdGHqAhRBcnNveDo6U2F0ZWxsaXRlOjpWMWIGcHJvdG8z", [file_arsox_common_v1_common, file_arsox_thread_v1_thread]);
+  fileDesc("CiJhcnNveC9zYXRlbGxpdGUvdjEvc2F0ZWxsaXRlLnByb3RvEhJhcnNveC5zYXRlbGxpdGUudjEiWQoSR2V0VmVyc2lvblJlc3BvbnNlEhkKEXNhdGVsbGl0ZV92ZXJzaW9uGAEgASgJEhMKC3Byb3RvX21ham9yGAIgASgNEhMKC3Byb3RvX21pbm9yGAMgASgNIk8KDlJlYWRpbmVzc0NoZWNrEgwKBG5hbWUYASABKAkSDwoHcGFzc2luZxgCIAEoCBITCgZkZXRhaWwYAyABKAlIAIgBAUIJCgdfZGV0YWlsIlkKFEdldFJlYWRpbmVzc1Jlc3BvbnNlEg0KBXJlYWR5GAEgASgIEjIKBmNoZWNrcxgCIAMoCzIiLmFyc294LnNhdGVsbGl0ZS52MS5SZWFkaW5lc3NDaGVjayKTAQoJRGlza1VzYWdlEhcKD3dvcmtzcGFjZV9ieXRlcxgBIAEoBBIXCg9hdmFpbGFibGVfYnl0ZXMYAiABKAQSIgoVYWdncmVnYXRlX3F1b3RhX2J5dGVzGAMgASgESACIAQESFgoOZGF0YWJhc2VfYnl0ZXMYBCABKARCGAoWX2FnZ3JlZ2F0ZV9xdW90YV9ieXRlcyK8AgoRR2V0U3RhdHVzUmVzcG9uc2USGQoRc2F0ZWxsaXRlX3ZlcnNpb24YASABKAkSHgoWbWF4X2NvbmN1cnJlbnRfdGhyZWFkcxgCIAEoDRIXCg9ydW5uaW5nX3RocmVhZHMYAyABKA0SLwoHdGhyZWFkcxgEIAMoCzIeLmFyc294LnRocmVhZC52MS5UaHJlYWRTdW1tYXJ5Ei4KCnN0YXJ0ZWRfYXQYBSABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wEhUKDWluc2VjdXJlX21vZGUYBiABKAgSKwoEZGlzaxgHIAEoCzIdLmFyc294LnNhdGVsbGl0ZS52MS5EaXNrVXNhZ2USLgoFc2V0dXAYCCABKAsyHy5hcnNveC5zYXRlbGxpdGUudjEuU2V0dXBTdGF0dXNCkgEKFmNvbS5hcnNveC5zYXRlbGxpdGUudjFCDlNhdGVsbGl0ZVByb3RvUAGiAgNBU1iqAhJBcnNveC5TYXRlbGxpdGUuVjHKAhJBcnNveFxTYXRlbGxpdGVcVjHiAh5BcnNveFxTYXRlbGxpdGVcVjFcR1BCTWV0YWRhdGHqAhRBcnNveDo6U2F0ZWxsaXRlOjpWMWIGcHJvdG8z", [file_arsox_common_v1_common, file_arsox_satellite_v1_setup, file_arsox_thread_v1_thread]);
 
 /**
  * GET /v1/version
@@ -224,6 +226,14 @@ export type GetStatusResponse = Message<"arsox.satellite.v1.GetStatusResponse"> 
    * @generated from field: arsox.satellite.v1.DiskUsage disk = 7;
    */
   disk?: DiskUsage;
+
+  /**
+   * The host application's setup script, and what its last run left behind.
+   * Always present: a satellite with no script reports SETUP_STATE_NONE.
+   *
+   * @generated from field: arsox.satellite.v1.SetupStatus setup = 8;
+   */
+  setup?: SetupStatus;
 };
 
 /**

@@ -82,7 +82,7 @@ libc = "0.2"
 # path checked and then opened by name is a race the agent can win. `openat`,
 # `mkdirat`, `renameat`, and `fchown` are safe calls here rather than `unsafe`
 # ones through `libc`.
-rustix = { version = "1", features = [ "fs" ] }
+rustix = { version = "1", features = [ "fs", "process" ] }
 
 # The same measurement on the platform the satellite is developed on.
 [target.'cfg(windows)'.dependencies]

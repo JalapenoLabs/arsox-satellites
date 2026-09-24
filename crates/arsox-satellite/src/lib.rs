@@ -26,6 +26,7 @@ pub mod privilege;
 pub mod proxy;
 pub mod redaction;
 pub mod relay;
+pub mod setup;
 pub mod store;
 pub mod stream;
 pub mod timeouts;
@@ -198,6 +199,9 @@ pub(crate) struct Satellite {
 
     /// Where thread workspaces live, for the routes that move files in and out.
     pub(crate) workspace_root: std::path::PathBuf,
+
+    /// The host application's setup script, and the gate it holds.
+    pub(crate) setup: setup::Setup,
 }
 
 impl Satellite {
@@ -373,6 +377,11 @@ async fn status(State(satellite): State<Arc<Satellite>>) -> Response {
     // Cached and measured off the runtime, so polling this endpoint against a
     // satellite holding a large workspace does not walk the tree per request.
     // The figures can lag by one refresh interval; see the `disk` module.
+    let setup = match satellite.setup.status().await {
+        Ok(setup) => setup,
+        Err(error) => return api::store_failure(&error),
+    };
+
     let usage = satellite.disk.usage().await;
     for summary in &mut threads {
         summary.workspace_bytes = usage.thread_bytes(&summary.thread_id);
@@ -399,6 +408,7 @@ async fn status(State(satellite): State<Arc<Satellite>>) -> Response {
             aggregate_quota_bytes: None,
             database_bytes: usage.database_bytes,
         }),
+        setup: Some(setup),
     })
 }
 
@@ -419,6 +429,7 @@ fn router(satellite: Arc<Satellite>) -> Router {
         .merge(stream::sockets::routes())
         .merge(relay::socket::routes())
         .merge(workspace::files::routes())
+        .merge(setup::routes())
         .route_layer(from_fn_with_state(Arc::clone(&satellite), require_auth));
 
     Router::new()
@@ -603,6 +614,18 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
 
     let work_queued = Arc::new(tokio::sync::Notify::new());
 
+    // Before the runner exists, so a container that holds a setup script is
+    // already marked as running it when the first claim is attempted. A
+    // replaced container has lost whatever the script installed, which is why
+    // it runs again here rather than only when it changes.
+    let setup = setup::Setup::new(
+        store.clone(),
+        bus.clone(),
+        std::path::Path::new(&options.database_path),
+        Arc::clone(&work_queued),
+    );
+    setup.resume_at_boot().await;
+
     let collector = Arc::new(collector::Collector::new(
         store.clone(),
         std::path::PathBuf::from(&options.workspace_root),
@@ -655,6 +678,7 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
         std::path::PathBuf::from(&options.workspace_root),
         Arc::clone(&work_queued),
         broker.clone(),
+        setup.gate(),
     );
 
     // A workspace half-built when the satellite stopped is rebuilt rather than
@@ -680,6 +704,7 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
             harness,
             relay,
             workspace_root: std::path::PathBuf::from(&options.workspace_root),
+            setup,
         })),
         store,
     })

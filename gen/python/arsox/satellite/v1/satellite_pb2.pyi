@@ -1,4 +1,5 @@
 from arsox.common.v1 import common_pb2 as _common_pb2
+from arsox.satellite.v1 import setup_pb2 as _setup_pb2
 from arsox.thread.v1 import thread_pb2 as _thread_pb2
 from google.protobuf.internal import containers as _containers
 from google.protobuf import descriptor as _descriptor
@@ -57,6 +58,7 @@ class GetStatusResponse(_message.Message):
     STARTED_AT_FIELD_NUMBER: _ClassVar[int]
     INSECURE_MODE_FIELD_NUMBER: _ClassVar[int]
     DISK_FIELD_NUMBER: _ClassVar[int]
+    SETUP_FIELD_NUMBER: _ClassVar[int]
     satellite_version: str
     max_concurrent_threads: int
     running_threads: int
@@ -64,4 +66,5 @@ class GetStatusResponse(_message.Message):
     started_at: _common_pb2.Timestamp
     insecure_mode: bool
     disk: DiskUsage
-    def __init__(self, satellite_version: _Optional[str] = ..., max_concurrent_threads: _Optional[int] = ..., running_threads: _Optional[int] = ..., threads: _Optional[_Iterable[_Union[_thread_pb2.ThreadSummary, _Mapping]]] = ..., started_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., insecure_mode: _Optional[bool] = ..., disk: _Optional[_Union[DiskUsage, _Mapping]] = ...) -> None: ...
+    setup: _setup_pb2.SetupStatus
+    def __init__(self, satellite_version: _Optional[str] = ..., max_concurrent_threads: _Optional[int] = ..., running_threads: _Optional[int] = ..., threads: _Optional[_Iterable[_Union[_thread_pb2.ThreadSummary, _Mapping]]] = ..., started_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., insecure_mode: _Optional[bool] = ..., disk: _Optional[_Union[DiskUsage, _Mapping]] = ..., setup: _Optional[_Union[_setup_pb2.SetupStatus, _Mapping]] = ...) -> None: ...

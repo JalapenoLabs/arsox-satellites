@@ -6,6 +6,7 @@ syntax = "proto3";
 package arsox.satellite.v1;
 
 import "arsox/common/v1/common.proto";
+import "arsox/satellite/v1/setup.proto";
 import "arsox/thread/v1/thread.proto";
 
 // GET /v1/version
@@ -93,4 +94,8 @@ message GetStatusResponse {
   bool insecure_mode = 6;
 
   DiskUsage disk = 7;
+
+  // The host application's setup script, and what its last run left behind.
+  // Always present: a satellite with no script reports SETUP_STATE_NONE.
+  SetupStatus setup = 8;
 }

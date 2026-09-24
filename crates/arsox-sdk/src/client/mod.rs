@@ -35,7 +35,10 @@ use crate::proto::harness::v1::GetHarnessResponse;
 use crate::proto::incident::v1::{
     Disposition, Incident, ListIncidentsRequest, ListIncidentsResponse,
 };
-use crate::proto::satellite::v1::{GetStatusResponse, GetVersionResponse};
+use crate::proto::satellite::v1::{
+    GetStatusResponse, GetVersionResponse, SetSetupScriptRequest, SetSetupScriptResponse,
+    SetupStatus,
+};
 use crate::proto::settings::v1::{ThreadSettings, TurnOverrides};
 use crate::proto::thread::v1::{
     CreateThreadRequest, CreateThreadResponse, DestroyThreadResponse, DrainThreadResponse,
@@ -151,6 +154,51 @@ impl Satellite {
     /// Returns an error when the satellite is unreachable or rejects the secret.
     pub async fn status(&self) -> Result<GetStatusResponse> {
         self.get("/v1/status").await
+    }
+
+    /// Sets the satellite's setup script, the install script it runs as root.
+    ///
+    /// The satellite runs it at once, again on every container start, and
+    /// holds new turns and new thread provisioning while it runs. Setting the
+    /// script it already holds changes nothing and answers with the status of
+    /// its last run, so a host can send its script on every boot of its own. A
+    /// different script stops a run in progress and starts over, and an empty
+    /// one clears it.
+    ///
+    /// Answers as soon as the script is stored, not when it finishes. Follow it
+    /// with [`Satellite::status`], whose `setup` field reports the run.
+    ///
+    /// The script runs again on every container start, so write it to check
+    /// before it downloads.
+    ///
+    /// ```no_run
+    /// # async fn example(satellite: arsox_sdk::client::Satellite) -> arsox_sdk::client::Result<()> {
+    /// let status = satellite
+    ///     .set_setup_script("command -v jq || apt-get install --yes jq")
+    ///     .await?;
+    ///
+    /// println!("setup is {:?}, script {}", status.state(), status.script_sha256);
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the satellite is unreachable or rejects the secret.
+    pub async fn set_setup_script(&self, script: impl Into<String>) -> Result<SetupStatus> {
+        let response: SetSetupScriptResponse = self
+            .send(
+                reqwest::Method::PUT,
+                "/v1/setup",
+                &SetSetupScriptRequest {
+                    script: script.into(),
+                },
+            )
+            .await?;
+
+        response.setup.ok_or_else(|| {
+            Error::transport("the satellite set its setup script without reporting it")
+        })
     }
 
     /// Reports which harnesses this satellite offers and what each supports.

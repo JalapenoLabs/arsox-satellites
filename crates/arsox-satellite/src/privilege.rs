@@ -35,6 +35,14 @@
 //! [`Descent::Impossible`], every spawn keeps the satellite's own identity, and
 //! [`announce`] says so loudly once at boot.
 //!
+//! # One root path, for the host and never for an agent
+//!
+//! [`root_command_for_host`] is the single exception to the drop: the host
+//! application's setup script, which installs packages and so needs root. It
+//! starts from an empty environment rather than a scrubbed one, and nothing an
+//! agent controls reaches it. Every other spawn site stays on
+//! [`hand_down`].
+//!
 //! See [the enforcement doc](../../../docs/enforcement.md) for the whole model.
 
 use std::path::{Path, PathBuf};
@@ -244,6 +252,55 @@ pub fn hand_down(command: &mut tokio::process::Command) {
 /// The same, on a platform with no unprivileged account to descend to.
 #[cfg(not(unix))]
 pub fn hand_down(_command: &mut tokio::process::Command) {}
+
+/// The `PATH` a host's setup script runs with.
+///
+/// Fixed rather than inherited, so what `apt-get` or `curl` resolves to does
+/// not depend on how the satellite happened to be started. The standard Debian
+/// order for root, `sbin` included, because installers reach for `ldconfig` and
+/// `update-alternatives`.
+pub const ROOT_PATH: &str = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin";
+
+/// The home directory a host's setup script runs with.
+pub const ROOT_HOME: &str = "/root";
+
+/// A process that keeps the satellite's identity, for host-supplied code only.
+///
+/// **The one path where code the satellite did not write runs as root.** Every
+/// other spawn goes through [`crate::harness::spawn::scrubbed_command`] and is
+/// handed down to the agent account. This one is not, deliberately: the
+/// satellite's setup script exists to install what the image does not ship, and
+/// installing packages needs root. The caller is the host application holding
+/// `ARSOX_SECRET`, never an agent, and nothing an agent controls ever reaches
+/// it. Only [`crate::setup`] calls this.
+///
+/// The environment starts empty rather than scrubbed. Nothing of the
+/// satellite's own reaches the script: no `ARSOX_*`, no provider credential, and
+/// no thread's declared variables, which the script never had any claim to.
+/// What it gets is a fixed `PATH`, `HOME`, a UTF-8 locale, and
+/// `DEBIAN_FRONTEND=noninteractive`, because an installer that stops to ask a
+/// question on a terminal that is not there hangs until its bound.
+///
+/// That is hygiene, not a boundary. The script is root, and root can read the
+/// satellite's database and every workspace; see
+/// [the enforcement doc](../../../docs/enforcement.md).
+///
+/// On a satellite that is not root, the same call runs the script as whoever
+/// the satellite is, which is the posture [`Descent::Impossible`] already names
+/// for every other spawn.
+#[must_use]
+pub fn root_command_for_host(program: &str) -> tokio::process::Command {
+    let mut command = tokio::process::Command::new(program);
+
+    command
+        .env_clear()
+        .env("PATH", ROOT_PATH)
+        .env("HOME", ROOT_HOME)
+        .env("LANG", "C.UTF-8")
+        .env("DEBIAN_FRONTEND", "noninteractive");
+
+    command
+}
 
 /// Creates a directory the agent account can write in.
 ///
