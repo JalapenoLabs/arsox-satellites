@@ -563,10 +563,12 @@ impl<'a> Launch<'a> {
     /// name both lists claim goes to the declared one.
     ///
     /// A declared server reached through a service is rendered at the port
-    /// `services` holds for it, and skipped with a warning when it holds none,
-    /// which only settings stored before the API checked can cause: every
-    /// declared service is given a port before the harness starts, whether or
-    /// not it then becomes ready.
+    /// `services` holds for it, and skipped with a warning when it holds none.
+    /// A service keeps its port for the whole turn whether or not it became
+    /// ready, so none means it was never leased one: its fixed port was taken,
+    /// or the kernel offered none, and a `SERVICE_START_FAILED` incident says
+    /// so. Settings stored before the API checked the service is declared are
+    /// the other way here.
     #[must_use]
     pub fn of(
         servers: &'a [McpServer],

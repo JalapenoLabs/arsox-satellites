@@ -2226,6 +2226,7 @@ async fn a_declared_mcp_server_reaches_the_harness_with_its_header_in_the_enviro
 ///
 /// Separate from [`settle`], whose bound suits a transcript replayed at once.
 /// A turn with services spends real time starting and stopping processes.
+#[cfg(unix)]
 async fn settle_within(
     store: &Store,
     thread_id: &str,
@@ -2252,6 +2253,7 @@ async fn settle_within(
 /// `python3` because every image and runner this suite meets carries one, and
 /// its `http.server` is a real listener with no dependencies. `exec` keeps the
 /// server as the group's leader, so the pid a test reads is the group.
+#[cfg(target_os = "linux")]
 fn file_server(name: &str, before: &str) -> arsox_sdk::proto::settings::v1::Service {
     arsox_sdk::proto::settings::v1::Service {
         name: name.to_owned(),
@@ -2263,6 +2265,7 @@ fn file_server(name: &str, before: &str) -> arsox_sdk::proto::settings::v1::Serv
 }
 
 /// Reads a small file a service or the stand-in harness wrote, once it exists.
+#[cfg(target_os = "linux")]
 async fn written(path: &std::path::Path) -> String {
     for _attempt in 0..200 {
         if let Ok(text) = std::fs::read_to_string(path)
@@ -2277,6 +2280,7 @@ async fn written(path: &std::path::Path) -> String {
 }
 
 /// The value one `KEY=VALUE` line of a recorded environment holds.
+#[cfg(target_os = "linux")]
 fn recorded_value(environment: &str, key: &str) -> Option<String> {
     environment
         .lines()
@@ -2284,30 +2288,44 @@ fn recorded_value(environment: &str, key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// Whether any process on this host is still in `group`.
+/// Every process on this host that has not exited, as its pid and its group.
 ///
-/// Read from `/proc` rather than by signalling the group, so the answer is the
-/// same whether or not this test may signal what it finds. Field 5 of
-/// `/proc/<pid>/stat` is the process group, counted past the parenthesised
-/// command name, which may itself contain spaces.
+/// Read from `/proc` rather than by signalling, so the answer is the same
+/// whether or not this test may signal what it finds. The fields of
+/// `/proc/<pid>/stat` are counted past the parenthesised command name, which may
+/// itself contain spaces: the state, the parent, then the process group.
+///
+/// A zombie is left out. It has exited and waits only to be reaped, and on a
+/// host whose init is slow to reap orphans it keeps its pid and its group long
+/// after anything could be said to be running.
 #[cfg(target_os = "linux")]
-fn group_alive(group: u32) -> bool {
+fn living_processes() -> Vec<(u32, u32)> {
     let Ok(entries) = std::fs::read_dir("/proc") else {
-        return false;
+        return Vec::new();
     };
 
-    entries.flatten().any(|entry| {
-        let Ok(stat) = std::fs::read_to_string(entry.path().join("stat")) else {
-            return false;
-        };
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
+            let stat = std::fs::read_to_string(entry.path().join("stat")).ok()?;
+            let (_command, rest) = stat.rsplit_once(')')?;
+            let fields: Vec<&str> = rest.split_whitespace().collect();
 
-        stat.rsplit_once(')')
-            .map(|(_command, rest)| rest.split_whitespace().collect::<Vec<&str>>())
-            .is_some_and(|fields| {
-                // After the name: state, parent, then the process group.
-                fields.get(2).and_then(|pgrp| pgrp.parse::<u32>().ok()) == Some(group)
-            })
-    })
+            let exited = matches!(fields.first(), Some(&"Z" | &"X"));
+            let group = fields.get(2)?.parse::<u32>().ok()?;
+
+            (!exited).then_some((pid, group))
+        })
+        .collect()
+}
+
+/// Whether any process still running is in `group`.
+#[cfg(target_os = "linux")]
+fn group_alive(group: u32) -> bool {
+    living_processes()
+        .iter()
+        .any(|(_pid, member_of)| *member_of == group)
 }
 
 #[cfg(target_os = "linux")]
@@ -2391,6 +2409,10 @@ async fn a_turns_services_start_before_the_harness_and_are_gone_when_it_ends() {
         .parse()
         .expect("the service should record its background child");
     assert!(group_alive(leader), "the service runs while the turn does");
+    assert!(
+        living_processes().contains(&(straggler, leader)),
+        "the background child is in the service's group"
+    );
 
     assert_eq!(
         settle_within(
@@ -2409,7 +2431,9 @@ async fn a_turns_services_start_before_the_harness_and_are_gone_when_it_ends() {
         "the service's group outlived its turn"
     );
     assert!(
-        !std::path::Path::new(&format!("/proc/{straggler}")).exists(),
+        !living_processes()
+            .iter()
+            .any(|(pid, _group)| *pid == straggler),
         "a child in the service's group outlived its turn"
     );
 

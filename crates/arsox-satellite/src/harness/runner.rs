@@ -880,8 +880,9 @@ impl Runner {
         // included, and be withdrawn however the turn ends.
         let (mut context, _grant) = self.open(claimed, &ceilings, prepared).await;
 
-        // After `open`, so the time they take to become ready is on the turn's
-        // wall clock like everything else the turn waits for.
+        // After `open`, so the time they take to become ready is counted on the
+        // turn's wall clock. It is not enforced until the first session reads
+        // the clock; each service's readiness timeout bounds startup instead.
         context.services = crate::services::Running::start(
             &claimed.settings,
             crate::services::TurnScope {

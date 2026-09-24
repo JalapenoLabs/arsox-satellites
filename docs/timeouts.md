@@ -203,3 +203,7 @@ a test would have to reach around:
 
 - **Process-group teardown** for exec commands, so a killed shell takes its
   children with it rather than leaving orphans.
+- **The wall clock during service startup.** A thread's services start once the
+  turn's clock is running, and the clock is only checked once the harness is,
+  so startup is bounded by each service's readiness timeout rather than by the
+  wall clock. See [the services doc](./services.md#lifecycle-one-set-per-turn).

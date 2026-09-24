@@ -80,7 +80,12 @@ first thread's process. A process outside the satellite can still take an
 assigned port in the window; the service then fails its probe and says so.
 
 A port is leased for the whole turn even for a service that failed, so no other
-turn is handed an address this turn's agent was already told about.
+turn is handed an address this turn's agent was already told about. A service
+that could not be leased a port at all, because its fixed port was taken or the
+kernel would not offer one, has no address: the harness is given no
+`ARSOX_SERVICE_*` for it, and an MCP server naming it is withheld from the launch
+with a `harness.mcp.service_unbound` warning, beside the `SERVICE_START_FAILED`
+incident that says why.
 
 | Variable | Set on | Value |
 |---|---|---|
@@ -129,8 +134,12 @@ Services are **turn scoped**:
    or out of wall clock. Every service is stopped, and the turn's result is
    recorded only once they are gone.
 
-Startup counts against the turn's `maxWallClockPerTurn`, like everything else a
-turn waits for.
+Startup time counts toward the turn's `maxWallClockPerTurn`, because the clock
+starts before it, but nothing ends startup early: the wall clock and a
+cancellation are both checked once the harness is running, not while services
+are still starting. Startup is bounded by each service's readiness timeout
+instead, so a turn declaring many slow services can run past its wall clock by
+up to their sum before the harness session notices and stops the turn.
 
 **What a service holds in memory does not survive into the next turn.** A service
 is a new process every turn, on a port that may differ. Anything worth keeping
@@ -262,6 +271,9 @@ or checker still ends only its shell. See
 
 ## Roadmap
 
+- **Startup that ends with the turn.** Racing service startup against the wall
+  clock and against a cancellation, rather than letting both wait until the
+  harness is running.
 - **`PER_MEMBER` isolation.** One instance per member, each in its own network
   namespace, so one instance cannot reach another and hardcoded ports stop
   mattering. That is the real boundary; today the declaration is refused.

@@ -716,17 +716,19 @@ in every respect: it switches on `--strict-mcp-config`, is allowed by name under
 `NONE` or `CUSTOM`, and may carry headers. It opens no host on the egress
 allowlist, because loopback is in every gated agent's `NO_PROXY`.
 
-Every declared service is given a port before the harness starts, whether or not
-it then becomes ready, so the launch always has one to render. One that never
+A service that was leased a port keeps it for the whole turn whether or not it
+became ready, so the launch renders its address either way. One that never
 became ready is recorded as `SERVICE_START_FAILED` and the server simply fails to
 connect. Measured against Claude 2.1.280 and Codex 0.156.1 with a server on a
 port nothing listened on, both start without it: Claude reports the server as
 `failed` in its init line, and Codex logs the refused connection on stderr, and
 both go on to their model requests.
 
-A server naming a service the turn gave no port, which only settings stored
-before the API checked can do, is skipped with a `harness.mcp.service_unbound`
-warning.
+A server naming a service the turn gave no port is skipped with a
+`harness.mcp.service_unbound` warning. That is a service whose fixed port was
+already taken, or for which the kernel would offer none, each already recorded
+as `SERVICE_START_FAILED`, and settings stored before the API checked that the
+service is declared.
 
 #### Relayed servers
 
