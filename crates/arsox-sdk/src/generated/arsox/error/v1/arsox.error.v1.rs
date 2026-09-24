@@ -158,10 +158,10 @@ pub enum ErrorCode {
     /// probe's timeout, exited before it passed, or could not be given its port.
     /// Recorded as a degraded incident carrying the log tail, and the turn goes on
     /// without the service.
-    ServiceStartFailed = 1500,
+    ServiceStartFailed = 1600,
     /// A service that had become ready exited during the turn. Recovered when a
     /// restart brought it back, degraded once the turn's restarts were spent.
-    ServiceExited = 1501,
+    ServiceExited = 1601,
 }
 impl ErrorCode {
     /// String value of the enum field names used in the ProtoBuf definition.
