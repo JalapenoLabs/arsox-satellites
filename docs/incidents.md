@@ -47,6 +47,23 @@ about which thread or turn was reading the line, so the runner fills the
 attribution in rather than the mapper inventing it, and carries the mapper's own
 `retryable` judgement through untouched.
 
+## Service incidents
+
+A thread's [services](./services.md) record theirs directly, through the same
+`Store::report_incident`, rather than through the runner. A service is watched
+by its own task for the whole turn, including while the checkers run, and a
+channel to the runner would only be read while a harness session is.
+
+| Code | Disposition | When |
+|---|---|---|
+| `SERVICE_START_FAILED` | `degraded` | no port, no launch, an exit before ready, or a probe that never passed |
+| `SERVICE_EXITED` | `recovered` | a ready service exited and a restart brought it back |
+| `SERVICE_EXITED` | `degraded` | a ready service exited with the turn's three restarts spent |
+
+Both carry `details.service` and, when the service wrote anything,
+`details.output_tail`, its last 40 lines; `SERVICE_EXITED` also carries
+`details.status`. None is retryable.
+
 ## Satellite-scoped incidents reach no thread stream
 
 `thread_id` is nullable, because a failure can belong to the satellite rather

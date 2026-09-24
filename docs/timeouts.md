@@ -14,6 +14,7 @@ So each carries a bound, and every bound is per thread.
 | one model request | 10 minutes | the attempt is abandoned, its endpoint is given up on, and a `degraded` incident records it; the harness gets a 504 only once every endpoint has been tried |
 | harness idle, meaning no output at all | 15 minutes | the harness is torn down and started once on the same session; a second expiry fails the turn with `HARNESS_IDLE_TIMEOUT` |
 | one relayed tool call | 15 minutes, not per thread | the agent reads a tool error saying the call timed out, and the host application is sent `ToolCallCancelled` |
+| one service's readiness probe | 60 seconds, per service | the service is stopped and recorded as a `degraded` `SERVICE_START_FAILED`, and the turn goes on without it |
 
 The relayed call's bound is a constant, `relay::CALL_DEADLINE`, rather than a
 thread setting. It bounds a host application's answer rather than anything the
@@ -23,6 +24,12 @@ See [the relay doc](./relay.md#how-a-call-ends).
 The turn wall clock is deliberately not in this table. Exceeding it is a budget
 outcome rather than a hung operation, so it lives in `Budget` beside the token
 and cost ceilings. See [the proxy doc](./llm-proxy.md#the-three-ceilings).
+
+The readiness bound is `timeouts::DEFAULT_SERVICE_READY`, overridden per service
+by `ready_when.timeout` rather than by `ThreadSettings.timeouts`, because it
+belongs to one service rather than to the thread. It resolves through the same
+rule as the three below: zero and negative fall back to the default. See
+[the services doc](./services.md#readiness).
 
 ## Resolved once, enforced in three places
 
@@ -53,6 +60,10 @@ the container stops.
 That is a real limit rather than something to imply away. The bound reliably ends
 the satellite's *wait*, and reliably ends the shell. Process-group teardown is
 what would end everything below it, and it is separate work.
+
+A thread's [services](./services.md) already have it: each is the leader of its
+own process group, and stopping one signals the whole group. That is where the
+pattern to bring to exec commands lives.
 
 Both pipes are drained while the command runs rather than after it exits, which
 is what makes the bound mean what it says: a pipe nobody reads fills its buffer

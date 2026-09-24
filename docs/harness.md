@@ -574,10 +574,16 @@ at spawn cannot be read from a list the proxy may fail over.
 
 ### The agent's environment is built, not inherited
 
-**No `ARSOX_*` variable reaches an agent.** A spawned process inherits its
-parent's environment by default, and the satellite's holds `ARSOX_SECRET`. An
-agent that could read it could command its own satellite: destroy threads, read
-another thread's artifacts, rewrite its own permissions.
+**No `ARSOX_*` variable the satellite holds reaches an agent.** A spawned
+process inherits its parent's environment by default, and the satellite's holds
+`ARSOX_SECRET`. An agent that could read it could command its own satellite:
+destroy threads, read another thread's artifacts, rewrite its own permissions.
+
+The one `ARSOX_` family an agent is given is `ARSOX_SERVICE_<NAME>_PORT` and
+`ARSOX_SERVICE_<NAME>_URL`, where the thread's [services](./services.md) listen.
+They are minted per turn and listed on `HarnessCommand::env` like everything
+else an agent is meant to have, after the thread's declared variables, and a
+thread may not declare an `ARSOX_` key, so none of them can be forged.
 
 The rule is written over the whole prefix rather than as a list of names,
 because a denylist is one forgotten entry away from leaking the next setting
@@ -636,6 +642,7 @@ and how each CLI is told about it.
 | the servers | `--mcp-config '{"mcpServers":{...}}'`, one JSON argument | `-c mcp_servers.<name>.url="<url>"` per server |
 | a header | `"<header>": "${MCP_HEADER_SECRET_<s>_<h>}"` inside that JSON | `-c mcp_servers.<name>.env_http_headers={"<header>"="MCP_HEADER_SECRET_<s>_<h>"}` |
 | a relayed server | `"url": "<grant>/mcp/<name>"`, no headers | the same URL, plus `-c mcp_servers.<name>.tool_timeout_sec=960` |
+| a server a service runs | `"url": "http://127.0.0.1:<port><path>"` | the same URL |
 | other servers | refused with `--strict-mcp-config` | merged, see below |
 
 **Header values never reach argv.** A command line is readable by anything on
@@ -688,7 +695,8 @@ Refused at thread creation with `REQUEST_FIELD_INVALID`, naming
 |---|---|---|
 | the list | at most 16 servers, names unique ignoring case | every server lands in one argument, and Linux caps one at 128 KiB |
 | `name` | 1 to 64 of `A-Z a-z 0-9 _ -`, not starting with `arsox` | a dot would nest inside Codex's dotted config path, the name is part of every tool name, and `arsox` is reserved for the tools Arsox offers itself |
-| `url` | `http` or `https`, a host, no userinfo, no `${`, at most 2048 characters | streamable HTTP is the transport served; a credential belongs in a header; Claude would expand `${` from the environment |
+| `url` | `http` or `https`, a host, no userinfo, no `${`, at most 2048 characters; empty when `service` is set | streamable HTTP is the transport served; a credential belongs in a header; Claude would expand `${` from the environment |
+| `service` | instead of `url`: a service in `settings.services`, named exactly, and a path starting with `/` with no whitespace, control character, or `${` | the address only exists once a turn has started the service, and exactly one of the two is what the launch renders |
 | `headers` | at most 8, names HTTP tokens of at most 128 characters and unique ignoring case | a header name is also a JSON key and a TOML key |
 | a header value | at most 4096 bytes, no line break and no NUL | a line break would split one header into two, and an environment variable cannot carry a NUL |
 
@@ -698,6 +706,27 @@ variable gets.
 A name is unique ignoring case across `mcp_servers` and `relayed_mcp_servers`
 together, because both reach the agent as `mcp__<name>`. The rules a relayed
 server and its tools follow are in [the relay doc](./relay.md#declaring-relayed-tools).
+
+#### Servers a service runs
+
+A declared server may name one of the thread's [services](./services.md) and a
+path instead of a URL. It is rendered at `http://127.0.0.1:<port><path>`, with
+the port the service was given for this turn, and is otherwise a declared server
+in every respect: it switches on `--strict-mcp-config`, is allowed by name under
+`NONE` or `CUSTOM`, and may carry headers. It opens no host on the egress
+allowlist, because loopback is in every gated agent's `NO_PROXY`.
+
+Every declared service is given a port before the harness starts, whether or not
+it then becomes ready, so the launch always has one to render. One that never
+became ready is recorded as `SERVICE_START_FAILED` and the server simply fails to
+connect. Measured against Claude 2.1.280 and Codex 0.156.1 with a server on a
+port nothing listened on, both start without it: Claude reports the server as
+`failed` in its init line, and Codex logs the refused connection on stderr, and
+both go on to their model requests.
+
+A server naming a service the turn gave no port, which only settings stored
+before the API checked can do, is skipped with a `harness.mcp.service_unbound`
+warning.
 
 #### Relayed servers
 
