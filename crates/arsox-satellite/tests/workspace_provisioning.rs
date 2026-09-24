@@ -980,5 +980,73 @@ fn provisioner(store: &Store, workspace: &scratch::Dir) -> Provisioner {
         // rather than the image's, so a satellite that could would not be
         // writing outside the test's scratch directory.
         arsox_satellite::broker::Broker::at(workspace.path().join("broker")),
+        // No setup script, so nothing for provisioning to wait behind.
+        arsox_satellite::setup::Gate::open(),
     )
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn provisioning_waits_for_the_setup_script_to_finish() {
+    // The host's setup script installs what a repo's setup commands reach for,
+    // so a setup command that runs underneath it races the install. Here the
+    // setup command fails unless the script has already left its marker.
+    let fixtures = scratch::Dir::new("origin");
+    let workspace = scratch::Dir::new("workspace");
+    let store = Store::open_in_memory().await.expect("should open");
+    let marker = workspace.path().join("tool-installed");
+
+    let setup = arsox_satellite::setup::Setup::new(
+        store.clone(),
+        arsox_satellite::stream::EventBus::new(),
+        &workspace.path().join("arsox.db"),
+        Arc::new(tokio::sync::Notify::new()),
+    );
+    setup
+        .set_script(format!("sleep 1\ntouch {}\n", marker.display()))
+        .await
+        .expect("should set the script");
+
+    let mut declared = repo(
+        "api",
+        &origin(&fixtures.path().join("service"), "README.md"),
+    );
+    declared.setup_commands = format!("test -f {}", marker.display());
+    let repos = vec![declared];
+
+    let thread = store
+        .create_thread(NewThread {
+            settings: ThreadSettings {
+                repos: repos.clone(),
+                ..ThreadSettings::default()
+            },
+            metadata: BTreeMap::new(),
+            idempotency_key: None,
+        })
+        .await
+        .expect("should create")
+        .thread;
+
+    Provisioner::new(
+        store.clone(),
+        PathBuf::from(workspace.path()),
+        Arc::new(tokio::sync::Notify::new()),
+        arsox_satellite::broker::Broker::at(workspace.path().join("broker")),
+        setup.gate(),
+    )
+    .provision(&thread.thread_id, &settings(repos))
+    .await;
+
+    assert!(
+        marker.exists(),
+        "provisioning finished before the setup script did"
+    );
+    assert!(
+        store
+            .incidents_for_thread(&thread.thread_id)
+            .await
+            .expect("should read")
+            .is_empty(),
+        "the repo's setup command ran before the tooling it needed was installed"
+    );
 }

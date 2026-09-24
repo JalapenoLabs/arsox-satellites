@@ -18,6 +18,7 @@ credential.
 | `threads` | the thread listing, filtered to the states a live thread can be in |
 | `disk` | the cached disk measurement |
 | `max_concurrent_threads`, `insecure_mode`, `started_at` | boot configuration |
+| `setup` | the setup row; `NONE` when no script is set. See [setup](./setup.md) |
 
 **`running_threads` is counted from turns, not from the thread state column.** A
 thread blocked on a question or watching a pull request still holds a turn in

@@ -59,6 +59,7 @@ export { ErrorCode } from './proto/arsox/error/v1/error_pb.js'
 export { Disposition } from './proto/arsox/incident/v1/incident_pb.js'
 export { Harness } from './proto/arsox/harness/v1/harness_pb.js'
 export { ThreadOrder, ThreadState } from './proto/arsox/thread/v1/thread_pb.js'
+export { SetupState } from './proto/arsox/satellite/v1/setup_pb.js'
 export { TurnOrder, TurnStatus } from './proto/arsox/turn/v1/turn_pb.js'
 export { Stage, StageDisposition } from './proto/arsox/turn/v1/result_pb.js'
 
@@ -83,6 +84,7 @@ export type {
   GetStatusResponse,
   GetVersionResponse
 } from './proto/arsox/satellite/v1/satellite_pb.js'
+export type { SetupStatus } from './proto/arsox/satellite/v1/setup_pb.js'
 export type { ThreadSettings } from './proto/arsox/settings/v1/settings_pb.js'
 export type { Thread, ThreadSummary } from './proto/arsox/thread/v1/thread_pb.js'
 export type { Turn } from './proto/arsox/turn/v1/turn_pb.js'

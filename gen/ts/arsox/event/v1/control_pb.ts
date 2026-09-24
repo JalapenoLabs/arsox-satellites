@@ -12,6 +12,8 @@ import type { Ceiling } from "./lifecycle_pb.js";
 import { file_arsox_event_v1_lifecycle } from "./lifecycle_pb.js";
 import type { Incident } from "../../incident/v1/incident_pb.js";
 import { file_arsox_incident_v1_incident } from "../../incident/v1/incident_pb.js";
+import type { SetupStatus } from "../../satellite/v1/setup_pb.js";
+import { file_arsox_satellite_v1_setup } from "../../satellite/v1/setup_pb.js";
 import type { ThreadState } from "../../thread/v1/thread_pb.js";
 import { file_arsox_thread_v1_thread } from "../../thread/v1/thread_pb.js";
 import type { Message } from "@bufbuild/protobuf";
@@ -20,7 +22,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/event/v1/control.proto.
  */
 export const file_arsox_event_v1_control: GenFile = /*@__PURE__*/
-  fileDesc("ChxhcnNveC9ldmVudC92MS9jb250cm9sLnByb3RvEg5hcnNveC5ldmVudC52MSKQBAoMQ29udHJvbEV2ZW50EhAKCHNlcXVlbmNlGAEgASgEEi8KC29jY3VycmVkX2F0GAIgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBIMCgR0eXBlGAMgASgJEjcKDnRocmVhZF9jcmVhdGVkGBQgASgLMh0uYXJzb3guZXZlbnQudjEuVGhyZWFkQ3JlYXRlZEgAEkIKFHRocmVhZF9zdGF0ZV9jaGFuZ2VkGBUgASgLMiIuYXJzb3guZXZlbnQudjEuVGhyZWFkU3RhdGVDaGFuZ2VkSAASOwoQdGhyZWFkX2Rlc3Ryb3llZBgWIAEoCzIfLmFyc294LmV2ZW50LnYxLlRocmVhZERlc3Ryb3llZEgAEkAKE3F1ZXVlX2RlcHRoX2NoYW5nZWQYFyABKAsyIS5hcnNveC5ldmVudC52MS5RdWV1ZURlcHRoQ2hhbmdlZEgAEjcKDmhlYWx0aF9jaGFuZ2VkGBggASgLMh0uYXJzb3guZXZlbnQudjEuSGVhbHRoQ2hhbmdlZEgAEj4KDmJ1ZGdldF93YXJuaW5nGBkgASgLMiQuYXJzb3guZXZlbnQudjEuQ29udHJvbEJ1ZGdldFdhcm5pbmdIABIvCghpbmNpZGVudBgaIAEoCzIbLmFyc294LmluY2lkZW50LnYxLkluY2lkZW50SABCCQoHcGF5bG9hZCIiCg1UaHJlYWRDcmVhdGVkEhEKCXRocmVhZF9pZBgBIAEoCSKGAQoSVGhyZWFkU3RhdGVDaGFuZ2VkEhEKCXRocmVhZF9pZBgBIAEoCRIuCghwcmV2aW91cxgCIAEoDjIcLmFyc294LnRocmVhZC52MS5UaHJlYWRTdGF0ZRItCgdjdXJyZW50GAMgASgOMhwuYXJzb3gudGhyZWFkLnYxLlRocmVhZFN0YXRlIlUKD1RocmVhZERlc3Ryb3llZBIRCgl0aHJlYWRfaWQYASABKAkSLwoGcmVhc29uGAIgASgOMh8uYXJzb3guZXZlbnQudjEuVGhyZWFkRW5kUmVhc29uIjsKEVF1ZXVlRGVwdGhDaGFuZ2VkEhEKCXRocmVhZF9pZBgBIAEoCRITCgtxdWV1ZV9kZXB0aBgCIAEoDSJSCg1IZWFsdGhDaGFuZ2VkEg0KBXJlYWR5GAEgASgIEhIKCmNoZWNrX25hbWUYAiABKAkSEwoGZGV0YWlsGAMgASgJSACIAQFCCQoHX2RldGFpbCJpChRDb250cm9sQnVkZ2V0V2FybmluZxIRCgl0aHJlYWRfaWQYASABKAkSKAoHY2VpbGluZxgCIAEoDjIXLmFyc294LmV2ZW50LnYxLkNlaWxpbmcSFAoMcGVyY2VudF91c2VkGAMgASgNKpUBCg9UaHJlYWRFbmRSZWFzb24SIQodVEhSRUFEX0VORF9SRUFTT05fVU5TUEVDSUZJRUQQABIfChtUSFJFQURfRU5EX1JFQVNPTl9ERVNUUk9ZRUQQARIdChlUSFJFQURfRU5EX1JFQVNPTl9FWFBJUkVEEAISHwobVEhSRUFEX0VORF9SRUFTT05fQ09NUExFVEVEEANCfAoSY29tLmFyc294LmV2ZW50LnYxQgxDb250cm9sUHJvdG9QAaICA0FFWKoCDkFyc294LkV2ZW50LlYxygIOQXJzb3hcRXZlbnRcVjHiAhpBcnNveFxFdmVudFxWMVxHUEJNZXRhZGF0YeoCEEFyc294OjpFdmVudDo6VjFiBnByb3RvMw", [file_arsox_common_v1_common, file_arsox_event_v1_lifecycle, file_arsox_incident_v1_incident, file_arsox_thread_v1_thread]);
+  fileDesc("ChxhcnNveC9ldmVudC92MS9jb250cm9sLnByb3RvEg5hcnNveC5ldmVudC52MSKABQoMQ29udHJvbEV2ZW50EhAKCHNlcXVlbmNlGAEgASgEEi8KC29jY3VycmVkX2F0GAIgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcBIMCgR0eXBlGAMgASgJEjcKDnRocmVhZF9jcmVhdGVkGBQgASgLMh0uYXJzb3guZXZlbnQudjEuVGhyZWFkQ3JlYXRlZEgAEkIKFHRocmVhZF9zdGF0ZV9jaGFuZ2VkGBUgASgLMiIuYXJzb3guZXZlbnQudjEuVGhyZWFkU3RhdGVDaGFuZ2VkSAASOwoQdGhyZWFkX2Rlc3Ryb3llZBgWIAEoCzIfLmFyc294LmV2ZW50LnYxLlRocmVhZERlc3Ryb3llZEgAEkAKE3F1ZXVlX2RlcHRoX2NoYW5nZWQYFyABKAsyIS5hcnNveC5ldmVudC52MS5RdWV1ZURlcHRoQ2hhbmdlZEgAEjcKDmhlYWx0aF9jaGFuZ2VkGBggASgLMh0uYXJzb3guZXZlbnQudjEuSGVhbHRoQ2hhbmdlZEgAEj4KDmJ1ZGdldF93YXJuaW5nGBkgASgLMiQuYXJzb3guZXZlbnQudjEuQ29udHJvbEJ1ZGdldFdhcm5pbmdIABIvCghpbmNpZGVudBgaIAEoCzIbLmFyc294LmluY2lkZW50LnYxLkluY2lkZW50SAASNQoNc2V0dXBfc3RhcnRlZBgbIAEoCzIcLmFyc294LmV2ZW50LnYxLlNldHVwU3RhcnRlZEgAEjcKDnNldHVwX2ZpbmlzaGVkGBwgASgLMh0uYXJzb3guZXZlbnQudjEuU2V0dXBGaW5pc2hlZEgAQgkKB3BheWxvYWQiIgoNVGhyZWFkQ3JlYXRlZBIRCgl0aHJlYWRfaWQYASABKAkihgEKElRocmVhZFN0YXRlQ2hhbmdlZBIRCgl0aHJlYWRfaWQYASABKAkSLgoIcHJldmlvdXMYAiABKA4yHC5hcnNveC50aHJlYWQudjEuVGhyZWFkU3RhdGUSLQoHY3VycmVudBgDIAEoDjIcLmFyc294LnRocmVhZC52MS5UaHJlYWRTdGF0ZSJVCg9UaHJlYWREZXN0cm95ZWQSEQoJdGhyZWFkX2lkGAEgASgJEi8KBnJlYXNvbhgCIAEoDjIfLmFyc294LmV2ZW50LnYxLlRocmVhZEVuZFJlYXNvbiI7ChFRdWV1ZURlcHRoQ2hhbmdlZBIRCgl0aHJlYWRfaWQYASABKAkSEwoLcXVldWVfZGVwdGgYAiABKA0iUgoNSGVhbHRoQ2hhbmdlZBINCgVyZWFkeRgBIAEoCBISCgpjaGVja19uYW1lGAIgASgJEhMKBmRldGFpbBgDIAEoCUgAiAEBQgkKB19kZXRhaWwiaQoUQ29udHJvbEJ1ZGdldFdhcm5pbmcSEQoJdGhyZWFkX2lkGAEgASgJEigKB2NlaWxpbmcYAiABKA4yFy5hcnNveC5ldmVudC52MS5DZWlsaW5nEhQKDHBlcmNlbnRfdXNlZBgDIAEoDSIlCgxTZXR1cFN0YXJ0ZWQSFQoNc2NyaXB0X3NoYTI1NhgBIAEoCSI/Cg1TZXR1cEZpbmlzaGVkEi4KBXNldHVwGAEgASgLMh8uYXJzb3guc2F0ZWxsaXRlLnYxLlNldHVwU3RhdHVzKpUBCg9UaHJlYWRFbmRSZWFzb24SIQodVEhSRUFEX0VORF9SRUFTT05fVU5TUEVDSUZJRUQQABIfChtUSFJFQURfRU5EX1JFQVNPTl9ERVNUUk9ZRUQQARIdChlUSFJFQURfRU5EX1JFQVNPTl9FWFBJUkVEEAISHwobVEhSRUFEX0VORF9SRUFTT05fQ09NUExFVEVEEANCfAoSY29tLmFyc294LmV2ZW50LnYxQgxDb250cm9sUHJvdG9QAaICA0FFWKoCDkFyc294LkV2ZW50LlYxygIOQXJzb3hcRXZlbnRcVjHiAhpBcnNveFxFdmVudFxWMVxHUEJNZXRhZGF0YeoCEEFyc294OjpFdmVudDo6VjFiBnByb3RvMw", [file_arsox_common_v1_common, file_arsox_event_v1_lifecycle, file_arsox_incident_v1_incident, file_arsox_satellite_v1_setup, file_arsox_thread_v1_thread]);
 
 /**
  * One event on the satellite's control stream.
@@ -104,6 +106,18 @@ export type ControlEvent = Message<"arsox.event.v1.ControlEvent"> & {
      */
     value: Incident;
     case: "incident";
+  } | {
+    /**
+     * @generated from field: arsox.event.v1.SetupStarted setup_started = 27;
+     */
+    value: SetupStarted;
+    case: "setupStarted";
+  } | {
+    /**
+     * @generated from field: arsox.event.v1.SetupFinished setup_finished = 28;
+     */
+    value: SetupFinished;
+    case: "setupFinished";
   } | { case: undefined; value?: undefined };
 };
 
@@ -262,6 +276,50 @@ export type ControlBudgetWarning = Message<"arsox.event.v1.ControlBudgetWarning"
  */
 export const ControlBudgetWarningSchema: GenMessage<ControlBudgetWarning> = /*@__PURE__*/
   messageDesc(file_arsox_event_v1_control, 6);
+
+/**
+ * The setup script started running, and new work waits until it finishes.
+ *
+ * @generated from message arsox.event.v1.SetupStarted
+ */
+export type SetupStarted = Message<"arsox.event.v1.SetupStarted"> & {
+  /**
+   * The SHA-256 of the script now running, as lowercase hex.
+   *
+   * @generated from field: string script_sha256 = 1;
+   */
+  scriptSha256: string;
+};
+
+/**
+ * Describes the message arsox.event.v1.SetupStarted.
+ * Use `create(SetupStartedSchema)` to create a new message.
+ */
+export const SetupStartedSchema: GenMessage<SetupStarted> = /*@__PURE__*/
+  messageDesc(file_arsox_event_v1_control, 7);
+
+/**
+ * The setup script stopped running, and work resumes.
+ *
+ * Carries the status as it stands now: SUCCEEDED or FAILED when the run ended
+ * on its own, NONE when the script was cleared while it ran. A script replaced
+ * mid-run is followed by a SetupStarted for its replacement instead.
+ *
+ * @generated from message arsox.event.v1.SetupFinished
+ */
+export type SetupFinished = Message<"arsox.event.v1.SetupFinished"> & {
+  /**
+   * @generated from field: arsox.satellite.v1.SetupStatus setup = 1;
+   */
+  setup?: SetupStatus;
+};
+
+/**
+ * Describes the message arsox.event.v1.SetupFinished.
+ * Use `create(SetupFinishedSchema)` to create a new message.
+ */
+export const SetupFinishedSchema: GenMessage<SetupFinished> = /*@__PURE__*/
+  messageDesc(file_arsox_event_v1_control, 8);
 
 /**
  * Reason a thread went away.

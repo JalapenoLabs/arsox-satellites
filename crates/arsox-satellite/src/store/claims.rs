@@ -9,6 +9,7 @@
 
 use super::{Store, StoreError, from_nanos, to_nanos};
 use arsox_sdk::proto::common::v1::Timestamp;
+use arsox_sdk::proto::satellite::v1::SetupState;
 use arsox_sdk::proto::settings::v1::TurnOverrides;
 use arsox_sdk::proto::thread::v1::ThreadState;
 use arsox_sdk::proto::turn::v1::{Turn, TurnResult, TurnStatus};
@@ -51,10 +52,12 @@ impl Store {
     /// driving one harness. Polling and then updating would leave exactly that
     /// window open.
     ///
-    /// Nothing is claimed from a thread that is paused or still provisioning.
-    /// Both rules live in the query rather than in the runner, which is what
-    /// makes "no turn ever runs in a half-cloned workspace" a property of the
-    /// database instead of a promise a second runner could break.
+    /// Nothing is claimed from a thread that is paused or still provisioning,
+    /// and nothing at all while the satellite's setup script runs. Every rule
+    /// lives in the query rather than in the runner, which is what makes "no
+    /// turn ever runs in a half-cloned workspace" and "no turn starts before the
+    /// host's tooling is installed" properties of the database instead of
+    /// promises a second runner could break.
     ///
     /// # Errors
     ///
@@ -64,8 +67,9 @@ impl Store {
 
         let mut transaction = self.pool().begin().await?;
 
-        // One turn at a time per thread, forever, and nothing at all from a
-        // thread that is paused or still provisioning. Every rule lives in this
+        // One turn at a time per thread, forever, nothing at all from a thread
+        // that is paused or still provisioning, and nothing on the whole
+        // satellite while its setup script runs. Every rule lives in this
         // subquery rather than in the runner, which is what makes them hold even
         // if a second runner appears.
         let Some(row) = sqlx::query(
@@ -80,6 +84,7 @@ impl Store {
                        AND candidate.thread_id NOT IN (
                              SELECT running.thread_id FROM turns running WHERE running.status = ?
                            )
+                       AND NOT EXISTS (SELECT 1 FROM setup WHERE setup.state = ?)
                      ORDER BY candidate.queued_at ASC, candidate.turn_id ASC
                      LIMIT 1
                   )
@@ -91,6 +96,7 @@ impl Store {
         .bind(i32::from(ThreadState::Paused))
         .bind(i32::from(ThreadState::Provisioning))
         .bind(i32::from(TurnStatus::Running))
+        .bind(i32::from(SetupState::Running))
         .fetch_optional(&mut *transaction)
         .await?
         else {

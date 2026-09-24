@@ -2,6 +2,7 @@
 
 import type { GetHarnessResponse } from './proto/arsox/harness/v1/harness_pb.js'
 import type { GetStatusResponse, GetVersionResponse } from './proto/arsox/satellite/v1/satellite_pb.js'
+import type { SetupStatus } from './proto/arsox/satellite/v1/setup_pb.js'
 import type { Incident } from './proto/arsox/incident/v1/incident_pb.js'
 import type { Thread, ThreadSummary } from './proto/arsox/thread/v1/thread_pb.js'
 import type { ThreadSettingsSchema } from './proto/arsox/settings/v1/settings_pb.js'
@@ -11,6 +12,7 @@ import type { IncidentQuery } from './incidents.js'
 // Core
 import { GetHarnessResponseSchema } from './proto/arsox/harness/v1/harness_pb.js'
 import { GetStatusResponseSchema, GetVersionResponseSchema } from './proto/arsox/satellite/v1/satellite_pb.js'
+import { SetSetupScriptRequestSchema, SetSetupScriptResponseSchema } from './proto/arsox/satellite/v1/setup_pb.js'
 import { ListIncidentsResponseSchema } from './proto/arsox/incident/v1/incident_pb.js'
 import {
   CreateThreadRequestSchema,
@@ -130,6 +132,40 @@ export class Satellite {
   /** Reports what the satellite is currently doing. */
   async status(): Promise<GetStatusResponse> {
     return this.#connection.call('GET', '/v1/status', GetStatusResponseSchema)
+  }
+
+  /**
+   * Sets the satellite's setup script, the install script it runs as root.
+   *
+   * The satellite runs it at once, again on every container start, and holds
+   * new turns and new thread provisioning while it runs. Setting the script it
+   * already holds changes nothing and answers with the status of its last run,
+   * so a host can send its script on every boot of its own. A different script
+   * stops a run in progress and starts over, and an empty one clears it.
+   *
+   * Answers as soon as the script is stored, not when it finishes. Follow it
+   * with {@link Satellite.status}, whose `setup` field reports the run.
+   *
+   * The script runs again on every container start, so write it to check
+   * before it downloads.
+   *
+   * ```typescript
+   * const setup = await satellite.setSetupScript('command -v jq || apt-get install --yes jq')
+   * ```
+   */
+  async setSetupScript(script: string): Promise<SetupStatus> {
+    const response = await this.#connection.call(
+      'PUT',
+      '/v1/setup',
+      SetSetupScriptResponseSchema,
+      encode(SetSetupScriptRequestSchema, { script })
+    )
+
+    if (!response.setup) {
+      throw ArsoxError.transport('the satellite set its setup script without reporting it')
+    }
+
+    return response.setup
   }
 
   /**

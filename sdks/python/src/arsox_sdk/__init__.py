@@ -74,6 +74,7 @@ from arsox_sdk.proto.arsox.satellite.v1.satellite_pb2 import (
     GetStatusResponse,
     GetVersionResponse,
 )
+from arsox_sdk.proto.arsox.satellite.v1.setup_pb2 import SetupState, SetupStatus
 from arsox_sdk.proto.arsox.settings.v1.settings_pb2 import ThreadSettings
 from arsox_sdk.proto.arsox.thread.v1.thread_pb2 import (
     Thread,
@@ -126,6 +127,8 @@ __all__ = [
     "PageRequest",
     "PageResponse",
     "Secret",
+    "SetupState",
+    "SetupStatus",
     "Stage",
     "StageDisposition",
     "StageOutcome",

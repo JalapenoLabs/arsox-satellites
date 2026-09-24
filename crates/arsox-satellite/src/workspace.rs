@@ -382,6 +382,11 @@ pub struct Provisioner {
     /// which is a repo with no hooks: provisioning is the satellite running an
     /// operator's own configuration, and the gate exists for agents.
     broker: crate::broker::Broker,
+
+    /// Closed while the satellite's setup script runs. Provisioning waits on it,
+    /// because a repo's setup commands are exactly what the host's tooling is
+    /// installed for.
+    setup: crate::setup::Gate,
 }
 
 impl Provisioner {
@@ -391,12 +396,14 @@ impl Provisioner {
         workspace_root: PathBuf,
         work_queued: Arc<tokio::sync::Notify>,
         broker: crate::broker::Broker,
+        setup: crate::setup::Gate,
     ) -> Self {
         Self {
             store,
             workspace_root,
             work_queued,
             broker,
+            setup,
         }
     }
 
@@ -520,6 +527,20 @@ impl Provisioner {
         // scrub removed never reaches a setup command either, and the thread's
         // exec bound and its redactor come along with it.
         let execution = Execution::for_thread(settings);
+
+        // Before anything is written or cloned. The host's setup script is
+        // installing what these clones and their setup commands will reach for,
+        // so starting underneath it would race the install. A provisioning
+        // already past this point when a script starts carries on, exactly as a
+        // running turn does.
+        if self.setup.is_closed() {
+            tracing::info!(
+                event.name = "workspace.provision.waiting_for_setup",
+                thread.id = thread_id,
+                "waiting for the setup script to finish before provisioning",
+            );
+            self.setup.wait_until_open().await;
+        }
 
         tracing::info!(
             event.name = "workspace.provision.started",
