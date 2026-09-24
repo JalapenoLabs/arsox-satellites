@@ -15,7 +15,7 @@ from arsox_sdk.errors import ArsoxError
 from arsox_sdk.proto.arsox.common.v1 import common_pb2
 from arsox_sdk.proto.arsox.harness.v1 import harness_pb2
 from arsox_sdk.proto.arsox.incident.v1 import incident_pb2
-from arsox_sdk.proto.arsox.satellite.v1 import satellite_pb2
+from arsox_sdk.proto.arsox.satellite.v1 import satellite_pb2, setup_pb2
 from arsox_sdk.proto.arsox.settings.v1 import settings_pb2
 from arsox_sdk.proto.arsox.thread.v1 import thread_pb2
 from arsox_sdk.thread import ThreadHandle
@@ -103,6 +103,40 @@ class Satellite:
             ArsoxError: when the satellite is unreachable or rejects the secret.
         """
         return await self._connection.call("GET", "/v1/status", satellite_pb2.GetStatusResponse)
+
+    async def set_setup_script(self, script: str) -> setup_pb2.SetupStatus:
+        """Set the satellite's setup script, the install script it runs as root.
+
+        The satellite runs it at once, again on every container start, and holds
+        new turns and new thread provisioning while it runs. Setting the script it
+        already holds changes nothing and answers with the status of its last run,
+        so a host can send its script on every boot of its own. A different script
+        stops a run in progress and starts over, and an empty one clears it.
+
+        Answers as soon as the script is stored, not when it finishes. Follow it
+        with `status`, whose `setup` field reports the run. The script runs again
+        on every container start, so write it to check before it downloads:
+
+        ```python
+        setup = await satellite.set_setup_script("command -v jq || apt-get install --yes jq")
+        ```
+
+        Raises:
+            ArsoxError: when the satellite is unreachable or rejects the secret.
+        """
+        request = setup_pb2.SetSetupScriptRequest(script=script)
+
+        response = await self._connection.call(
+            "PUT",
+            "/v1/setup",
+            setup_pb2.SetSetupScriptResponse,
+            request.SerializeToString(),
+        )
+
+        if not response.HasField("setup"):
+            raise ArsoxError.transport("the satellite set its setup script without reporting it")
+
+        return response.setup
 
     async def harness(self) -> harness_pb2.GetHarnessResponse:
         """Report which harnesses this satellite offers and what each supports.

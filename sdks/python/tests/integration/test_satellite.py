@@ -12,7 +12,12 @@ because it has to be alone. Each gets a port of its own. See conftest.py.
 
 from __future__ import annotations
 
+import asyncio
+import sys
+import time
 from collections.abc import Awaitable
+
+import pytest
 
 from arsox_sdk import (
     ArsoxError,
@@ -22,6 +27,8 @@ from arsox_sdk import (
     Harness,
     ListIncidentsRequest,
     Satellite,
+    SetupState,
+    SetupStatus,
     ThreadCreated,
     ThreadEvent,
     ThreadSettings,
@@ -43,6 +50,28 @@ async def failure_from(call: Awaitable[object]) -> ArsoxError:
         return failure
 
     raise AssertionError("the call was expected to fail and did not")
+
+
+# How long a short setup script gets to finish before a test gives up.
+SETUP_SETTLE_SECONDS = 30.0
+
+
+async def settled_setup(client: Satellite) -> SetupStatus:
+    """Wait for the setup script to stop running, and return where it landed.
+
+    Setting a script answers when it is stored, not when it finishes, so a host
+    follows it on status. This is that loop, from a consumer's seat.
+    """
+    deadline = time.monotonic() + SETUP_SETTLE_SECONDS
+
+    while time.monotonic() < deadline:
+        setup = (await client.status()).setup
+        if setup.state != SetupState.SETUP_STATE_RUNNING:
+            return setup
+
+        await asyncio.sleep(0.05)
+
+    raise AssertionError(f"the setup script was still running after {SETUP_SETTLE_SECONDS}s")
 
 
 async def read_until(events: EventStream, event_type: str) -> list[ThreadEvent]:
@@ -313,3 +342,45 @@ async def test_it_reports_what_it_is_holding(client: Satellite, thread: ThreadCr
 
     settled = await client.status()
     assert thread.thread.thread_id not in [ summary.thread_id for summary in settled.threads ]
+
+
+# The script is `sh`, so this runs where the satellite image does. It shares the
+# file's satellite, and every script here is short and the last one clears, so
+# nothing else in the file waits behind it.
+@pytest.mark.skipif(sys.platform == "win32", reason="the setup script runs under sh")
+async def test_it_sets_repeats_fails_and_clears_the_setup_script(client: Satellite) -> None:
+    """The setup script runs, is not rerun unchanged, fails loudly, and clears."""
+    script = "echo installed-a-pinned-tool\n"
+
+    started = await client.set_setup_script(script)
+    assert started.state == SetupState.SETUP_STATE_RUNNING
+    assert len(started.script_sha256) == 64
+
+    succeeded = await settled_setup(client)
+    assert succeeded.state == SetupState.SETUP_STATE_SUCCEEDED
+    assert succeeded.exit_code == 0
+    assert "installed-a-pinned-tool" in succeeded.output_tail
+
+    # A host sends its script on every boot of its own. The same script again is
+    # answered with its last run rather than started over.
+    repeated = await client.set_setup_script(script)
+    assert repeated.state == SetupState.SETUP_STATE_SUCCEEDED
+    assert repeated.started_at == succeeded.started_at
+
+    await client.set_setup_script("echo no-such-package >&2\nexit 3\n")
+
+    failed = await settled_setup(client)
+    assert failed.state == SetupState.SETUP_STATE_FAILED
+    assert failed.exit_code == 3
+    assert "no-such-package" in failed.output_tail
+
+    # A setup failure belongs to the satellite, not to any thread.
+    incidents = await client.incidents(
+        ListIncidentsRequest(codes=[ ErrorCode.ERROR_CODE_SETUP_FAILED ])
+    )
+    assert len(incidents) == 1
+    assert not incidents[0].HasField("thread_id")
+    assert incidents[0].disposition == Disposition.DISPOSITION_DEGRADED
+
+    cleared = await client.set_setup_script("")
+    assert cleared.state == SetupState.SETUP_STATE_NONE

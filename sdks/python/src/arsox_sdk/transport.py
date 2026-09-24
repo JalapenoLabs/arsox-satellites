@@ -17,7 +17,7 @@ from arsox_sdk.proto.arsox.error.v1 import error_pb2
 logger = logging.getLogger(__name__)
 
 # The methods the satellite's HTTP surface uses.
-HttpMethod = Literal["GET", "POST", "DELETE"]
+HttpMethod = Literal["GET", "POST", "PUT", "DELETE"]
 
 # The thread stream's socket, opened with text decoding off. Frames are binary
 # protobuf, always, so a text frame is never something this SDK reads.
