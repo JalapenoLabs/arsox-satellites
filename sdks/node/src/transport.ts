@@ -14,7 +14,7 @@ import { ArsoxError } from './error.js'
 import { PROTOBUF_CONTENT_TYPE } from './constants.js'
 
 /** The methods the satellite's HTTP surface uses. */
-export type HttpMethod = 'GET' | 'POST' | 'DELETE'
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE'
 
 /** What came back off the socket, before anything is made of it. */
 export type RawResponse = {
