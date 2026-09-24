@@ -6,8 +6,8 @@ volume.
 
 The file lives at `/var/arsox/arsox.db`, overridable with `ARSOX_DB_PATH`.
 **Mount `/var/arsox` as a named volume.** It holds threads, queued turns, event
-history, and incidents, so losing it means losing every thread you intended to
-resume and every record of what went wrong.
+history, incidents, and the host's setup script, so losing it means losing every
+thread you intended to resume and every record of what went wrong.
 
 ## Three decisions shape the schema
 
@@ -36,10 +36,11 @@ A separate structure would be a second source of truth that could fall out of
 step with the turns it describes, and reconciling the two after a crash is a
 problem worth not having.
 
-## Pausing and provisioning are enforced in the claim, not the runner
+## Pausing, provisioning, and setup are enforced in the claim, not the runner
 
 `claim_next_turn` joins `threads` and excludes any thread in `PAUSED` or
-`PROVISIONING`, in the same statement that takes the turn.
+`PROVISIONING`, in the same statement that takes the turn. The same statement
+takes nothing at all while the setup row reads `RUNNING`.
 
 Putting the check in the runner instead would make it a rule the runner has to
 remember, and a second runner appearing later would not know about it. In the
@@ -52,6 +53,10 @@ runs in a half-cloned workspace" a property of the database. A thread that
 declared repos opens in that state, accepts queued turns while its clones run,
 and is released to `IDLE` when they finish. See
 [the workspace](./workspace.md).
+
+The setup script rides on it too, satellite-wide rather than per thread: while
+the host's install runs, no turn anywhere starts, because the tooling it installs
+is what those turns reach for. See [setup](./setup.md).
 
 Draining is one `UPDATE ... RETURNING` over the thread's queued rows for the same
 reason. Cancelling turns in a loop races the runner claiming the next one, and an
@@ -120,6 +125,24 @@ stream whenever the write failed, and a consumer replaying across that hole wait
 forever for an event that does not exist. Gapless and monotonic is not a nicety
 here: it is what makes `from_sequence` resumption correct.
 
+## The setup script is one row
+
+`setup` holds at most one row, and a `CHECK (id = 1)` makes that structural. No
+row means no script, so clearing it is a `DELETE` and reading it back as `NONE`
+needs no sentinel.
+
+The script itself is stored, not only its hash. A replaced container has lost
+everything outside `/var/arsox` and `/workspace`, which is where installed
+tooling lives, so the satellite runs the stored script again at every boot.
+Whether a second run is cheap is the script's business: it should check before it
+downloads.
+
+The row carries the last run's state, exit code, output tail, and times. Setting
+a new script rewrites all of them in one statement, so a read can never pair the
+new script with the old run's exit code. One module writes it, and a run that was
+replaced while it ran drops its outcome rather than recording it over its
+replacement.
+
 ## Idempotency
 
 Thread keys are globally unique; turn keys are unique **per thread**. Two threads
@@ -158,8 +181,8 @@ events survive a reopen.
 
 `scripts/smoke-test.py` drives a running container with real protobuf requests:
 thread and turn lifecycle, pause, drain, resume, ordering, collection, expiry,
-idempotency, metadata filtering, the incident listings, and every error code the
-endpoints can return. It is written in Python on purpose, because a Python client
+idempotency, metadata filtering, the incident listings, the setup script, and
+every error code the endpoints can return. It is written in Python on purpose, because a Python client
 decoding what a Rust satellite encoded is the cross-language contract proving
 itself rather than being asserted.
 

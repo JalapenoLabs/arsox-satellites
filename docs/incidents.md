@@ -50,10 +50,15 @@ attribution in rather than the mapper inventing it, and carries the mapper's own
 ## Satellite-scoped incidents reach no thread stream
 
 `thread_id` is nullable, because a failure can belong to the satellite rather
-than to any thread: an unreachable proxy at boot, a failed migration, a volume
-that will not mount. Those are recorded and not streamed. The thread sockets
-carry thread content only, and the control socket that would carry them does not
-emit incidents yet.
+than to any thread. The host's setup script is the one that records them today:
+a script that exits nonzero, runs past its bound, or cannot start is a
+`SETUP_FAILED` incident with no thread, `degraded`, not retryable, carrying
+`script_sha256`, `exit_code` when there is one, and `output`. See
+[setup](./setup.md#failure-does-not-stop-work).
+
+Those are recorded and not streamed. The thread sockets carry thread content
+only, and the control socket does not emit incidents yet. For setup the control
+socket's `setup.finished` carries the same status live.
 
 ## Redaction holds on both copies
 

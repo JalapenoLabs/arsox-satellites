@@ -23,7 +23,8 @@ Inside the image there are two identities:
 | the satellite process | `root` | the enforcement points, the database, the shim directories |
 | every process it spawns | `arsox`, uid 10001 | its own work under `/workspace` |
 
-**Every child the satellite spawns is handed down to `arsox`.** Harness
+**Every child the satellite spawns is handed down to `arsox`**, with one
+exception named below: the host application's own setup script. Harness
 processes, `git`, a repo's setup commands, and checkers alike. The drop happens
 in `harness::spawn::scrubbed_command`, which is the one function every spawn site
 already goes through for the credential scrub, so a new spawn site inherits both
@@ -52,6 +53,49 @@ The `01733` on the spool is the load-bearing one. Write plus execute lets the
 agent create a file; the missing read bit means it cannot list what is there;
 the sticky bit means it cannot unlink a record it did not create. So an agent
 can be denied a command and cannot then delete the evidence.
+
+### The setup script runs as root
+
+The one child that keeps the satellite's identity is the host application's
+setup script, set with `PUT /v1/setup` and described in [the setup
+doc](./setup.md). It exists to install what the image does not ship, and
+installing packages needs root, so it runs as root. It is spawned by
+`privilege::root_command_for_host`, which is the only root path for code the
+satellite did not write, and only the setup module calls it.
+
+**This is new standing, stated plainly: a host holding `ARSOX_SECRET` can run
+arbitrary code as root inside the container.** Before this endpoint the secret
+already commanded every thread, every workspace, and every credential a thread
+carried; it now also commands the machine those threads run on. Treat
+`ARSOX_SECRET` as root on the container, and keep it where you would keep a root
+credential.
+
+It does not widen what an agent can do. The script is set only through the
+authenticated API, which no agent can reach: the secret is withheld from every
+agent environment, and the script file lives in `/var/arsox`, which is
+root-owned `0700`, so an agent can neither read it nor rewrite it between one
+container start and the next.
+
+**What the clean environment protects.** The script starts from an empty
+environment with a fixed `PATH`, `HOME=/root`, a UTF-8 locale, and
+`DEBIAN_FRONTEND=noninteractive`. So nothing of the satellite's own process
+reaches it by accident: not `ARSOX_SECRET`, not any other `ARSOX_*` setting, not
+a provider credential, and not any thread's declared variables. A script that
+runs `env` into a log, or an installer that reports its environment on failure,
+has nothing of the satellite's to print.
+
+**What it does not protect.** It is hygiene, not a boundary. The script is root,
+and root can read the database in `/var/arsox`, which holds every thread's
+settings, credentials included, and it can read and write every workspace, the
+shim directories, and the hooks. It can read the satellite's own environment
+from `/proc`. It can change anything the deterministic layer relies on. None of
+that is a flaw in the environment: an install script that could not do what root
+does would not be an install script. The protection that matters is who can set
+it, which is whoever holds the secret.
+
+Its output is not masked by any thread's redactor, because it belongs to no
+thread. A credential a host writes into the script can reach `GET /v1/status`
+and the `SETUP_FAILED` incident, which is why the setup doc says not to.
 
 ### When there is no privilege to separate
 
@@ -901,6 +945,7 @@ a suggestion.
 | Piece | File |
 |---|---|
 | who drops to whom, and whether anything can | `src/privilege.rs` |
+| the one root path, for the host's setup script | `src/privilege.rs`, `src/setup.rs` |
 | the policy, both halves of it, and which gates engage | `src/broker/mod.rs` |
 | the preset, argv matching, the shim set | `src/broker/mod.rs` |
 | installing and removing a thread's gates | `src/broker/install.rs` |
