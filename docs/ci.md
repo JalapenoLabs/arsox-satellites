@@ -27,7 +27,7 @@ checksum-verified each run.
 | Rust | `.github/workflows/rust.yml` | pushes and PRs touching `crates/`, the workspace manifest, or the toolchain pin |
 | Node | `.github/workflows/node.yml` | pushes and PRs touching `sdks/node/`, `gen/ts/`, `crates/`, the workspace manifest, or the toolchain pin |
 | Python | `.github/workflows/python.yml` | pushes and PRs touching `sdks/python/`, `gen/python/`, `crates/`, the workspace manifest, or the toolchain pin |
-| Docker | `.github/workflows/docker.yml` | pushes and PRs touching the `Dockerfile`, `crates/`, the workspace manifest, or the toolchain pin |
+| Docker | `.github/workflows/docker.yml` | pushes and PRs touching the `Dockerfile`, `docker/`, `crates/`, the workspace manifest, or the toolchain pin |
 | Release | `.github/workflows/release.yml` | `v*` tags, and `workflow_dispatch` with a version |
 | PR review | `.github/workflows/pull-review.yml` | every pull request from a branch of this repository |
 
@@ -179,6 +179,13 @@ as uid 0 and that the satellite reported `satellite.boot.enforcement_ready`,
 which is the posture every spawn then applies. See
 [the enforcement doc](./enforcement.md#what-is-proven-where) for what that
 leaves unasserted and what would close it.
+
+The same job then builds the Blender variant on top of the image it just built,
+boots it, and calls its MCP server: once to list the tools and once to run code
+inside the live Blender session, which is the only proof that the extension is
+installed and listening. It asserts that the satellite is still PID 1 as root and
+that every Blender process runs as the agent account. See
+[the Blender doc](./blender.md).
 
 The Dockerfile names build inputs by path, and nothing else in CI compiles it,
 so this workflow is the only thing standing between a crate moving directory and

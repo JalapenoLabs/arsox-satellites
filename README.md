@@ -114,6 +114,10 @@ CLIs:
 
 Anything else is yours to add with a `RUN` layer in your own Dockerfile.
 
+### The Blender variant
+
+`docker/blender/Dockerfile` extends the image with Blender and Blender Lab's MCP integration, so an agent can model, render, and inspect `.blend` files whenever a task calls for it. It starts a headless Blender session and the MCP server beside the satellite, and a host application gives a thread the tools by declaring one MCP server, `http://127.0.0.1:9877/`. See [docs/blender.md](./docs/blender.md).
+
 ### The workspace
 
 On the satellite's volume, the workspace is mounted at:

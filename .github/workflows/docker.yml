@@ -14,6 +14,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
+      - 'docker/**'
       - '.github/workflows/docker.yml'
   pull_request:
     branches: [ main, develop ]
@@ -23,6 +24,7 @@ on:
       - 'Cargo.toml'
       - 'Cargo.lock'
       - 'rust-toolchain.toml'
+      - 'docker/**'
       - '.github/workflows/docker.yml'
   workflow_dispatch:
 
@@ -106,8 +108,85 @@ jobs:
 
           echo "satellite runs as root and reports enforcement ready"
 
+      # The Blender variant extends the image just built, so it is built here
+      # rather than in a job of its own that would rebuild the base.
+      - name: Build the Blender image
+        run: |
+          docker build --file docker/blender/Dockerfile \
+            --build-arg BASE_IMAGE=arsox-satellite:ci-${{ github.sha }} \
+            --tag arsox-satellite:ci-${{ github.sha }}-blender .
+
+      # Booting proves what the build cannot: Blender finds every library it
+      # loads, the extension starts its bridge, and the MCP server answers with
+      # its tools. It also holds the variant to the base image's posture: the
+      # satellite is still PID 1 as root, and the Blender services run as the
+      # agent account, because the bridge executes whatever Python it is sent.
+      - name: Boot the Blender image and check its tools
+        run: |
+          set -euo pipefail
+
+          container=$(docker run --detach --rm \
+            --env ARSOX_SECRET=ci-smoke-secret \
+            arsox-satellite:ci-${{ github.sha }}-blender)
+          trap 'docker stop "$container" > /dev/null' EXIT
+
+          tools=""
+          for _ in $(seq 1 60); do
+            tools=$(docker exec "$container" curl --silent --fail --request POST http://127.0.0.1:9877/ \
+              --header 'Content-Type: application/json' \
+              --header 'Accept: application/json, text/event-stream' \
+              --data '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' || true)
+            if echo "$tools" | grep -q '"execute_blender_code"'; then
+              break
+            fi
+            sleep 1
+          done
+
+          if ! echo "$tools" | grep -q '"execute_blender_code"'; then
+            echo "the Blender MCP server never listed its tools" >&2
+            docker logs "$container" >&2
+            exit 1
+          fi
+
+          # A live-session call reaches the bridge inside Blender, so it proves
+          # the extension is installed, enabled, and listening, not just the server.
+          call='{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"execute_blender_code",'
+          call="$call"'"arguments":{"code":"import bpy\nresult = {'"'"'version'"'"': bpy.app.version_string}"}}}'
+          answer=$(docker exec "$container" curl --silent --fail --request POST http://127.0.0.1:9877/ \
+            --header 'Content-Type: application/json' \
+            --header 'Accept: application/json, text/event-stream' \
+            --data "$call")
+          if ! echo "$answer" | grep -q 'status.*ok'; then
+            echo "the Blender bridge did not run code: $answer" >&2
+            docker logs "$container" >&2
+            exit 1
+          fi
+
+          entrypoint_uid=$(docker exec "$container" sh -c "grep '^Uid:' /proc/1/status | cut -f2")
+          if [ "$entrypoint_uid" != "0" ]; then
+            echo "the satellite booted as uid $entrypoint_uid" >&2
+            exit 1
+          fi
+
+          # By process name rather than command line, which would also match
+          # this very check's own shell.
+          blender_uids=$(docker exec "$container" sh -c \
+            'for status in /proc/[0-9]*/status; do
+               case "$(sed -n "s/^Name:\t//p" "$status")" in
+                 blender|blender-mcp) grep "^Uid:" "$status" | cut -f2 ;;
+               esac
+             done' | sort -u)
+          if [ "$blender_uids" != "10001" ]; then
+            echo "the Blender services run as uid(s) '$blender_uids', not the agent account" >&2
+            exit 1
+          fi
+
+          echo "Blender and its MCP server answer, as the agent account"
+
       # The image is rebuilt from scratch next run either way; leaving CI tags
       # behind on a persistent runner just accumulates disk.
-      - name: Remove the CI tag
+      - name: Remove the CI tags
         if: always()
-        run: docker rmi --force arsox-satellite:ci-${{ github.sha }} || true
+        run: |
+          docker rmi --force arsox-satellite:ci-${{ github.sha }}-blender || true
+          docker rmi --force arsox-satellite:ci-${{ github.sha }} || true
