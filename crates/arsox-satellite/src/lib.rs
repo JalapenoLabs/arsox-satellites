@@ -26,6 +26,7 @@ pub mod privilege;
 pub mod proxy;
 pub mod redaction;
 pub mod relay;
+pub mod services;
 pub mod store;
 pub mod stream;
 pub mod timeouts;

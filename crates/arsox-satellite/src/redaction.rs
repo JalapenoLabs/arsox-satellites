@@ -533,6 +533,7 @@ pub fn scrub_settings(settings: &mut ThreadSettings) {
         resource_limits: _,
         resume_interrupted_turns: _,
         self_review: _,
+        services: _,
         stream: _,
         suggestions: _,
         team_mode: _,
@@ -600,6 +601,7 @@ pub fn scrub_settings(settings: &mut ThreadSettings) {
         let McpServer {
             headers,
             name: _,
+            service: _,
             url: _,
         } = server;
 
@@ -1683,6 +1685,7 @@ mod tests {
             mcp_servers: vec![McpServer {
                 name: "storage".to_owned(),
                 url: "https://elysium.example.com/mcp".to_owned(),
+                service: None,
                 headers: [
                     (
                         "Authorization".to_owned(),
@@ -1891,6 +1894,7 @@ mod tests {
             mcp_servers: vec![McpServer {
                 name: "tickets".to_owned(),
                 url: "https://mcp.acme.test".to_owned(),
+                service: None,
                 headers: [(
                     "authorization".to_owned(),
                     plaintext("plaintext-mcp-header"),

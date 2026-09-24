@@ -19,30 +19,54 @@ export const file_arsox_settings_v1_service: GenFile = /*@__PURE__*/
 /**
  * A long-running process the agents need rather than a command they run.
  *
- * Three members each running `yarn dev` is not a port conflict, it is a
- * duplicate nobody wanted. They do not each need a dev server, they need one
- * dev server they can both reach, and declaring it here makes that the only
- * outcome available.
+ * Declared on the thread, in `ThreadSettings.services`. Before each turn's
+ * harness starts, the satellite starts the thread's services in declaration
+ * order, waiting for each to pass its readiness probe before starting the next,
+ * and it stops every one of them when the turn ends, however it ends. A turn
+ * therefore never shares a service process with another thread's turn, and
+ * nothing keeps running while a thread sits idle. State a service holds in
+ * memory does not survive from one turn to the next; anything worth keeping
+ * belongs in the workspace.
  *
- * Started lazily on first use, so a turn that never touches the frontend never
- * pays for a dev server. Every member receives the address as
- * ARSOX_SERVICE_<NAME>_URL and is told to use it rather than assume a port.
+ * Each service runs as the agent account, through `sh -c`, with the thread's
+ * workspace root as its working directory and the same environment a repo's
+ * setup commands get: the scrubbed base plus the thread's declared `env`. It is
+ * host configuration rather than anything an agent chose, so it is not brokered
+ * by the exec allowlist.
+ *
+ * Every service is told its own port as `PORT`. Every service after it, and the
+ * harness, are told where it listens as `ARSOX_SERVICE_<NAME>_PORT` and
+ * `ARSOX_SERVICE_<NAME>_URL`, the second being `http://127.0.0.1:<port>`.
+ * `<NAME>` is `name` upper-cased with `-` written as `_`.
+ *
+ * A service that never becomes ready is recorded as a degraded
+ * SERVICE_START_FAILED incident carrying its log tail, and the turn goes on
+ * without it. One that exits after it was ready is restarted a bounded number of
+ * times per turn.
  *
  * @generated from message arsox.settings.v1.Service
  */
 export type Service = Message<"arsox.settings.v1.Service"> & {
   /**
+   * 1 to 64 of `A-Z a-z 0-9 _ -`, unique within the thread once upper-cased with
+   * `-` written as `_`, so each service has exactly one set of variable names.
+   *
    * @generated from field: string name = 1;
    */
   name: string;
 
   /**
+   * Shell text, run through `sh -c`. Should listen on `$PORT`.
+   *
    * @generated from field: string command = 2;
    */
   command: string;
 
   /**
-   * The port the service listens on inside the container.
+   * The loopback port the service listens on. Absent has the satellite assign a
+   * free one for each turn, which is what keeps two threads declaring the same
+   * service from colliding. Present asks for that port exactly, from 1024 to
+   * 65535, and a service whose fixed port is already taken is not started.
    *
    * @generated from field: optional uint32 port = 3;
    */
@@ -54,6 +78,8 @@ export type Service = Message<"arsox.settings.v1.Service"> & {
   readyWhen?: ReadinessProbe;
 
   /**
+   * Unspecified or SHARED. PER_MEMBER is refused; see ServiceIsolation.
+   *
    * @generated from field: arsox.settings.v1.ServiceIsolation isolation = 5;
    */
   isolation: ServiceIsolation;
@@ -67,24 +93,26 @@ export const ServiceSchema: GenMessage<Service> = /*@__PURE__*/
   messageDesc(file_arsox_settings_v1_service, 0);
 
 /**
- * How Arsox decides the service is up before handing its address to an agent.
+ * How Arsox decides the service is up before the harness starts.
  *
- * If the probe never passes, the member that asked gets a failure carrying the
- * log tail rather than a timeout with no explanation.
+ * A probe that never passes records a degraded SERVICE_START_FAILED incident
+ * carrying the service's log tail, rather than a turn that waits with no
+ * explanation.
  *
  * @generated from message arsox.settings.v1.ReadinessProbe
  */
 export type ReadinessProbe = Message<"arsox.settings.v1.ReadinessProbe"> & {
   /**
-   * Path polled on the service's port until it answers 2xx. Absent probes a
-   * successful TCP connect to `port` instead.
+   * Path polled on the service's port until it answers 2xx. Starts with `/`.
+   * Absent probes a successful TCP connect to the port instead.
    *
    * @generated from field: optional string http_get = 1;
    */
   httpGet?: string;
 
   /**
-   * How long to keep probing. Absent uses the satellite's default.
+   * How long to keep probing. Absent, zero, or negative uses the satellite's
+   * default of 60 seconds.
    *
    * @generated from field: optional arsox.common.v1.Duration timeout = 2;
    */
@@ -110,9 +138,9 @@ export enum ServiceIsolation {
   UNSPECIFIED = 0,
 
   /**
-   * One instance per thread, reference counted across every member. The
-   * default, and the reason three agents do not race to bind port 3000: the
-   * second one is never started.
+   * One instance per turn, shared by every agent in it. The default, and what
+   * an unspecified isolation means. Two threads never share one: each turn
+   * starts its own process on its own port.
    *
    * @generated from enum value: SERVICE_ISOLATION_SHARED = 1;
    */
@@ -120,9 +148,9 @@ export enum ServiceIsolation {
 
   /**
    * One instance per member, each in its own network namespace, so hardcoded
-   * ports stop mattering. The escape hatch, not the default: it costs N copies
-   * of your dev server. Reach for it when instances must not share state, such
-   * as a test suite that truncates a database on boot.
+   * ports stop mattering and one instance cannot reach another. Not implemented:
+   * a thread declaring it is refused with REQUEST_FIELD_INVALID. It is the
+   * roadmap for isolation that is a boundary rather than a separation of state.
    *
    * @generated from enum value: SERVICE_ISOLATION_PER_MEMBER = 2;
    */

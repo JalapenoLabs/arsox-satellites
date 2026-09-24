@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/settings/v1/tool.proto.
  */
 export const file_arsox_settings_v1_tool: GenFile = /*@__PURE__*/
-  fileDesc("ChxhcnNveC9zZXR0aW5ncy92MS90b29sLnByb3RvEhFhcnNveC5zZXR0aW5ncy52MSKrAQoJTWNwU2VydmVyEgwKBG5hbWUYASABKAkSCwoDdXJsGAIgASgJEjoKB2hlYWRlcnMYAyADKAsyKS5hcnNveC5zZXR0aW5ncy52MS5NY3BTZXJ2ZXIuSGVhZGVyc0VudHJ5GkcKDEhlYWRlcnNFbnRyeRILCgNrZXkYASABKAkSJgoFdmFsdWUYAiABKAsyFy5hcnNveC5jb21tb24udjEuU2VjcmV0OgI4ASJlChBSZWxheWVkTWNwU2VydmVyEgwKBG5hbWUYASABKAkSFAoMaW5zdHJ1Y3Rpb25zGAIgASgJEi0KBXRvb2xzGAMgAygLMh4uYXJzb3guc2V0dGluZ3MudjEuUmVsYXllZFRvb2wiSwoLUmVsYXllZFRvb2wSDAoEbmFtZRgBIAEoCRITCgtkZXNjcmlwdGlvbhgCIAEoCRIZChFpbnB1dF9zY2hlbWFfanNvbhgDIAEoCSJoCg5WaXJ0dWFsQnJvd3NlchIPCgdlbmFibGVkGAEgASgIEhUKDWFsbG93ZWRfcm9sZXMYAiADKAkSLgoJdmlld3BvcnRzGAMgAygOMhsuYXJzb3guc2V0dGluZ3MudjEuVmlld3BvcnQqZAoIVmlld3BvcnQSGAoUVklFV1BPUlRfVU5TUEVDSUZJRUQQABITCg9WSUVXUE9SVF9NT0JJTEUQARITCg9WSUVXUE9SVF9UQUJMRVQQAhIUChBWSUVXUE9SVF9ERVNLVE9QEANCiAEKFWNvbS5hcnNveC5zZXR0aW5ncy52MUIJVG9vbFByb3RvUAGiAgNBU1iqAhFBcnNveC5TZXR0aW5ncy5WMcoCEUFyc294XFNldHRpbmdzXFYx4gIdQXJzb3hcU2V0dGluZ3NcVjFcR1BCTWV0YWRhdGHqAhNBcnNveDo6U2V0dGluZ3M6OlYxYgZwcm90bzM", [file_arsox_common_v1_common]);
+  fileDesc("ChxhcnNveC9zZXR0aW5ncy92MS90b29sLnByb3RvEhFhcnNveC5zZXR0aW5ncy52MSLxAQoJTWNwU2VydmVyEgwKBG5hbWUYASABKAkSCwoDdXJsGAIgASgJEjoKB2hlYWRlcnMYAyADKAsyKS5hcnNveC5zZXR0aW5ncy52MS5NY3BTZXJ2ZXIuSGVhZGVyc0VudHJ5EjgKB3NlcnZpY2UYBCABKAsyIi5hcnNveC5zZXR0aW5ncy52MS5TZXJ2aWNlRW5kcG9pbnRIAIgBARpHCgxIZWFkZXJzRW50cnkSCwoDa2V5GAEgASgJEiYKBXZhbHVlGAIgASgLMhcuYXJzb3guY29tbW9uLnYxLlNlY3JldDoCOAFCCgoIX3NlcnZpY2UiMAoPU2VydmljZUVuZHBvaW50Eg8KB3NlcnZpY2UYASABKAkSDAoEcGF0aBgCIAEoCSJlChBSZWxheWVkTWNwU2VydmVyEgwKBG5hbWUYASABKAkSFAoMaW5zdHJ1Y3Rpb25zGAIgASgJEi0KBXRvb2xzGAMgAygLMh4uYXJzb3guc2V0dGluZ3MudjEuUmVsYXllZFRvb2wiSwoLUmVsYXllZFRvb2wSDAoEbmFtZRgBIAEoCRITCgtkZXNjcmlwdGlvbhgCIAEoCRIZChFpbnB1dF9zY2hlbWFfanNvbhgDIAEoCSJoCg5WaXJ0dWFsQnJvd3NlchIPCgdlbmFibGVkGAEgASgIEhUKDWFsbG93ZWRfcm9sZXMYAiADKAkSLgoJdmlld3BvcnRzGAMgAygOMhsuYXJzb3guc2V0dGluZ3MudjEuVmlld3BvcnQqZAoIVmlld3BvcnQSGAoUVklFV1BPUlRfVU5TUEVDSUZJRUQQABITCg9WSUVXUE9SVF9NT0JJTEUQARITCg9WSUVXUE9SVF9UQUJMRVQQAhIUChBWSUVXUE9SVF9ERVNLVE9QEANCiAEKFWNvbS5hcnNveC5zZXR0aW5ncy52MUIJVG9vbFByb3RvUAGiAgNBU1iqAhFBcnNveC5TZXR0aW5ncy5WMcoCEUFyc294XFNldHRpbmdzXFYx4gIdQXJzb3hcU2V0dGluZ3NcVjFcR1BCTWV0YWRhdGHqAhNBcnNveDo6U2V0dGluZ3M6OlYxYgZwcm90bzM", [file_arsox_common_v1_common]);
 
 /**
  * A server whose tools the agents may use.
@@ -23,6 +23,9 @@ export const file_arsox_settings_v1_tool: GenFile = /*@__PURE__*/
  * despawn, request_integration, and override_redaction. Those are MCP schemas
  * offered to the agents rather than part of this contract, so they are not
  * defined anywhere in these files.
+ *
+ * A server is reached at a literal `url`, or at one of the thread's own
+ * services through `service`. Exactly one of the two is set.
  *
  * @generated from message arsox.settings.v1.McpServer
  */
@@ -33,6 +36,8 @@ export type McpServer = Message<"arsox.settings.v1.McpServer"> & {
   name: string;
 
   /**
+   * Where the server listens, over streamable HTTP. Empty when `service` is set.
+   *
    * @generated from field: string url = 2;
    */
   url: string;
@@ -45,6 +50,14 @@ export type McpServer = Message<"arsox.settings.v1.McpServer"> & {
    * @generated from field: map<string, arsox.common.v1.Secret> headers = 3;
    */
   headers: { [key: string]: Secret };
+
+  /**
+   * A server run by one of the thread's services, for an address that only
+   * exists once the turn has started it. Absent when `url` is set.
+   *
+   * @generated from field: optional arsox.settings.v1.ServiceEndpoint service = 4;
+   */
+  service?: ServiceEndpoint;
 };
 
 /**
@@ -53,6 +66,38 @@ export type McpServer = Message<"arsox.settings.v1.McpServer"> & {
  */
 export const McpServerSchema: GenMessage<McpServer> = /*@__PURE__*/
   messageDesc(file_arsox_settings_v1_tool, 0);
+
+/**
+ * An MCP server served by one of the thread's own services.
+ *
+ * The satellite renders it as `http://127.0.0.1:<port><path>`, with the port the
+ * service was given for the turn. Loopback, so an agent reaches it directly and
+ * never through the egress proxy.
+ *
+ * @generated from message arsox.settings.v1.ServiceEndpoint
+ */
+export type ServiceEndpoint = Message<"arsox.settings.v1.ServiceEndpoint"> & {
+  /**
+   * The `name` of a service declared in `ThreadSettings.services`.
+   *
+   * @generated from field: string service = 1;
+   */
+  service: string;
+
+  /**
+   * The path the server answers on, starting with `/`, such as `/mcp`.
+   *
+   * @generated from field: string path = 2;
+   */
+  path: string;
+};
+
+/**
+ * Describes the message arsox.settings.v1.ServiceEndpoint.
+ * Use `create(ServiceEndpointSchema)` to create a new message.
+ */
+export const ServiceEndpointSchema: GenMessage<ServiceEndpoint> = /*@__PURE__*/
+  messageDesc(file_arsox_settings_v1_tool, 1);
 
 /**
  * A server whose tools the host application answers itself, over the relay.
@@ -97,7 +142,7 @@ export type RelayedMcpServer = Message<"arsox.settings.v1.RelayedMcpServer"> & {
  * Use `create(RelayedMcpServerSchema)` to create a new message.
  */
 export const RelayedMcpServerSchema: GenMessage<RelayedMcpServer> = /*@__PURE__*/
-  messageDesc(file_arsox_settings_v1_tool, 1);
+  messageDesc(file_arsox_settings_v1_tool, 2);
 
 /**
  * One tool a relayed server offers.
@@ -136,7 +181,7 @@ export type RelayedTool = Message<"arsox.settings.v1.RelayedTool"> & {
  * Use `create(RelayedToolSchema)` to create a new message.
  */
 export const RelayedToolSchema: GenMessage<RelayedTool> = /*@__PURE__*/
-  messageDesc(file_arsox_settings_v1_tool, 2);
+  messageDesc(file_arsox_settings_v1_tool, 3);
 
 /**
  * Headless Chrome, so frontend and QA work is not done blind.
@@ -180,7 +225,7 @@ export type VirtualBrowser = Message<"arsox.settings.v1.VirtualBrowser"> & {
  * Use `create(VirtualBrowserSchema)` to create a new message.
  */
 export const VirtualBrowserSchema: GenMessage<VirtualBrowser> = /*@__PURE__*/
-  messageDesc(file_arsox_settings_v1_tool, 3);
+  messageDesc(file_arsox_settings_v1_tool, 4);
 
 /**
  * @generated from enum arsox.settings.v1.Viewport

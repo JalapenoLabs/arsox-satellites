@@ -172,8 +172,8 @@ pub enum Session {
 /// and [`mcp`] for how a server is handed over.
 ///
 /// `grants` carries what the satellite lends the turn: its admission to the
-/// model, and the shim directory that becomes its `PATH` when the exec broker
-/// engaged for the thread.
+/// model, the shim directory that becomes its `PATH` when the exec broker
+/// engaged for the thread, and where the thread's services listen.
 #[must_use]
 pub fn command_for(
     harness: Harness,
@@ -230,6 +230,7 @@ fn claude_command(
         &settings.mcp_servers,
         &settings.relayed_mcp_servers,
         grants.model.as_ref().map(|access| access.base_url.as_str()),
+        &grants.services,
     );
     args.extend(claude_permission_args(
         &posture_for(settings.permissions.as_ref()),
@@ -326,6 +327,7 @@ fn codex_command(
         &settings.mcp_servers,
         &settings.relayed_mcp_servers,
         grants.model.as_ref().map(|access| access.base_url.as_str()),
+        &grants.services,
     );
     args.extend(codex_permission_args(&posture_for(
         settings.permissions.as_ref(),
@@ -461,9 +463,10 @@ fn proxy_v1(base_url: &str) -> String {
 
 /// Assembles the environment a harness child runs with.
 ///
-/// Six layers, in the one order that is safe: what the satellite hands every
+/// Seven layers, in the one order that is safe: what the satellite hands every
 /// agent, then what the thread declared, then the LLM proxy's variables, then
-/// the MCP header values, then the egress proxy's, then the broker's `PATH`.
+/// the MCP header values, then where the thread's services listen, then the
+/// egress proxy's, then the broker's `PATH`.
 /// Everything the satellite decides goes after everything the thread declared,
 /// because the last value set for a key is the one the child sees. A thread that
 /// could set `ANTHROPIC_BASE_URL` would route its agent out from under every
@@ -482,6 +485,7 @@ fn environment_for(
     env.extend(declared_environment(&settings.env));
     env.extend(proxy);
     env.extend(servers.environment());
+    env.extend(grants.services.environment());
     env.extend(egress_environment(grants));
 
     if let Some(shims) = grants.exec_broker.as_deref() {
@@ -800,12 +804,12 @@ fn codex_permission_args(posture: &Posture) -> Vec<String> {
 
 /// What the satellite lends one turn, and takes back when it ends.
 ///
-/// The three travel together because they are the same kind of thing: something
-/// the satellite hands an agent for the length of a turn, and the environment it
+/// They travel together because they are the same kind of thing: something the
+/// satellite hands an agent for the length of a turn, and the environment it
 /// arrives in. Taking them as separate parameters is how a signature grows until
-/// nobody can read a call site, and each is `Option` for the same reason: a turn
-/// may run without a model grant, and most threads run without a broker or a
-/// declared web policy.
+/// nobody can read a call site, and each may be absent for the same reason: a
+/// turn may run without a model grant, and most threads run without a broker, a
+/// declared web policy, or services.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Grants {
     /// The turn's admission to the model.
@@ -828,6 +832,13 @@ pub struct Grants {
     /// default and every thread that declared no exec policy. See
     /// [`crate::broker`].
     pub exec_broker: Option<PathBuf>,
+
+    /// Where the turn's services listen, for `ARSOX_SERVICE_*` and for any MCP
+    /// server one of them runs.
+    ///
+    /// Empty for every thread that declared no services. See
+    /// [`crate::services`].
+    pub services: crate::services::Addresses,
 }
 
 impl Grants {
@@ -888,9 +899,11 @@ pub struct EgressAccess {
 
 /// Builds the process to spawn, with an environment an agent may safely hold.
 ///
-/// **No `ARSOX_*` variable reaches an agent, ever.** Written as a rule over the
-/// whole prefix rather than a list of names, because a denylist is one
-/// forgotten entry away from leaking the next setting somebody adds.
+/// **No `ARSOX_*` variable the satellite holds reaches an agent, ever.** Written
+/// as a rule over the whole prefix rather than a list of names, because a
+/// denylist is one forgotten entry away from leaking the next setting somebody
+/// adds. The one `ARSOX_` family an agent is given, `ARSOX_SERVICE_*`, is minted
+/// per turn and listed back explicitly like everything else it is meant to have.
 ///
 /// `ARSOX_SECRET` is the one that matters. An agent holding it could command
 /// its own satellite: destroy threads, read another thread's artifacts, or
@@ -2023,6 +2036,7 @@ mod tests {
             mcp_servers: vec![arsox_sdk::proto::settings::v1::McpServer {
                 name: "storage".to_owned(),
                 url: "https://elysium.example.com/mcp/storage".to_owned(),
+                service: None,
                 headers: [(
                     "Authorization".to_owned(),
                     arsox_sdk::proto::common::v1::Secret {
@@ -2181,6 +2195,7 @@ mod tests {
                 egress: Some(egress_access()),
                 exec_broker: None,
                 choice: TurnChoice::default(),
+                services: crate::services::Addresses::default(),
             },
             &ThreadSettings::default(),
         )
@@ -2193,6 +2208,53 @@ mod tests {
             .iter()
             .rfind(|variable| variable.key == key)
             .map(|variable| variable.value.clone())
+    }
+
+    #[test]
+    fn both_harnesses_are_told_where_every_service_listens() {
+        let services: crate::services::Addresses = [
+            crate::services::Address {
+                name: "blender".to_owned(),
+                port: 41_000,
+            },
+            crate::services::Address {
+                name: "blender-mcp".to_owned(),
+                port: 41_001,
+            },
+        ]
+        .into_iter()
+        .collect();
+
+        for harness in [Harness::Claude, Harness::Codex] {
+            let command = command_for(
+                harness,
+                "do the thing",
+                &Session::Start {
+                    session_id: "x".to_owned(),
+                },
+                PathBuf::from("/workspace/thread"),
+                &Grants {
+                    services: services.clone(),
+                    ..Grants::default()
+                },
+                &ThreadSettings::default(),
+            );
+
+            assert_eq!(
+                applied(&command, "ARSOX_SERVICE_BLENDER_URL").as_deref(),
+                Some("http://127.0.0.1:41000"),
+                "{harness:?}"
+            );
+            assert_eq!(
+                applied(&command, "ARSOX_SERVICE_BLENDER_MCP_PORT").as_deref(),
+                Some("41001"),
+                "{harness:?}"
+            );
+        }
+
+        // A thread with no services is told about none.
+        let unserviced = command_with(None);
+        assert_eq!(applied(&unserviced, "ARSOX_SERVICE_BLENDER_URL"), None);
     }
 
     #[test]

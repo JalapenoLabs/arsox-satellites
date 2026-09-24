@@ -32,6 +32,7 @@ import "arsox/settings/v1/prefetch.proto";
 import "arsox/settings/v1/pull_request.proto";
 import "arsox/settings/v1/repo.proto";
 import "arsox/settings/v1/secret.proto";
+import "arsox/settings/v1/service.proto";
 import "arsox/settings/v1/stages.proto";
 import "arsox/settings/v1/team.proto";
 import "arsox/settings/v1/tool.proto";
@@ -116,4 +117,8 @@ message ThreadSettings {
   // answers is a decision per instruction rather than per thread. See
   // TurnOverrides.
   TurnOverrides turn_defaults = 29;
+
+  // Long-running processes started before each turn's harness and stopped when
+  // the turn ends, one set per turn. See Service.
+  repeated Service services = 30;
 }

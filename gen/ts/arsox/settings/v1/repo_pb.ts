@@ -179,6 +179,9 @@ export type Repo = Message<"arsox.settings.v1.Repo"> & {
   checker: string;
 
   /**
+   * Refused with REQUEST_FIELD_INVALID when not empty. Services are declared on
+   * the thread, in `ThreadSettings.services`, and started for each of its turns.
+   *
    * @generated from field: repeated arsox.settings.v1.Service services = 7;
    */
   services: Service[];

@@ -189,14 +189,28 @@ impl WebPolicy {
             domains.insert(usable);
         }
 
+        // A server run by one of the thread's services is on loopback, which an
+        // agent reaches directly and the proxy never sees, so it has no host to
+        // admit and is left out before the launch rule reads the rest.
+        let reached_by_url: Vec<McpServer> = mcp_servers
+            .iter()
+            .filter(|server| server.service.is_none())
+            .cloned()
+            .collect();
+
         // Already validated at thread creation and again at launch, so a host
         // that will not normalize here is an IPv6 literal, which nothing in the
         // policy can name.
-        let hosts = crate::harness::mcp::Launch::of(mcp_servers, &[], None)
-            .hosts()
-            .iter()
-            .filter_map(|host| normalized_host(host))
-            .collect();
+        let hosts = crate::harness::mcp::Launch::of(
+            &reached_by_url,
+            &[],
+            None,
+            &crate::services::Addresses::default(),
+        )
+        .hosts()
+        .iter()
+        .filter_map(|host| normalized_host(host))
+        .collect();
 
         Some(Self::Only { domains, hosts })
     }

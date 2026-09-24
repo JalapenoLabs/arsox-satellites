@@ -17,8 +17,9 @@ use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::incident::v1::Disposition;
 use arsox_sdk::proto::settings::v1::{
-    Budget, EnvVar, GithubIntegration, LlmAuth, McpServer, ModelEndpoint, Redaction, RedactionMode,
-    ThreadSettings, llm_auth::Credential,
+    Budget, EnvVar, GithubIntegration, LlmAuth, McpServer, ModelEndpoint, ReadinessProbe,
+    Redaction, RedactionMode, Repo, Service, ServiceEndpoint, ServiceIsolation, ThreadSettings,
+    llm_auth::Credential,
 };
 use arsox_sdk::proto::thread::v1::ThreadState;
 use arsox_sdk::proto::turn::v1::TurnStatus;
@@ -296,6 +297,7 @@ async fn an_mcp_server_a_harness_could_not_be_handed_is_refused_at_creation() {
         mcp_servers: vec![McpServer {
             name: name.to_owned(),
             url: server_url.to_owned(),
+            service: None,
             headers: [(
                 "Authorization".to_owned(),
                 Secret {
@@ -336,6 +338,102 @@ async fn an_mcp_server_a_harness_could_not_be_handed_is_refused_at_creation() {
         .create(declaring("storage", "https://mcp.example.com/storage"))
         .await
         .expect("an ordinary server is fine");
+}
+
+#[tokio::test]
+async fn a_thread_declares_services_and_an_mcp_server_one_of_them_runs() {
+    // The shape a host application such as Elysium sends: a helper process, and
+    // the MCP server that talks to it, addressed through the service rather
+    // than through a URL that only exists once a turn has started it.
+    let url = start().await;
+    let client = Client::connect(&url, SECRET).await.expect("should connect");
+
+    let declaring = |services: Vec<Service>, service: &str| ThreadSettings {
+        services,
+        mcp_servers: vec![McpServer {
+            name: "blender".to_owned(),
+            service: Some(ServiceEndpoint {
+                service: service.to_owned(),
+                path: "/mcp".to_owned(),
+            }),
+            ..McpServer::default()
+        }],
+        ..settings()
+    };
+    let bridge = || Service {
+        name: "blender-mcp".to_owned(),
+        command: "blender --background --python bridge.py -- --port \"$PORT\"".to_owned(),
+        ready_when: Some(ReadinessProbe {
+            http_get: Some("/health".to_owned()),
+            timeout: Some(ProtoDuration {
+                seconds: 120,
+                nanos: 0,
+            }),
+        }),
+        ..Service::default()
+    };
+
+    let created = client
+        .threads()
+        .create(declaring(vec![bridge()], "blender-mcp"))
+        .await
+        .expect("an ordinary service and its MCP server are fine");
+    let settings_back = created
+        .thread
+        .settings
+        .expect("a thread carries its settings");
+    assert_eq!(settings_back.services, [bridge()]);
+    assert_eq!(
+        settings_back.mcp_servers[0]
+            .service
+            .as_ref()
+            .map(|endpoint| endpoint.service.as_str()),
+        Some("blender-mcp")
+    );
+
+    let refusals = [
+        (
+            declaring(vec![bridge()], "not-declared"),
+            "settings.mcp_servers",
+        ),
+        (
+            declaring(
+                vec![Service {
+                    isolation: ServiceIsolation::PerMember.into(),
+                    ..bridge()
+                }],
+                "blender-mcp",
+            ),
+            "PER_MEMBER",
+        ),
+        (
+            ThreadSettings {
+                repos: vec![Repo {
+                    name: "scenes".to_owned(),
+                    url: "https://github.com/example/scenes.git".to_owned(),
+                    services: vec![bridge()],
+                    ..Repo::default()
+                }],
+                ..settings()
+            },
+            "settings.services",
+        ),
+    ];
+
+    for (declared, named) in refusals {
+        let error = client
+            .threads()
+            .create(declared)
+            .await
+            .expect_err("should be refused");
+
+        assert_eq!(
+            error.code(),
+            Some(ErrorCode::RequestFieldInvalid),
+            "{named}"
+        );
+        assert!(error.to_string().contains(named), "{error}");
+    }
 }
 
 #[tokio::test]

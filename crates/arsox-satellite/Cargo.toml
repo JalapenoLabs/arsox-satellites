@@ -81,8 +81,9 @@ libc = "0.2"
 # refusing every symbolic link, because the workspace belongs to the agent and a
 # path checked and then opened by name is a race the agent can win. `openat`,
 # `mkdirat`, `renameat`, and `fchown` are safe calls here rather than `unsafe`
-# ones through `libc`.
-rustix = { version = "1", features = [ "fs" ] }
+# ones through `libc`. `process` is the same reasoning for signalling a thread
+# service's whole process group when its turn ends.
+rustix = { version = "1", features = [ "fs", "process" ] }
 
 # The same measurement on the platform the satellite is developed on.
 [target.'cfg(windows)'.dependencies]
