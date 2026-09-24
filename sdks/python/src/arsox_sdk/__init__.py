@@ -74,6 +74,7 @@ from arsox_sdk.proto.arsox.satellite.v1.satellite_pb2 import (
     GetStatusResponse,
     GetVersionResponse,
 )
+from arsox_sdk.proto.arsox.satellite.v1.setup_pb2 import SetupState, SetupStatus
 from arsox_sdk.proto.arsox.settings.v1.service_pb2 import (
     ReadinessProbe,
     Service,
@@ -137,6 +138,8 @@ __all__ = [
     "Service",
     "ServiceEndpoint",
     "ServiceIsolation",
+    "SetupState",
+    "SetupStatus",
     "Stage",
     "StageDisposition",
     "StageOutcome",

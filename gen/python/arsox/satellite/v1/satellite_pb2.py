@@ -23,10 +23,11 @@ _sym_db = _symbol_database.Default()
 
 
 from arsox.common.v1 import common_pb2 as arsox_dot_common_dot_v1_dot_common__pb2
+from arsox.satellite.v1 import setup_pb2 as arsox_dot_satellite_dot_v1_dot_setup__pb2
 from arsox.thread.v1 import thread_pb2 as arsox_dot_thread_dot_v1_dot_thread__pb2
 
 
-DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"arsox/satellite/v1/satellite.proto\x12\x12\x61rsox.satellite.v1\x1a\x1c\x61rsox/common/v1/common.proto\x1a\x1c\x61rsox/thread/v1/thread.proto\"\x83\x01\n\x12GetVersionResponse\x12+\n\x11satellite_version\x18\x01 \x01(\tR\x10satelliteVersion\x12\x1f\n\x0bproto_major\x18\x02 \x01(\rR\nprotoMajor\x12\x1f\n\x0bproto_minor\x18\x03 \x01(\rR\nprotoMinor\"f\n\x0eReadinessCheck\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n\x07passing\x18\x02 \x01(\x08R\x07passing\x12\x1b\n\x06\x64\x65tail\x18\x03 \x01(\tH\x00R\x06\x64\x65tail\x88\x01\x01\x42\t\n\x07_detail\"h\n\x14GetReadinessResponse\x12\x14\n\x05ready\x18\x01 \x01(\x08R\x05ready\x12:\n\x06\x63hecks\x18\x02 \x03(\x0b\x32\".arsox.satellite.v1.ReadinessCheckR\x06\x63hecks\"\xd7\x01\n\tDiskUsage\x12\'\n\x0fworkspace_bytes\x18\x01 \x01(\x04R\x0eworkspaceBytes\x12\'\n\x0f\x61vailable_bytes\x18\x02 \x01(\x04R\x0e\x61vailableBytes\x12\x37\n\x15\x61ggregate_quota_bytes\x18\x03 \x01(\x04H\x00R\x13\x61ggregateQuotaBytes\x88\x01\x01\x12%\n\x0e\x64\x61tabase_bytes\x18\x04 \x01(\x04R\rdatabaseBytesB\x18\n\x16_aggregate_quota_bytes\"\xec\x02\n\x11GetStatusResponse\x12+\n\x11satellite_version\x18\x01 \x01(\tR\x10satelliteVersion\x12\x34\n\x16max_concurrent_threads\x18\x02 \x01(\rR\x14maxConcurrentThreads\x12\'\n\x0frunning_threads\x18\x03 \x01(\rR\x0erunningThreads\x12\x38\n\x07threads\x18\x04 \x03(\x0b\x32\x1e.arsox.thread.v1.ThreadSummaryR\x07threads\x12\x39\n\nstarted_at\x18\x05 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\tstartedAt\x12#\n\rinsecure_mode\x18\x06 \x01(\x08R\x0cinsecureMode\x12\x31\n\x04\x64isk\x18\x07 \x01(\x0b\x32\x1d.arsox.satellite.v1.DiskUsageR\x04\x64iskB\x92\x01\n\x16\x63om.arsox.satellite.v1B\x0eSatelliteProtoP\x01\xa2\x02\x03\x41SX\xaa\x02\x12\x41rsox.Satellite.V1\xca\x02\x12\x41rsox\\Satellite\\V1\xe2\x02\x1e\x41rsox\\Satellite\\V1\\GPBMetadata\xea\x02\x14\x41rsox::Satellite::V1b\x06proto3')
+DESCRIPTOR = _descriptor_pool.Default().AddSerializedFile(b'\n\"arsox/satellite/v1/satellite.proto\x12\x12\x61rsox.satellite.v1\x1a\x1c\x61rsox/common/v1/common.proto\x1a\x1e\x61rsox/satellite/v1/setup.proto\x1a\x1c\x61rsox/thread/v1/thread.proto\"\x83\x01\n\x12GetVersionResponse\x12+\n\x11satellite_version\x18\x01 \x01(\tR\x10satelliteVersion\x12\x1f\n\x0bproto_major\x18\x02 \x01(\rR\nprotoMajor\x12\x1f\n\x0bproto_minor\x18\x03 \x01(\rR\nprotoMinor\"f\n\x0eReadinessCheck\x12\x12\n\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n\x07passing\x18\x02 \x01(\x08R\x07passing\x12\x1b\n\x06\x64\x65tail\x18\x03 \x01(\tH\x00R\x06\x64\x65tail\x88\x01\x01\x42\t\n\x07_detail\"h\n\x14GetReadinessResponse\x12\x14\n\x05ready\x18\x01 \x01(\x08R\x05ready\x12:\n\x06\x63hecks\x18\x02 \x03(\x0b\x32\".arsox.satellite.v1.ReadinessCheckR\x06\x63hecks\"\xd7\x01\n\tDiskUsage\x12\'\n\x0fworkspace_bytes\x18\x01 \x01(\x04R\x0eworkspaceBytes\x12\'\n\x0f\x61vailable_bytes\x18\x02 \x01(\x04R\x0e\x61vailableBytes\x12\x37\n\x15\x61ggregate_quota_bytes\x18\x03 \x01(\x04H\x00R\x13\x61ggregateQuotaBytes\x88\x01\x01\x12%\n\x0e\x64\x61tabase_bytes\x18\x04 \x01(\x04R\rdatabaseBytesB\x18\n\x16_aggregate_quota_bytes\"\xa3\x03\n\x11GetStatusResponse\x12+\n\x11satellite_version\x18\x01 \x01(\tR\x10satelliteVersion\x12\x34\n\x16max_concurrent_threads\x18\x02 \x01(\rR\x14maxConcurrentThreads\x12\'\n\x0frunning_threads\x18\x03 \x01(\rR\x0erunningThreads\x12\x38\n\x07threads\x18\x04 \x03(\x0b\x32\x1e.arsox.thread.v1.ThreadSummaryR\x07threads\x12\x39\n\nstarted_at\x18\x05 \x01(\x0b\x32\x1a.arsox.common.v1.TimestampR\tstartedAt\x12#\n\rinsecure_mode\x18\x06 \x01(\x08R\x0cinsecureMode\x12\x31\n\x04\x64isk\x18\x07 \x01(\x0b\x32\x1d.arsox.satellite.v1.DiskUsageR\x04\x64isk\x12\x35\n\x05setup\x18\x08 \x01(\x0b\x32\x1f.arsox.satellite.v1.SetupStatusR\x05setupB\x92\x01\n\x16\x63om.arsox.satellite.v1B\x0eSatelliteProtoP\x01\xa2\x02\x03\x41SX\xaa\x02\x12\x41rsox.Satellite.V1\xca\x02\x12\x41rsox\\Satellite\\V1\xe2\x02\x1e\x41rsox\\Satellite\\V1\\GPBMetadata\xea\x02\x14\x41rsox::Satellite::V1b\x06proto3')
 
 _globals = globals()
 _builder.BuildMessageAndEnumDescriptors(DESCRIPTOR, _globals)
@@ -34,14 +35,14 @@ _builder.BuildTopDescriptorsAndMessages(DESCRIPTOR, 'arsox.satellite.v1.satellit
 if not _descriptor._USE_C_DESCRIPTORS:
   _globals['DESCRIPTOR']._loaded_options = None
   _globals['DESCRIPTOR']._serialized_options = b'\n\026com.arsox.satellite.v1B\016SatelliteProtoP\001\242\002\003ASX\252\002\022Arsox.Satellite.V1\312\002\022Arsox\\Satellite\\V1\342\002\036Arsox\\Satellite\\V1\\GPBMetadata\352\002\024Arsox::Satellite::V1'
-  _globals['_GETVERSIONRESPONSE']._serialized_start=119
-  _globals['_GETVERSIONRESPONSE']._serialized_end=250
-  _globals['_READINESSCHECK']._serialized_start=252
-  _globals['_READINESSCHECK']._serialized_end=354
-  _globals['_GETREADINESSRESPONSE']._serialized_start=356
-  _globals['_GETREADINESSRESPONSE']._serialized_end=460
-  _globals['_DISKUSAGE']._serialized_start=463
-  _globals['_DISKUSAGE']._serialized_end=678
-  _globals['_GETSTATUSRESPONSE']._serialized_start=681
-  _globals['_GETSTATUSRESPONSE']._serialized_end=1045
+  _globals['_GETVERSIONRESPONSE']._serialized_start=151
+  _globals['_GETVERSIONRESPONSE']._serialized_end=282
+  _globals['_READINESSCHECK']._serialized_start=284
+  _globals['_READINESSCHECK']._serialized_end=386
+  _globals['_GETREADINESSRESPONSE']._serialized_start=388
+  _globals['_GETREADINESSRESPONSE']._serialized_end=492
+  _globals['_DISKUSAGE']._serialized_start=495
+  _globals['_DISKUSAGE']._serialized_end=710
+  _globals['_GETSTATUSRESPONSE']._serialized_start=713
+  _globals['_GETSTATUSRESPONSE']._serialized_end=1132
 # @@protoc_insertion_point(module_scope)

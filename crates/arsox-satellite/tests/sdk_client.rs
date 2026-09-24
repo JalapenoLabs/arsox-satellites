@@ -16,6 +16,8 @@ use arsox_sdk::proto::common::v1::{Duration as ProtoDuration, Secret};
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::incident::v1::Disposition;
+#[cfg(unix)]
+use arsox_sdk::proto::satellite::v1::{SetupState, SetupStatus};
 use arsox_sdk::proto::settings::v1::{
     Budget, EnvVar, GithubIntegration, LlmAuth, McpServer, ModelEndpoint, ReadinessProbe,
     Redaction, RedactionMode, Repo, Service, ServiceEndpoint, ServiceIsolation, ThreadSettings,
@@ -995,4 +997,156 @@ async fn no_credential_appears_in_the_bytes_a_response_is_made_of() {
             );
         }
     }
+}
+
+/// Waits for the setup script to stop running, and returns where it landed.
+///
+/// Setup answers when the script is stored, not when it finishes, so a host
+/// follows it on status. This is that loop, from a consumer's seat.
+#[cfg(unix)]
+async fn settled_setup(client: &Client) -> SetupStatus {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+
+    loop {
+        let setup = client
+            .status()
+            .await
+            .expect("should report status")
+            .setup
+            .expect("status always carries the setup");
+
+        if setup.state() != SetupState::Running {
+            return setup;
+        }
+
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the setup script was still running after thirty seconds"
+        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_setup_script_is_set_run_repeated_failed_and_cleared_through_the_sdk() {
+    let url = start().await;
+    let client = Client::connect(&url, SECRET).await.expect("should connect");
+
+    let before = client
+        .status()
+        .await
+        .expect("should report status")
+        .setup
+        .expect("status always carries the setup");
+    assert_eq!(
+        before.state(),
+        SetupState::None,
+        "a new satellite holds no script"
+    );
+
+    let script = "echo installed-a-pinned-tool\n";
+    let started = client
+        .set_setup_script(script)
+        .await
+        .expect("should set the script");
+    assert_eq!(started.state(), SetupState::Running);
+    assert_eq!(started.script_sha256.len(), 64);
+
+    let succeeded = settled_setup(&client).await;
+    assert_eq!(succeeded.state(), SetupState::Succeeded);
+    assert_eq!(succeeded.exit_code, Some(0));
+    assert!(succeeded.output_tail.contains("installed-a-pinned-tool"));
+
+    // A host sends its script on every boot of its own. The same script again
+    // is answered with its last run rather than started over.
+    let repeated = client
+        .set_setup_script(script)
+        .await
+        .expect("should set the script");
+    assert_eq!(repeated.state(), SetupState::Succeeded);
+    assert_eq!(repeated.started_at, succeeded.started_at);
+
+    client
+        .set_setup_script("echo no-such-package >&2\nexit 3\n")
+        .await
+        .expect("should set the script");
+
+    let failed = settled_setup(&client).await;
+    assert_eq!(failed.state(), SetupState::Failed);
+    assert_eq!(failed.exit_code, Some(3));
+    assert!(failed.output_tail.contains("no-such-package"));
+
+    let incidents = client
+        .incidents(IncidentQuery {
+            codes: vec![ErrorCode::SetupFailed],
+            ..IncidentQuery::default()
+        })
+        .await
+        .expect("should list incidents");
+    assert_eq!(incidents.len(), 1);
+    assert_eq!(
+        incidents[0].thread_id, None,
+        "a setup failure belongs to the satellite rather than to any thread"
+    );
+    assert_eq!(incidents[0].disposition(), Disposition::Degraded);
+
+    let cleared = client
+        .set_setup_script("")
+        .await
+        .expect("should clear the script");
+    assert_eq!(cleared.state(), SetupState::None);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_turn_queued_while_the_setup_script_runs_waits_for_it() {
+    // The gate from a consumer's seat: the host's tooling is installed before
+    // any turn reaches for it.
+    let url = start().await;
+    let client = Client::connect(&url, SECRET).await.expect("should connect");
+
+    client
+        .set_setup_script("sleep 2\n")
+        .await
+        .expect("should set the script");
+
+    let created = client
+        .threads()
+        .create(settings())
+        .await
+        .expect("should create");
+    let turn = created
+        .handle
+        .start_turn("replay the probe")
+        .await
+        .expect("should queue");
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let waiting = created.handle.turns().await.expect("should list turns");
+    assert_eq!(
+        waiting[0].status(),
+        TurnStatus::Queued,
+        "a turn was claimed while the setup script ran"
+    );
+
+    let result = tokio::time::timeout(Duration::from_secs(30), turn.result())
+        .await
+        .expect("should not time out")
+        .expect("should report a result");
+    assert_eq!(result.status, i32::from(TurnStatus::Completed));
+
+    let setup = settled_setup(&client).await;
+    let finished_setup = setup.finished_at.expect("a finished script says when");
+    let started_turn = created.handle.turns().await.expect("should list turns")[0]
+        .started_at
+        .clone()
+        .expect("a finished turn says when it started");
+
+    assert!(
+        (started_turn.epoch_seconds, started_turn.nanos)
+            >= (finished_setup.epoch_seconds, finished_setup.nanos),
+        "the turn started before the setup script finished"
+    );
 }

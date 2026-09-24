@@ -63,7 +63,7 @@ use tokio::io::{AsyncRead, AsyncReadExt as _};
 /// is the end: the error is on the last lines and the preamble is a package
 /// list. Truncating from the front keeps the tail, and keeps one runaway build
 /// log out of a database row that outlives the thread.
-const MAX_CAPTURED_OUTPUT: usize = 16 * 1024;
+pub(crate) const MAX_CAPTURED_OUTPUT: usize = 16 * 1024;
 
 /// Exit code recorded when a command could not be started at all.
 ///

@@ -14,6 +14,7 @@ sys.path.insert(0, "gen/python")
 from arsox.common.v1 import common_pb2
 from arsox.error.v1 import error_pb2
 from arsox.incident.v1 import incident_pb2
+from arsox.satellite.v1 import satellite_pb2, setup_pb2
 from arsox.settings.v1 import budget_pb2, settings_pb2
 from arsox.thread.v1 import thread_pb2
 from arsox.event.v1 import event_pb2
@@ -484,6 +485,83 @@ check(
     "and carries REQUEST_FIELD_MISSING",
     decode_error(payload).code == error_pb2.ERROR_CODE_REQUEST_FIELD_MISSING,
 )
+
+print("\nsetup script")
+
+
+def set_setup_script(script: str) -> setup_pb2.SetupStatus:
+    request = setup_pb2.SetSetupScriptRequest(script=script)
+    status, payload = call("PUT", "/v1/setup", request.SerializeToString())
+    check(f"PUT /v1/setup is 200 ({len(script)} bytes)", status == 200, f"got {status}")
+    response = setup_pb2.SetSetupScriptResponse()
+    response.ParseFromString(payload)
+    return response.setup
+
+
+def settled_setup(timeout_seconds: int = 60) -> setup_pb2.SetupStatus:
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        _status, payload = call("GET", "/v1/status")
+        response = satellite_pb2.GetStatusResponse()
+        response.ParseFromString(payload)
+        if response.setup.state != setup_pb2.SETUP_STATE_RUNNING:
+            return response.setup
+        time.sleep(0.2)
+    raise SystemExit("the setup script never finished")
+
+
+# Root, from an empty environment: it can write under /opt, and it sees no
+# ARSOX_ variable, the secret included.
+root_script = (
+    "mkdir -p /opt/arsox-smoke\n"
+    "echo installed > /opt/arsox-smoke/marker\n"
+    "echo uid=$(id -u)\n"
+    "env | grep -c '^ARSOX_' || true\n"
+)
+started = set_setup_script(root_script)
+check("a new script starts RUNNING", started.state == setup_pb2.SETUP_STATE_RUNNING)
+finished = settled_setup()
+check("and SUCCEEDS", finished.state == setup_pb2.SETUP_STATE_SUCCEEDED, str(finished))
+check("as root", "uid=0" in finished.output_tail, finished.output_tail)
+check(
+    "with no ARSOX_ variable in its environment",
+    finished.output_tail.strip().endswith("0"),
+    finished.output_tail,
+)
+
+repeated = set_setup_script(root_script)
+check(
+    "the same script again is not run again",
+    repeated.state == setup_pb2.SETUP_STATE_SUCCEEDED and repeated.started_at == finished.started_at,
+)
+
+unauthorized, _payload = call(
+    "PUT",
+    "/v1/setup",
+    setup_pb2.SetSetupScriptRequest(script="id").SerializeToString(),
+    token="wrong-secret",
+)
+check("setting it without the secret is 401", unauthorized == 401, f"got {unauthorized}")
+
+set_setup_script("echo smoke-setup-failure >&2\nexit 7\n")
+failed_setup = settled_setup()
+check("a failing script is FAILED", failed_setup.state == setup_pb2.SETUP_STATE_FAILED)
+check("with its exit code", failed_setup.exit_code == 7, str(failed_setup.exit_code))
+
+request = incident_pb2.ListIncidentsRequest(codes=[ error_pb2.ERROR_CODE_SETUP_FAILED ])
+status, payload = call("GET", "/v1/incidents", request.SerializeToString())
+listing = incident_pb2.ListIncidentsResponse()
+listing.ParseFromString(payload)
+check(
+    "and a SETUP_FAILED incident with no thread",
+    any(
+        not incident.HasField("thread_id") and "smoke-setup-failure" in str(incident.details)
+        for incident in listing.incidents
+    ),
+)
+
+cleared = set_setup_script("")
+check("an empty script clears it", cleared.state == setup_pb2.SETUP_STATE_NONE)
 
 print(f"\n{passed} passed, {failed} failed")
 

@@ -278,7 +278,7 @@ pub struct ControlEvent {
     /// forward compatibility reason as on ThreadEvent.
     #[prost(string, tag="3")]
     pub r#type: ::prost::alloc::string::String,
-    #[prost(oneof="control_event::Payload", tags="20, 21, 22, 23, 24, 25, 26")]
+    #[prost(oneof="control_event::Payload", tags="20, 21, 22, 23, 24, 25, 26, 27, 28")]
     pub payload: ::core::option::Option<control_event::Payload>,
 }
 /// Nested message and enum types in `ControlEvent`.
@@ -304,6 +304,10 @@ pub mod control_event {
         /// Like its thread-scoped counterpart, this arm cannot be switched off.
         #[prost(message, tag="26")]
         Incident(super::super::super::incident::v1::Incident),
+        #[prost(message, tag="27")]
+        SetupStarted(super::SetupStarted),
+        #[prost(message, tag="28")]
+        SetupFinished(super::SetupFinished),
     }
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -355,6 +359,23 @@ pub struct ControlBudgetWarning {
     pub ceiling: i32,
     #[prost(uint32, tag="3")]
     pub percent_used: u32,
+}
+/// The setup script started running, and new work waits until it finishes.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SetupStarted {
+    /// The SHA-256 of the script now running, as lowercase hex.
+    #[prost(string, tag="1")]
+    pub script_sha256: ::prost::alloc::string::String,
+}
+/// The setup script stopped running, and work resumes.
+///
+/// Carries the status as it stands now: SUCCEEDED or FAILED when the run ended
+/// on its own, NONE when the script was cleared while it ran. A script replaced
+/// mid-run is followed by a SetupStarted for its replacement instead.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct SetupFinished {
+    #[prost(message, optional, tag="1")]
+    pub setup: ::core::option::Option<super::super::satellite::v1::SetupStatus>,
 }
 /// Reason a thread went away.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]

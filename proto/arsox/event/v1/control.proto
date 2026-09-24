@@ -7,6 +7,7 @@ package arsox.event.v1;
 import "arsox/common/v1/common.proto";
 import "arsox/event/v1/lifecycle.proto";
 import "arsox/incident/v1/incident.proto";
+import "arsox/satellite/v1/setup.proto";
 import "arsox/thread/v1/thread.proto";
 
 // One event on the satellite's control stream.
@@ -39,6 +40,9 @@ message ControlEvent {
     //
     // Like its thread-scoped counterpart, this arm cannot be switched off.
     arsox.incident.v1.Incident incident = 26;
+
+    SetupStarted setup_started = 27;
+    SetupFinished setup_finished = 28;
   }
 }
 
@@ -92,4 +96,19 @@ message ControlBudgetWarning {
   string thread_id = 1;
   Ceiling ceiling = 2;
   uint32 percent_used = 3;
+}
+
+// The setup script started running, and new work waits until it finishes.
+message SetupStarted {
+  // The SHA-256 of the script now running, as lowercase hex.
+  string script_sha256 = 1;
+}
+
+// The setup script stopped running, and work resumes.
+//
+// Carries the status as it stands now: SUCCEEDED or FAILED when the run ended
+// on its own, NONE when the script was cleared while it ran. A script replaced
+// mid-run is followed by a SetupStarted for its replacement instead.
+message SetupFinished {
+  arsox.satellite.v1.SetupStatus setup = 1;
 }

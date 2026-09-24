@@ -13,10 +13,11 @@
  */
 
 import type { RunningSatellite } from './satellite-process.js'
-import type { ThreadSettingsInit } from '../src/index.js'
+import type { SetupStatus, ThreadSettingsInit } from '../src/index.js'
 
 // Core
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { setTimeout as sleep } from 'node:timers/promises'
 
 // Misc
 import {
@@ -25,6 +26,7 @@ import {
   ErrorCode,
   Harness,
   Satellite,
+  SetupState,
   ThreadState,
   TurnStatus
 } from '../src/index.js'
@@ -61,6 +63,33 @@ async function failureFrom(call: Promise<unknown>): Promise<ArsoxError> {
   }
 
   throw new Error('the call was expected to fail and did not')
+}
+
+/** How long a short setup script gets to finish before a test gives up. */
+const SETUP_SETTLE_MILLISECONDS = 30_000
+
+/**
+ * Waits for the setup script to stop running, and returns where it landed.
+ *
+ * Setting a script answers when it is stored, not when it finishes, so a host
+ * follows it on status. This is that loop, from a consumer's seat.
+ */
+async function settledSetup(satellite: Satellite): Promise<SetupStatus> {
+  const deadline = Date.now() + SETUP_SETTLE_MILLISECONDS
+
+  while (Date.now() < deadline) {
+    const { setup } = await satellite.status()
+    if (!setup) {
+      throw new Error('status always carries the setup')
+    }
+    if (setup.state !== SetupState.RUNNING) {
+      return setup
+    }
+
+    await sleep(50)
+  }
+
+  throw new Error(`the setup script was still running after ${SETUP_SETTLE_MILLISECONDS}ms`)
 }
 
 describe('the Node SDK against a running satellite', () => {
@@ -354,6 +383,58 @@ describe('the Node SDK against a running satellite', () => {
       await second.stop()
     }
   })
+
+  // Its own satellite, because a running setup script holds every turn on the
+  // satellite running it, and the rest of this file shares one. The script is
+  // `sh`, so this runs where the satellite image does.
+  it.skipIf(process.platform === 'win32')(
+    'sets, repeats, fails, and clears the setup script',
+    async () => {
+      const own = await startSatellite()
+
+      try {
+        const satellite = await Satellite.connect(own.url, SECRET)
+
+        const before = await satellite.status()
+        expect(before.setup?.state).toBe(SetupState.NONE)
+
+        const script = 'echo installed-a-pinned-tool\n'
+        const started = await satellite.setSetupScript(script)
+        expect(started.state).toBe(SetupState.RUNNING)
+        expect(started.scriptSha256).toHaveLength(64)
+
+        const succeeded = await settledSetup(satellite)
+        expect(succeeded.state).toBe(SetupState.SUCCEEDED)
+        expect(succeeded.exitCode).toBe(0)
+        expect(succeeded.outputTail).toContain('installed-a-pinned-tool')
+
+        // A host sends its script on every boot of its own. The same script
+        // again is answered with its last run rather than started over.
+        const repeated = await satellite.setSetupScript(script)
+        expect(repeated.state).toBe(SetupState.SUCCEEDED)
+        expect(repeated.startedAt).toEqual(succeeded.startedAt)
+
+        await satellite.setSetupScript('echo no-such-package >&2\nexit 3\n')
+
+        const failed = await settledSetup(satellite)
+        expect(failed.state).toBe(SetupState.FAILED)
+        expect(failed.exitCode).toBe(3)
+        expect(failed.outputTail).toContain('no-such-package')
+
+        // A setup failure belongs to the satellite, not to any thread.
+        const incidents = await satellite.incidents({ codes: [ ErrorCode.SETUP_FAILED ] })
+        expect(incidents).toHaveLength(1)
+        expect(incidents[0]?.threadId).toBeUndefined()
+        expect(incidents[0]?.disposition).toBe(Disposition.DEGRADED)
+
+        const cleared = await satellite.setSetupScript('')
+        expect(cleared.state).toBe(SetupState.NONE)
+      }
+      finally {
+        await own.stop()
+      }
+    }
+  )
 
   it('reports what it is holding, and stops holding a destroyed thread', async () => {
     const created = await client.threads().create(settings)

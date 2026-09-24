@@ -149,6 +149,14 @@ enum ErrorCode {
   // change, so reconnecting cannot succeed.
   ERROR_CODE_RELAY_NOT_DECLARED = 1401;
 
+  // Satellite setup, the host application's script set with PUT /v1/setup.
+  //
+  // The script exited nonzero, ran past its bound, or could not start. Recorded
+  // as a satellite-scoped incident with no thread, carrying the script's hash,
+  // its exit code, and the tail of its output. Work proceeds without whatever
+  // the script was meant to install.
+  ERROR_CODE_SETUP_FAILED = 1500;
+
   // Services, declared in `ThreadSettings.services` and started for each turn.
   //
   // A service did not become ready: it failed its readiness probe until the

@@ -1,6 +1,7 @@
 from arsox.common.v1 import common_pb2 as _common_pb2
 from arsox.event.v1 import lifecycle_pb2 as _lifecycle_pb2
 from arsox.incident.v1 import incident_pb2 as _incident_pb2
+from arsox.satellite.v1 import setup_pb2 as _setup_pb2
 from arsox.thread.v1 import thread_pb2 as _thread_pb2
 from google.protobuf.internal import enum_type_wrapper as _enum_type_wrapper
 from google.protobuf import descriptor as _descriptor
@@ -33,6 +34,8 @@ class ControlEvent(_message.Message):
     HEALTH_CHANGED_FIELD_NUMBER: _ClassVar[int]
     BUDGET_WARNING_FIELD_NUMBER: _ClassVar[int]
     INCIDENT_FIELD_NUMBER: _ClassVar[int]
+    SETUP_STARTED_FIELD_NUMBER: _ClassVar[int]
+    SETUP_FINISHED_FIELD_NUMBER: _ClassVar[int]
     sequence: int
     occurred_at: _common_pb2.Timestamp
     type: str
@@ -43,7 +46,9 @@ class ControlEvent(_message.Message):
     health_changed: HealthChanged
     budget_warning: ControlBudgetWarning
     incident: _incident_pb2.Incident
-    def __init__(self, sequence: _Optional[int] = ..., occurred_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., type: _Optional[str] = ..., thread_created: _Optional[_Union[ThreadCreated, _Mapping]] = ..., thread_state_changed: _Optional[_Union[ThreadStateChanged, _Mapping]] = ..., thread_destroyed: _Optional[_Union[ThreadDestroyed, _Mapping]] = ..., queue_depth_changed: _Optional[_Union[QueueDepthChanged, _Mapping]] = ..., health_changed: _Optional[_Union[HealthChanged, _Mapping]] = ..., budget_warning: _Optional[_Union[ControlBudgetWarning, _Mapping]] = ..., incident: _Optional[_Union[_incident_pb2.Incident, _Mapping]] = ...) -> None: ...
+    setup_started: SetupStarted
+    setup_finished: SetupFinished
+    def __init__(self, sequence: _Optional[int] = ..., occurred_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., type: _Optional[str] = ..., thread_created: _Optional[_Union[ThreadCreated, _Mapping]] = ..., thread_state_changed: _Optional[_Union[ThreadStateChanged, _Mapping]] = ..., thread_destroyed: _Optional[_Union[ThreadDestroyed, _Mapping]] = ..., queue_depth_changed: _Optional[_Union[QueueDepthChanged, _Mapping]] = ..., health_changed: _Optional[_Union[HealthChanged, _Mapping]] = ..., budget_warning: _Optional[_Union[ControlBudgetWarning, _Mapping]] = ..., incident: _Optional[_Union[_incident_pb2.Incident, _Mapping]] = ..., setup_started: _Optional[_Union[SetupStarted, _Mapping]] = ..., setup_finished: _Optional[_Union[SetupFinished, _Mapping]] = ...) -> None: ...
 
 class ThreadCreated(_message.Message):
     __slots__ = ()
@@ -96,3 +101,15 @@ class ControlBudgetWarning(_message.Message):
     ceiling: _lifecycle_pb2.Ceiling
     percent_used: int
     def __init__(self, thread_id: _Optional[str] = ..., ceiling: _Optional[_Union[_lifecycle_pb2.Ceiling, str]] = ..., percent_used: _Optional[int] = ...) -> None: ...
+
+class SetupStarted(_message.Message):
+    __slots__ = ()
+    SCRIPT_SHA256_FIELD_NUMBER: _ClassVar[int]
+    script_sha256: str
+    def __init__(self, script_sha256: _Optional[str] = ...) -> None: ...
+
+class SetupFinished(_message.Message):
+    __slots__ = ()
+    SETUP_FIELD_NUMBER: _ClassVar[int]
+    setup: _setup_pb2.SetupStatus
+    def __init__(self, setup: _Optional[_Union[_setup_pb2.SetupStatus, _Mapping]] = ...) -> None: ...

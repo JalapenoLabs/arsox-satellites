@@ -92,6 +92,23 @@ and on a thread handle. Reaching the rest of the example needs artifacts,
 suggestions, plan approval, question answering, and the settings those features
 carry. The SDK grows to match as the satellite does.
 
+## The setup script
+
+`Satellite::set_setup_script` sets the satellite's setup script, the host's
+install script run as root, and returns the `SetupStatus` the satellite answered
+with. Node spells it `setSetupScript` and Python `set_setup_script`, and each
+client's status call carries the same status in `setup`. See
+[setup](./setup.md).
+
+It returns the contract's own `SetupStatus` rather than a wrapper, for the reason
+every other call here returns the message: the SDKs hand out the contract, and a
+parallel type per language would be a second copy to keep in step.
+
+It answers when the script is stored, not when it finishes. A host that needs to
+know it finished follows `status` until `setup.state` leaves `RUNNING`, or
+watches the control socket for `setup.finished`. Waiting inside the call would
+hold an HTTP request open for up to the script's thirty minute bound.
+
 ## Relayed tools and workspace files
 
 `ThreadHandle::relay` attaches to a thread's tool relay. The `Relay` it returns
@@ -156,8 +173,8 @@ second vocabulary: `connect` checks the contract version, a handle holds an id
 and a connection, `pause`, `resume`, and `drain` stay three verbs, and one error
 class answers which code, whether to retry, and what happened.
 
-What it reaches today is the surface above: version, status, harness, threads,
-turns, the thread event stream, and incidents. Streaming settings toggles, text
+What it reaches today is the surface above: version, status, harness, the setup
+script, threads, turns, the thread event stream, and incidents. Streaming settings toggles, text
 and markdown reports, artifacts, plan approval, question answering, and the
 control socket are not there yet, and `examples/example.ts` remains a design
 target rather than a description of the package.
@@ -232,8 +249,8 @@ checks the contract version, a handle holds an id and a connection, `pause`,
 `resume`, and `drain` stay three verbs, and one `ArsoxError` answers which code,
 whether to retry, and what happened.
 
-It reaches the same surface as Node today: version, status, harness, threads,
-turns, the thread event stream, and incidents. Streaming settings toggles, text
+It reaches the same surface as Node today: version, status, harness, the setup
+script, threads, turns, the thread event stream, and incidents. Streaming settings toggles, text
 and markdown reports, artifacts, plan approval, question answering, and the
 control socket are not there yet.
 

@@ -8,9 +8,10 @@
 //!
 //! # What lives here
 //!
-//! Threads, queued turns, the event log, and incidents. Losing this file means
-//! losing every thread you intended to resume and every record of what went
-//! wrong, which is why `/var/arsox` is mounted as a named volume.
+//! Threads, queued turns, the event log, incidents, and the setup script.
+//! Losing this file means losing every thread you intended to resume and every
+//! record of what went wrong, which is why `/var/arsox` is mounted as a named
+//! volume.
 //!
 //! # Errors speak the contract
 //!
@@ -21,12 +22,14 @@
 mod claims;
 mod events;
 mod incidents;
+mod setup;
 mod threads;
 mod turns;
 
 pub use claims::{ClaimedTurn, Interrupted};
 pub use events::AppendEvent;
 pub use incidents::{IncidentFilter, IncidentListing};
+pub use setup::{SetupOutcome, StoredSetup};
 pub use threads::{Listing, NewThread, ProvisionOutcome, StoredThread, ThreadFilter};
 pub use turns::{Drained, NewTurn, StoredTurn};
 

@@ -113,7 +113,8 @@ is the candidate.
 ## Roadmap
 
 - **JSON frames**, as above.
-- **Control stream coverage.** Thread created and destroyed are published today.
+- **Control stream coverage.** Thread created and destroyed, and setup started
+  and finished, are published today.
   Queue depth, health transitions, and budget warnings are defined in the
   contract and not yet emitted.
 - **Retention.** Nothing prunes the event log, so `STREAM_SEQUENCE_EXPIRED`

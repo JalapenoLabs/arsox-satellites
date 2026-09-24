@@ -152,6 +152,13 @@ pub enum ErrorCode {
     /// carry. Refused before the upgrade, and permanent: a thread's settings do not
     /// change, so reconnecting cannot succeed.
     RelayNotDeclared = 1401,
+    /// Satellite setup, the host application's script set with PUT /v1/setup.
+    ///
+    /// The script exited nonzero, ran past its bound, or could not start. Recorded
+    /// as a satellite-scoped incident with no thread, carrying the script's hash,
+    /// its exit code, and the tail of its output. Work proceeds without whatever
+    /// the script was meant to install.
+    SetupFailed = 1500,
     /// Services, declared in `ThreadSettings.services` and started for each turn.
     ///
     /// A service did not become ready: it failed its readiness probe until the
@@ -236,6 +243,7 @@ impl ErrorCode {
             Self::WorkspaceFileLengthRequired => "ERROR_CODE_WORKSPACE_FILE_LENGTH_REQUIRED",
             Self::RelayClientReplaced => "ERROR_CODE_RELAY_CLIENT_REPLACED",
             Self::RelayNotDeclared => "ERROR_CODE_RELAY_NOT_DECLARED",
+            Self::SetupFailed => "ERROR_CODE_SETUP_FAILED",
             Self::ServiceStartFailed => "ERROR_CODE_SERVICE_START_FAILED",
             Self::ServiceExited => "ERROR_CODE_SERVICE_EXITED",
         }
@@ -309,6 +317,7 @@ impl ErrorCode {
             "ERROR_CODE_WORKSPACE_FILE_LENGTH_REQUIRED" => Some(Self::WorkspaceFileLengthRequired),
             "ERROR_CODE_RELAY_CLIENT_REPLACED" => Some(Self::RelayClientReplaced),
             "ERROR_CODE_RELAY_NOT_DECLARED" => Some(Self::RelayNotDeclared),
+            "ERROR_CODE_SETUP_FAILED" => Some(Self::SetupFailed),
             "ERROR_CODE_SERVICE_START_FAILED" => Some(Self::ServiceStartFailed),
             "ERROR_CODE_SERVICE_EXITED" => Some(Self::ServiceExited),
             _ => None,

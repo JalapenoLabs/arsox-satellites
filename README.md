@@ -71,7 +71,7 @@ One version tag publishes the image and the Node package together, from one comm
 
 The CLI is an interactive terminal rather than a subcommand tool: you launch it and talk to it, and slash commands handle the rest. Its documentation lives with its source. Design notes written here before that repo existed are parked in [docs/todo-cli.md](./docs/todo-cli.md) and move over when it does.
 
-For setting up the satellite's workspace, you are typically expected to extend the image in your own Dockerfile and install your own tooling on top of it. For example, if you need Go, pull this image with `FROM` and use `RUN` to install it yourself.
+The image ships a working development environment, not every tool every application needs. There are two ways to add yours: extend the image in your own Dockerfile with `FROM` and `RUN`, or hand the satellite an install script at runtime with [satellite setup](#satellite-setup). The first bakes the tooling in; the second lets your application decide what a satellite carries without building an image.
 
 ## Architecture
 
@@ -112,7 +112,24 @@ CLIs:
 
 <!-- TODO: Finalize and publish the exact pinned version manifest per image variant -->
 
-Anything else is yours to add with a `RUN` layer in your own Dockerfile.
+Anything else is yours to add, with a `RUN` layer in your own Dockerfile or with a [setup script](#satellite-setup).
+
+### Satellite setup
+
+Your application can supply one install script per satellite with `PUT /v1/setup`. The satellite runs it **as root**, at once and again on every container start, because a replaced container has lost everything outside its volumes. Setting the script it already holds changes nothing; a different one replaces it, stopping a run in progress; an empty one clears it.
+
+```rust
+satellite
+    .set_setup_script("command -v ffmpeg || (apt-get update && apt-get install --yes ffmpeg)")
+    .await?;
+```
+
+- **New work waits while it runs.** No turn is claimed and no thread starts provisioning until it finishes. Turns already running carry on. The rule is in the claim query, beside pausing and provisioning.
+- **Failure does not stop work.** A script that exits nonzero, runs past its 30 minute bound, or cannot start is `FAILED`, recorded as a satellite-scoped `SETUP_FAILED` incident with its exit code and output tail, and work proceeds without whatever it was meant to install.
+- **Idempotency is the script's job.** It runs on every start, so check before you download.
+- **It runs from an empty environment**, with a fixed `PATH`, `HOME=/root`, `LANG=C.UTF-8`, and `DEBIAN_FRONTEND=noninteractive`, as its own process group, so stopping it stops everything it started.
+
+Its status is `setup` on `GET /v1/status`, and the control socket carries `setup.started` and `setup.finished`. **Holding `ARSOX_SECRET` now means running code as root in the container**, which [the enforcement doc](./docs/enforcement.md#the-setup-script-runs-as-root) states plainly. Do not write a credential into the script: its output is returned in the status and no redactor applies to it. The whole of it is in [the setup doc](./docs/setup.md).
 
 ### The workspace
 
@@ -279,7 +296,7 @@ Two rules still hold no matter how many clients attach:
 
 The API that orchestrates the satellite holds its state in an embedded SQLite database, accessed through `sqlx` in WAL mode. There is no external database to run.
 
-Database files live in `/var/arsox/arsox.db`. **Mount `/var/arsox` as a named volume.** The database holds threads, queued turns, event history, [incidents](#incidents), and lifetime statistics, so losing it means losing every thread you intended to resume and every record of what went wrong.
+Database files live in `/var/arsox/arsox.db`. **Mount `/var/arsox` as a named volume.** The database holds threads, queued turns, event history, [incidents](#incidents), lifetime statistics, and the [setup script](#satellite-setup), so losing it means losing every thread you intended to resume and every record of what went wrong.
 
 Incidents and lifetime statistics are the two things that outlive their thread. Both carry their own retention, independent of the workspace TTL.
 
@@ -348,7 +365,8 @@ Turns ordered by completion sort the unfinished ones last, so "most recently fin
 | `GET /readyz` | none | readiness: database open, `/workspace` writable, LLM proxy reachable |
 | `GET /v1/version` | none | satellite version and proto contract version |
 | `GET /v1/harness` | bearer | which harnesses this satellite offers and what each [supports](#harness-capabilities) |
-| `GET /v1/status` | bearer | full satellite state, thread list, queue depths |
+| `GET /v1/status` | bearer | full satellite state, thread list, queue depths, setup status |
+| `PUT /v1/setup` | bearer | set, replace, or clear the [setup script](#satellite-setup) |
 | `GET /metrics` | bearer | Prometheus metrics, opt in with `ARSOX_METRICS=true` |
 
 The unauthenticated endpoints expose no thread content and no configuration, only the liveness facts an orchestrator needs before it holds a credential.
@@ -561,6 +579,12 @@ Each control gets its own code, because "denied" without saying which gate close
 |---|---|---|
 | `RELAY_CLIENT_REPLACED` | no | a newer relay connection for the thread took over; the close reason on code `4000` |
 | `RELAY_NOT_DECLARED` | no | the thread declared no `relayed_mcp_servers`, so there is no relay to open; stop reconnecting |
+
+**Satellite setup**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `SETUP_FAILED` | no | the [setup script](#satellite-setup) exited nonzero, ran past its bound, or could not start; recorded as an incident with no thread |
 
 **Services**
 
@@ -1518,6 +1542,8 @@ Each turn runs through a fixed stack.
 12. Suggestions stage runs, if enabled
 13. The thread's services stop
 14. PR watching begins, if enabled
+
+While the satellite's [setup script](#satellite-setup) is running, both stacks wait at their first satellite step: provisioning does not start and no turn is claimed until it finishes.
 
 Workspace provisioning happens once, at thread creation. Later turns inherit the clones, the prefetched issues, and the assembled `AGENTS.md` rather than redoing them.
 

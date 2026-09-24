@@ -59,6 +59,7 @@ proto/
                    event               ThreadEvent envelope
                    control             ControlEvent and satellite lifecycle
     satellite/v1/  satellite           version, readiness, status
+                   setup               SetupState, SetupStatus, the setup endpoint
 ```
 
 Dependencies point one way. `common` imports nothing. `suggestion` imports
