@@ -74,7 +74,13 @@ from arsox_sdk.proto.arsox.satellite.v1.satellite_pb2 import (
     GetStatusResponse,
     GetVersionResponse,
 )
+from arsox_sdk.proto.arsox.settings.v1.service_pb2 import (
+    ReadinessProbe,
+    Service,
+    ServiceIsolation,
+)
 from arsox_sdk.proto.arsox.settings.v1.settings_pb2 import ThreadSettings
+from arsox_sdk.proto.arsox.settings.v1.tool_pb2 import McpServer, ServiceEndpoint
 from arsox_sdk.proto.arsox.thread.v1.thread_pb2 import (
     Thread,
     ThreadOrder,
@@ -122,10 +128,15 @@ __all__ = [
     "Incident",
     "IncidentCounts",
     "ListIncidentsRequest",
+    "McpServer",
     "Money",
     "PageRequest",
     "PageResponse",
+    "ReadinessProbe",
     "Secret",
+    "Service",
+    "ServiceEndpoint",
+    "ServiceIsolation",
     "Stage",
     "StageDisposition",
     "StageOutcome",
