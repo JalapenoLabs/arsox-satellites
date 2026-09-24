@@ -1006,6 +1006,15 @@ on Windows. So the layers are split deliberately:
   refuses every provider host, and that the environment handoff exempts the LLM
   proxy.
 
+- **The setup script's root path is driven on Unix without root**, in
+  `src/setup.rs`: the empty environment, the process-group teardown of a
+  replaced and a cleared script, the bound, the file mode, and the claim gate.
+  A test process is not root, so what those tests cannot show is the script
+  actually running as root. That was driven by hand in the published image:
+  a root install of a checksummed binary and an apt package, a restart and a
+  container replacement running it again, and a replaced script's whole group
+  gone. CI's Docker boot does not exercise it.
+
 - **The route closure is not asserted anywhere**, and cannot be from inside a
   test. It is two `iptables` rules in a container run with `NET_ADMIN`, so
   observing it means starting a privileged container and watching an unprivileged

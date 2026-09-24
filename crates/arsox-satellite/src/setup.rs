@@ -568,8 +568,9 @@ fn judge(run: &Run) -> Judged {
                 bound.as_secs() / 60
             ),
         ),
-        // Only reachable for a run nothing replaced, which means the satellite
-        // itself was stopping. Recorded as what it was rather than dropped.
+        // Not reached today: every stop bumps the generation first, so a stopped
+        // run's outcome is dropped before it is judged. Recorded as what it was
+        // should that ever change, rather than read as a success or dropped.
         Ending::Stopped => failed(
             None,
             "the setup script was stopped before it finished".to_owned(),
