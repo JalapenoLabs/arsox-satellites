@@ -26,7 +26,58 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/turn/v1/turn.proto.
  */
 export const file_arsox_turn_v1_turn: GenFile = /*@__PURE__*/
-  fileDesc("ChhhcnNveC90dXJuL3YxL3R1cm4ucHJvdG8SDWFyc294LnR1cm4udjEipQQKBFR1cm4SDwoHdHVybl9pZBgBIAEoCRIRCgl0aHJlYWRfaWQYAiABKAkSKQoGc3RhdHVzGAMgASgOMhkuYXJzb3gudHVybi52MS5UdXJuU3RhdHVzEg4KBnByb21wdBgEIAEoCRIbChNzYXRlbGxpdGVfaW5pdGlhdGVkGAUgASgIEi0KCXF1ZXVlZF9hdBgGIAEoCzIaLmFyc294LmNvbW1vbi52MS5UaW1lc3RhbXASMwoKc3RhcnRlZF9hdBgHIAEoCzIaLmFyc294LmNvbW1vbi52MS5UaW1lc3RhbXBIAIgBARI0CgtmaW5pc2hlZF9hdBgIIAEoCzIaLmFyc294LmNvbW1vbi52MS5UaW1lc3RhbXBIAYgBARIhChR0cmlnZ2VyZWRfYnlfdHVybl9pZBgJIAEoCUgCiAEBEjMKCG1ldGFkYXRhGAogAygLMiEuYXJzb3gudHVybi52MS5UdXJuLk1ldGFkYXRhRW50cnkSOAoJb3ZlcnJpZGVzGAsgASgLMiAuYXJzb3guc2V0dGluZ3MudjEuVHVybk92ZXJyaWRlc0gDiAEBGi8KDU1ldGFkYXRhRW50cnkSCwoDa2V5GAEgASgJEg0KBXZhbHVlGAIgASgJOgI4AUINCgtfc3RhcnRlZF9hdEIOCgxfZmluaXNoZWRfYXRCFwoVX3RyaWdnZXJlZF9ieV90dXJuX2lkQgwKCl9vdmVycmlkZXMiLQoKVGVhbU1lbWJlchIRCgltZW1iZXJfaWQYASABKAkSDAoEcm9sZRgCIAEoCSJCCgtDaGFuZ2VkRmlsZRIMCgRwYXRoGAEgASgJEhIKCmluc2VydGlvbnMYAiABKA0SEQoJZGVsZXRpb25zGAMgASgNIoQBChFJbnRlZ3JhdGlvblJlY29yZBIRCgltZW1iZXJfaWQYASABKAkSDAoEcmVwbxgCIAEoCRIOCgZicmFuY2gYAyABKAkSDwoHc3VtbWFyeRgEIAEoCRItCglsYW5kZWRfYXQYBSABKAsyGi5hcnNveC5jb21tb24udjEuVGltZXN0YW1wImEKDUNoZWNrZXJSZXN1bHQSDwoHY29tbWFuZBgBIAEoCRIRCglleGl0X2NvZGUYAiABKAUSDgoGb3V0cHV0GAMgASgJEhwKFHNraXBwZWRfYnlfY29tbWFuZGVyGAQgASgIIqECChBTdGFydFR1cm5SZXF1ZXN0EhEKCXRocmVhZF9pZBgBIAEoCRIOCgZwcm9tcHQYAiABKAkSHAoPaWRlbXBvdGVuY3lfa2V5GAMgASgJSACIAQESPwoIbWV0YWRhdGEYBCADKAsyLS5hcnNveC50dXJuLnYxLlN0YXJ0VHVyblJlcXVlc3QuTWV0YWRhdGFFbnRyeRI4CglvdmVycmlkZXMYBSABKAsyIC5hcnNveC5zZXR0aW5ncy52MS5UdXJuT3ZlcnJpZGVzSAGIAQEaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQhIKEF9pZGVtcG90ZW5jeV9rZXlCDAoKX292ZXJyaWRlcyI2ChFTdGFydFR1cm5SZXNwb25zZRIhCgR0dXJuGAEgASgLMhMuYXJzb3gudHVybi52MS5UdXJuIjcKEUNhbmNlbFR1cm5SZXF1ZXN0EhEKCXRocmVhZF9pZBgBIAEoCRIPCgd0dXJuX2lkGAIgASgJIjcKEkNhbmNlbFR1cm5SZXNwb25zZRIhCgR0dXJuGAEgASgLMhMuYXJzb3gudHVybi52MS5UdXJuIr4BChBMaXN0VHVybnNSZXF1ZXN0EhEKCXRocmVhZF9pZBgBIAEoCRIrCghzdGF0dXNlcxgCIAMoDjIZLmFyc294LnR1cm4udjEuVHVyblN0YXR1cxIqCgRwYWdlGAMgASgLMhwuYXJzb3guY29tbW9uLnYxLlBhZ2VSZXF1ZXN0EioKCG9yZGVyX2J5GAQgASgOMhguYXJzb3gudHVybi52MS5UdXJuT3JkZXISEgoKZGVzY2VuZGluZxgFIAEoCCJkChFMaXN0VHVybnNSZXNwb25zZRIiCgV0dXJucxgBIAMoCzITLmFyc294LnR1cm4udjEuVHVybhIrCgRwYWdlGAIgASgLMh0uYXJzb3guY29tbW9uLnYxLlBhZ2VSZXNwb25zZSrfAQoKVHVyblN0YXR1cxIbChdUVVJOX1NUQVRVU19VTlNQRUNJRklFRBAAEhYKElRVUk5fU1RBVFVTX1FVRVVFRBABEhcKE1RVUk5fU1RBVFVTX1JVTk5JTkcQAhIZChVUVVJOX1NUQVRVU19DT01QTEVURUQQAxIWChJUVVJOX1NUQVRVU19GQUlMRUQQBBIZChVUVVJOX1NUQVRVU19DQU5DRUxMRUQQBRIbChdUVVJOX1NUQVRVU19JTlRFUlJVUFRFRBAGEhgKFFRVUk5fU1RBVFVTX1dBVENISU5HEAcqVwoJVHVybk9yZGVyEhoKFlRVUk5fT1JERVJfVU5TUEVDSUZJRUQQABIVChFUVVJOX09SREVSX1FVRVVFRBABEhcKE1RVUk5fT1JERVJfRklOSVNIRUQQAkJ0ChFjb20uYXJzb3gudHVybi52MUIJVHVyblByb3RvUAGiAgNBVFiqAg1BcnNveC5UdXJuLlYxygINQXJzb3hcVHVyblxWMeICGUFyc294XFR1cm5cVjFcR1BCTWV0YWRhdGHqAg9BcnNveDo6VHVybjo6VjFiBnByb3RvMw", [file_arsox_common_v1_common, file_arsox_settings_v1_overrides]);
+  fileDesc("ChhhcnNveC90dXJuL3YxL3R1cm4ucHJvdG8SDWFyc294LnR1cm4udjEiXgoOVHVybkF0dGFjaG1lbnQSDAoEcGF0aBgBIAEoCRIZCgxjb250ZW50X3R5cGUYAiABKAlIAIgBARISCgpzaXplX2J5dGVzGAMgASgEQg8KDV9jb250ZW50X3R5cGUi2QQKBFR1cm4SDwoHdHVybl9pZBgBIAEoCRIRCgl0aHJlYWRfaWQYAiABKAkSKQoGc3RhdHVzGAMgASgOMhkuYXJzb3gudHVybi52MS5UdXJuU3RhdHVzEg4KBnByb21wdBgEIAEoCRIbChNzYXRlbGxpdGVfaW5pdGlhdGVkGAUgASgIEi0KCXF1ZXVlZF9hdBgGIAEoCzIaLmFyc294LmNvbW1vbi52MS5UaW1lc3RhbXASMwoKc3RhcnRlZF9hdBgHIAEoCzIaLmFyc294LmNvbW1vbi52MS5UaW1lc3RhbXBIAIgBARI0CgtmaW5pc2hlZF9hdBgIIAEoCzIaLmFyc294LmNvbW1vbi52MS5UaW1lc3RhbXBIAYgBARIhChR0cmlnZ2VyZWRfYnlfdHVybl9pZBgJIAEoCUgCiAEBEjMKCG1ldGFkYXRhGAogAygLMiEuYXJzb3gudHVybi52MS5UdXJuLk1ldGFkYXRhRW50cnkSOAoJb3ZlcnJpZGVzGAsgASgLMiAuYXJzb3guc2V0dGluZ3MudjEuVHVybk92ZXJyaWRlc0gDiAEBEjIKC2F0dGFjaG1lbnRzGAwgAygLMh0uYXJzb3gudHVybi52MS5UdXJuQXR0YWNobWVudBovCg1NZXRhZGF0YUVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAFCDQoLX3N0YXJ0ZWRfYXRCDgoMX2ZpbmlzaGVkX2F0QhcKFV90cmlnZ2VyZWRfYnlfdHVybl9pZEIMCgpfb3ZlcnJpZGVzIi0KClRlYW1NZW1iZXISEQoJbWVtYmVyX2lkGAEgASgJEgwKBHJvbGUYAiABKAkiQgoLQ2hhbmdlZEZpbGUSDAoEcGF0aBgBIAEoCRISCgppbnNlcnRpb25zGAIgASgNEhEKCWRlbGV0aW9ucxgDIAEoDSKEAQoRSW50ZWdyYXRpb25SZWNvcmQSEQoJbWVtYmVyX2lkGAEgASgJEgwKBHJlcG8YAiABKAkSDgoGYnJhbmNoGAMgASgJEg8KB3N1bW1hcnkYBCABKAkSLQoJbGFuZGVkX2F0GAUgASgLMhouYXJzb3guY29tbW9uLnYxLlRpbWVzdGFtcCJhCg1DaGVja2VyUmVzdWx0Eg8KB2NvbW1hbmQYASABKAkSEQoJZXhpdF9jb2RlGAIgASgFEg4KBm91dHB1dBgDIAEoCRIcChRza2lwcGVkX2J5X2NvbW1hbmRlchgEIAEoCCLVAgoQU3RhcnRUdXJuUmVxdWVzdBIRCgl0aHJlYWRfaWQYASABKAkSDgoGcHJvbXB0GAIgASgJEhwKD2lkZW1wb3RlbmN5X2tleRgDIAEoCUgAiAEBEj8KCG1ldGFkYXRhGAQgAygLMi0uYXJzb3gudHVybi52MS5TdGFydFR1cm5SZXF1ZXN0Lk1ldGFkYXRhRW50cnkSOAoJb3ZlcnJpZGVzGAUgASgLMiAuYXJzb3guc2V0dGluZ3MudjEuVHVybk92ZXJyaWRlc0gBiAEBEjIKC2F0dGFjaG1lbnRzGAYgAygLMh0uYXJzb3gudHVybi52MS5UdXJuQXR0YWNobWVudBovCg1NZXRhZGF0YUVudHJ5EgsKA2tleRgBIAEoCRINCgV2YWx1ZRgCIAEoCToCOAFCEgoQX2lkZW1wb3RlbmN5X2tleUIMCgpfb3ZlcnJpZGVzIjYKEVN0YXJ0VHVyblJlc3BvbnNlEiEKBHR1cm4YASABKAsyEy5hcnNveC50dXJuLnYxLlR1cm4iNwoRQ2FuY2VsVHVyblJlcXVlc3QSEQoJdGhyZWFkX2lkGAEgASgJEg8KB3R1cm5faWQYAiABKAkiNwoSQ2FuY2VsVHVyblJlc3BvbnNlEiEKBHR1cm4YASABKAsyEy5hcnNveC50dXJuLnYxLlR1cm4ivgEKEExpc3RUdXJuc1JlcXVlc3QSEQoJdGhyZWFkX2lkGAEgASgJEisKCHN0YXR1c2VzGAIgAygOMhkuYXJzb3gudHVybi52MS5UdXJuU3RhdHVzEioKBHBhZ2UYAyABKAsyHC5hcnNveC5jb21tb24udjEuUGFnZVJlcXVlc3QSKgoIb3JkZXJfYnkYBCABKA4yGC5hcnNveC50dXJuLnYxLlR1cm5PcmRlchISCgpkZXNjZW5kaW5nGAUgASgIImQKEUxpc3RUdXJuc1Jlc3BvbnNlEiIKBXR1cm5zGAEgAygLMhMuYXJzb3gudHVybi52MS5UdXJuEisKBHBhZ2UYAiABKAsyHS5hcnNveC5jb21tb24udjEuUGFnZVJlc3BvbnNlKt8BCgpUdXJuU3RhdHVzEhsKF1RVUk5fU1RBVFVTX1VOU1BFQ0lGSUVEEAASFgoSVFVSTl9TVEFUVVNfUVVFVUVEEAESFwoTVFVSTl9TVEFUVVNfUlVOTklORxACEhkKFVRVUk5fU1RBVFVTX0NPTVBMRVRFRBADEhYKElRVUk5fU1RBVFVTX0ZBSUxFRBAEEhkKFVRVUk5fU1RBVFVTX0NBTkNFTExFRBAFEhsKF1RVUk5fU1RBVFVTX0lOVEVSUlVQVEVEEAYSGAoUVFVSTl9TVEFUVVNfV0FUQ0hJTkcQBypXCglUdXJuT3JkZXISGgoWVFVSTl9PUkRFUl9VTlNQRUNJRklFRBAAEhUKEVRVUk5fT1JERVJfUVVFVUVEEAESFwoTVFVSTl9PUkRFUl9GSU5JU0hFRBACQnQKEWNvbS5hcnNveC50dXJuLnYxQglUdXJuUHJvdG9QAaICA0FUWKoCDUFyc294LlR1cm4uVjHKAg1BcnNveFxUdXJuXFYx4gIZQXJzb3hcVHVyblxWMVxHUEJNZXRhZGF0YeoCD0Fyc294OjpUdXJuOjpWMWIGcHJvdG8z", [file_arsox_common_v1_common, file_arsox_settings_v1_overrides]);
+
+/**
+ * A file the host placed in the workspace for the agent to see with a turn.
+ *
+ * The bytes never travel in protobuf. The host uploads the file first with
+ * `PUT /v1/threads/{thread_id}/files/{path}` and names it here, and the
+ * satellite hands it to the harness natively where the harness can take it:
+ * images (PNG, JPEG, GIF, WebP) to both harnesses, PDFs to Claude as documents.
+ * Anything a harness cannot take natively is named in the prompt as a workspace
+ * file the agent should open, so nothing is silently dropped.
+ *
+ * Checked when the turn is submitted: the path follows the workspace file
+ * rules and names an existing regular file, a turn carries at most 8
+ * attachments, each at most 3.75 MiB and 12 MiB together. A turn that breaks a
+ * rule is refused rather than queued. See docs/harness.md for why those caps.
+ *
+ * @generated from message arsox.turn.v1.TurnAttachment
+ */
+export type TurnAttachment = Message<"arsox.turn.v1.TurnAttachment"> & {
+  /**
+   * Relative to the thread's workspace root, such as
+   * `attachments/<turn key>/sketch.png`.
+   *
+   * @generated from field: string path = 1;
+   */
+  path: string;
+
+  /**
+   * What the satellite found at `path` when the turn was queued, from the
+   * file's first bytes rather than its name. Absent when nothing it recognizes.
+   * Set by the satellite and ignored on a request.
+   *
+   * @generated from field: optional string content_type = 2;
+   */
+  contentType?: string;
+
+  /**
+   * The file's size when the turn was queued. Set by the satellite and ignored
+   * on a request.
+   *
+   * @generated from field: uint64 size_bytes = 3;
+   */
+  sizeBytes: bigint;
+};
+
+/**
+ * Describes the message arsox.turn.v1.TurnAttachment.
+ * Use `create(TurnAttachmentSchema)` to create a new message.
+ */
+export const TurnAttachmentSchema: GenMessage<TurnAttachment> = /*@__PURE__*/
+  messageDesc(file_arsox_turn_v1_turn, 0);
 
 /**
  * One turn's identity and lifecycle, without its results.
@@ -110,6 +161,14 @@ export type Turn = Message<"arsox.turn.v1.Turn"> & {
    * @generated from field: optional arsox.settings.v1.TurnOverrides overrides = 11;
    */
   overrides?: TurnOverrides;
+
+  /**
+   * The files that came with the prompt, as the satellite checked them when
+   * the turn was queued, in the order they were submitted.
+   *
+   * @generated from field: repeated arsox.turn.v1.TurnAttachment attachments = 12;
+   */
+  attachments: TurnAttachment[];
 };
 
 /**
@@ -117,7 +176,7 @@ export type Turn = Message<"arsox.turn.v1.Turn"> & {
  * Use `create(TurnSchema)` to create a new message.
  */
 export const TurnSchema: GenMessage<Turn> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_turn, 0);
+  messageDesc(file_arsox_turn_v1_turn, 1);
 
 /**
  * One member of the team, for reporting.
@@ -141,7 +200,7 @@ export type TeamMember = Message<"arsox.turn.v1.TeamMember"> & {
  * Use `create(TeamMemberSchema)` to create a new message.
  */
 export const TeamMemberSchema: GenMessage<TeamMember> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_turn, 1);
+  messageDesc(file_arsox_turn_v1_turn, 2);
 
 /**
  * One file the turn touched.
@@ -170,7 +229,7 @@ export type ChangedFile = Message<"arsox.turn.v1.ChangedFile"> & {
  * Use `create(ChangedFileSchema)` to create a new message.
  */
 export const ChangedFileSchema: GenMessage<ChangedFile> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_turn, 2);
+  messageDesc(file_arsox_turn_v1_turn, 3);
 
 /**
  * One member branch landing on the integration branch.
@@ -216,7 +275,7 @@ export type IntegrationRecord = Message<"arsox.turn.v1.IntegrationRecord"> & {
  * Use `create(IntegrationRecordSchema)` to create a new message.
  */
 export const IntegrationRecordSchema: GenMessage<IntegrationRecord> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_turn, 3);
+  messageDesc(file_arsox_turn_v1_turn, 4);
 
 /**
  * One checker command and its outcome.
@@ -257,7 +316,7 @@ export type CheckerResult = Message<"arsox.turn.v1.CheckerResult"> & {
  * Use `create(CheckerResultSchema)` to create a new message.
  */
 export const CheckerResultSchema: GenMessage<CheckerResult> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_turn, 4);
+  messageDesc(file_arsox_turn_v1_turn, 5);
 
 /**
  * POST /v1/threads/{thread_id}/turns
@@ -305,6 +364,14 @@ export type StartTurnRequest = Message<"arsox.turn.v1.StartTurnRequest"> & {
    * @generated from field: optional arsox.settings.v1.TurnOverrides overrides = 5;
    */
   overrides?: TurnOverrides;
+
+  /**
+   * Files already uploaded into the workspace, handed to the harness with the
+   * prompt. See TurnAttachment for the rules a submission is checked against.
+   *
+   * @generated from field: repeated arsox.turn.v1.TurnAttachment attachments = 6;
+   */
+  attachments: TurnAttachment[];
 };
 
 /**
@@ -312,7 +379,7 @@ export type StartTurnRequest = Message<"arsox.turn.v1.StartTurnRequest"> & {
  * Use `create(StartTurnRequestSchema)` to create a new message.
  */
 export const StartTurnRequestSchema: GenMessage<StartTurnRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_turn, 5);
+  messageDesc(file_arsox_turn_v1_turn, 6);
 
 /**
  * @generated from message arsox.turn.v1.StartTurnResponse
@@ -329,7 +396,7 @@ export type StartTurnResponse = Message<"arsox.turn.v1.StartTurnResponse"> & {
  * Use `create(StartTurnResponseSchema)` to create a new message.
  */
 export const StartTurnResponseSchema: GenMessage<StartTurnResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_turn, 6);
+  messageDesc(file_arsox_turn_v1_turn, 7);
 
 /**
  * POST /v1/threads/{thread_id}/turns/{turn_id}/cancel
@@ -356,7 +423,7 @@ export type CancelTurnRequest = Message<"arsox.turn.v1.CancelTurnRequest"> & {
  * Use `create(CancelTurnRequestSchema)` to create a new message.
  */
 export const CancelTurnRequestSchema: GenMessage<CancelTurnRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_turn, 7);
+  messageDesc(file_arsox_turn_v1_turn, 8);
 
 /**
  * @generated from message arsox.turn.v1.CancelTurnResponse
@@ -373,7 +440,7 @@ export type CancelTurnResponse = Message<"arsox.turn.v1.CancelTurnResponse"> & {
  * Use `create(CancelTurnResponseSchema)` to create a new message.
  */
 export const CancelTurnResponseSchema: GenMessage<CancelTurnResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_turn, 8);
+  messageDesc(file_arsox_turn_v1_turn, 9);
 
 /**
  * @generated from message arsox.turn.v1.ListTurnsRequest
@@ -412,7 +479,7 @@ export type ListTurnsRequest = Message<"arsox.turn.v1.ListTurnsRequest"> & {
  * Use `create(ListTurnsRequestSchema)` to create a new message.
  */
 export const ListTurnsRequestSchema: GenMessage<ListTurnsRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_turn, 9);
+  messageDesc(file_arsox_turn_v1_turn, 10);
 
 /**
  * @generated from message arsox.turn.v1.ListTurnsResponse
@@ -434,7 +501,7 @@ export type ListTurnsResponse = Message<"arsox.turn.v1.ListTurnsResponse"> & {
  * Use `create(ListTurnsResponseSchema)` to create a new message.
  */
 export const ListTurnsResponseSchema: GenMessage<ListTurnsResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_turn, 10);
+  messageDesc(file_arsox_turn_v1_turn, 11);
 
 /**
  * @generated from enum arsox.turn.v1.TurnStatus

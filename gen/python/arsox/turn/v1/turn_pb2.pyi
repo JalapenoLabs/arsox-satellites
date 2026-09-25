@@ -37,6 +37,16 @@ TURN_ORDER_UNSPECIFIED: TurnOrder
 TURN_ORDER_QUEUED: TurnOrder
 TURN_ORDER_FINISHED: TurnOrder
 
+class TurnAttachment(_message.Message):
+    __slots__ = ()
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    CONTENT_TYPE_FIELD_NUMBER: _ClassVar[int]
+    SIZE_BYTES_FIELD_NUMBER: _ClassVar[int]
+    path: str
+    content_type: str
+    size_bytes: int
+    def __init__(self, path: _Optional[str] = ..., content_type: _Optional[str] = ..., size_bytes: _Optional[int] = ...) -> None: ...
+
 class Turn(_message.Message):
     __slots__ = ()
     class MetadataEntry(_message.Message):
@@ -57,6 +67,7 @@ class Turn(_message.Message):
     TRIGGERED_BY_TURN_ID_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
     OVERRIDES_FIELD_NUMBER: _ClassVar[int]
+    ATTACHMENTS_FIELD_NUMBER: _ClassVar[int]
     turn_id: str
     thread_id: str
     status: TurnStatus
@@ -68,7 +79,8 @@ class Turn(_message.Message):
     triggered_by_turn_id: str
     metadata: _containers.ScalarMap[str, str]
     overrides: _overrides_pb2.TurnOverrides
-    def __init__(self, turn_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., status: _Optional[_Union[TurnStatus, str]] = ..., prompt: _Optional[str] = ..., satellite_initiated: _Optional[bool] = ..., queued_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., started_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., triggered_by_turn_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., overrides: _Optional[_Union[_overrides_pb2.TurnOverrides, _Mapping]] = ...) -> None: ...
+    attachments: _containers.RepeatedCompositeFieldContainer[TurnAttachment]
+    def __init__(self, turn_id: _Optional[str] = ..., thread_id: _Optional[str] = ..., status: _Optional[_Union[TurnStatus, str]] = ..., prompt: _Optional[str] = ..., satellite_initiated: _Optional[bool] = ..., queued_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., started_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., finished_at: _Optional[_Union[_common_pb2.Timestamp, _Mapping]] = ..., triggered_by_turn_id: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., overrides: _Optional[_Union[_overrides_pb2.TurnOverrides, _Mapping]] = ..., attachments: _Optional[_Iterable[_Union[TurnAttachment, _Mapping]]] = ...) -> None: ...
 
 class TeamMember(_message.Message):
     __slots__ = ()
@@ -128,12 +140,14 @@ class StartTurnRequest(_message.Message):
     IDEMPOTENCY_KEY_FIELD_NUMBER: _ClassVar[int]
     METADATA_FIELD_NUMBER: _ClassVar[int]
     OVERRIDES_FIELD_NUMBER: _ClassVar[int]
+    ATTACHMENTS_FIELD_NUMBER: _ClassVar[int]
     thread_id: str
     prompt: str
     idempotency_key: str
     metadata: _containers.ScalarMap[str, str]
     overrides: _overrides_pb2.TurnOverrides
-    def __init__(self, thread_id: _Optional[str] = ..., prompt: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., overrides: _Optional[_Union[_overrides_pb2.TurnOverrides, _Mapping]] = ...) -> None: ...
+    attachments: _containers.RepeatedCompositeFieldContainer[TurnAttachment]
+    def __init__(self, thread_id: _Optional[str] = ..., prompt: _Optional[str] = ..., idempotency_key: _Optional[str] = ..., metadata: _Optional[_Mapping[str, str]] = ..., overrides: _Optional[_Union[_overrides_pb2.TurnOverrides, _Mapping]] = ..., attachments: _Optional[_Iterable[_Union[TurnAttachment, _Mapping]]] = ...) -> None: ...
 
 class StartTurnResponse(_message.Message):
     __slots__ = ()

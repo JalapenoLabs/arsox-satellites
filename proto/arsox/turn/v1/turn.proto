@@ -43,6 +43,34 @@ enum TurnStatus {
   TURN_STATUS_WATCHING = 7;
 }
 
+// A file the host placed in the workspace for the agent to see with a turn.
+//
+// The bytes never travel in protobuf. The host uploads the file first with
+// `PUT /v1/threads/{thread_id}/files/{path}` and names it here, and the
+// satellite hands it to the harness natively where the harness can take it:
+// images (PNG, JPEG, GIF, WebP) to both harnesses, PDFs to Claude as documents.
+// Anything a harness cannot take natively is named in the prompt as a workspace
+// file the agent should open, so nothing is silently dropped.
+//
+// Checked when the turn is submitted: the path follows the workspace file
+// rules and names an existing regular file, a turn carries at most 8
+// attachments, each at most 3.75 MiB and 12 MiB together. A turn that breaks a
+// rule is refused rather than queued. See docs/harness.md for why those caps.
+message TurnAttachment {
+  // Relative to the thread's workspace root, such as
+  // `attachments/<turn key>/sketch.png`.
+  string path = 1;
+
+  // What the satellite found at `path` when the turn was queued, from the
+  // file's first bytes rather than its name. Absent when nothing it recognizes.
+  // Set by the satellite and ignored on a request.
+  optional string content_type = 2;
+
+  // The file's size when the turn was queued. Set by the satellite and ignored
+  // on a request.
+  uint64 size_bytes = 3;
+}
+
 // One turn's identity and lifecycle, without its results.
 message Turn {
   string turn_id = 1;
@@ -80,6 +108,10 @@ message Turn {
   // named no model inherits one, and reporting the inherited value here would
   // make a thread default indistinguishable from a choice the caller made.
   optional arsox.settings.v1.TurnOverrides overrides = 11;
+
+  // The files that came with the prompt, as the satellite checked them when
+  // the turn was queued, in the order they were submitted.
+  repeated TurnAttachment attachments = 12;
 }
 
 // One member of the team, for reporting.
@@ -152,6 +184,10 @@ message StartTurnRequest {
   // Absent fields inherit, so a turn that names only an effort keeps the
   // thread's model.
   optional arsox.settings.v1.TurnOverrides overrides = 5;
+
+  // Files already uploaded into the workspace, handed to the harness with the
+  // prompt. See TurnAttachment for the rules a submission is checked against.
+  repeated TurnAttachment attachments = 6;
 }
 
 message StartTurnResponse {

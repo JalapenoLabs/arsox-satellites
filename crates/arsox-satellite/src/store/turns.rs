@@ -143,6 +143,7 @@ impl Store {
                 finished_at: None,
                 metadata: new.metadata.into_iter().collect(),
                 overrides: new.overrides,
+                attachments: Vec::new(),
             },
             queued: true,
         })
@@ -420,5 +421,6 @@ fn hydrate_turn(row: &sqlx::sqlite::SqliteRow, metadata: BTreeMap<String, String
         overrides: row
             .get::<Option<Vec<u8>>, _>("overrides")
             .and_then(|bytes| TurnOverrides::decode(bytes.as_slice()).ok()),
+        attachments: Vec::new(),
     }
 }

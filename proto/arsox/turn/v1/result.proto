@@ -24,6 +24,11 @@ enum Stage {
   STAGE_ARTIFACTS = 6;
   STAGE_SUGGESTIONS = 7;
   STAGE_PULL_REQUEST_WATCH = 8;
+
+  // The thread's turn end hooks, run after the work and before the artifact
+  // scan. Skipped when the thread declares none, and when the turn was
+  // cancelled.
+  STAGE_TURN_END_HOOKS = 9;
 }
 
 enum StageDisposition {
@@ -49,6 +54,48 @@ message StageOutcome {
 
   // Wall clock the stage consumed. Zero for a stage that was skipped.
   arsox.common.v1.Duration elapsed = 4;
+}
+
+// How one turn end hook ended.
+enum TurnEndHookOutcome {
+  TURN_END_HOOK_OUTCOME_UNSPECIFIED = 0;
+
+  // Exited on its own with status 0.
+  TURN_END_HOOK_OUTCOME_SUCCEEDED = 1;
+
+  // Exited on its own with a nonzero status, or was ended by a signal the
+  // satellite did not send.
+  TURN_END_HOOK_OUTCOME_FAILED = 2;
+
+  // Ran past its timeout, and its whole process group was stopped.
+  TURN_END_HOOK_OUTCOME_TIMED_OUT = 3;
+
+  // Could not be started at all, such as a program that does not exist.
+  TURN_END_HOOK_OUTCOME_NOT_LAUNCHED = 4;
+}
+
+// What one turn end hook did.
+//
+// Everything but SUCCEEDED is also a degraded TURN_END_HOOK_FAILED incident.
+// None of them fails the turn: the hook is post-processing, and the work it
+// runs after is already done.
+message TurnEndHookResult {
+  // The hook's declared name.
+  string name = 1;
+
+  TurnEndHookOutcome outcome = 2;
+
+  // The status the hook exited with. Absent when it did not exit on its own:
+  // timed out, ended by a signal, or never launched.
+  optional int32 exit_code = 3;
+
+  // Standard output and standard error together, in the order they arrived,
+  // oldest dropped first past 16 KiB. Masked by the thread's redactor, because
+  // a hook runs with the thread's declared variables in its environment.
+  string output_tail = 4;
+
+  // From launch until it ended, or until it was stopped.
+  arsox.common.v1.Duration elapsed = 5;
 }
 
 // Why the agent stopped producing output.
@@ -149,6 +196,9 @@ message TurnResult {
   repeated IntegrationRecord integrations = 11;
   repeated CheckerResult checker_results = 12;
 
+  // What the turn announced as `artifact.created`: every file under the
+  // thread's artifacts/ directory that was new, or whose contents changed, when
+  // the turn ended. Empty when nothing did.
   repeated arsox.artifact.v1.Artifact artifacts = 13;
 
   // Empty when the suggestions stage was off or skipped. `stages` says which.
@@ -190,6 +240,11 @@ message TurnResult {
   // was unexpectedly slow, since throttling and hard work look the same from
   // the outside.
   optional arsox.usage.v1.RateLimitStatus rate_limits = 23;
+
+  // Every turn end hook the thread declared, in the order they ran. Empty when
+  // it declares none and when the turn was cancelled. The same outcomes reached
+  // the stream as `hook.finished` while they happened.
+  repeated TurnEndHookResult turn_end_hooks = 24;
 }
 
 message GetTurnRequest {

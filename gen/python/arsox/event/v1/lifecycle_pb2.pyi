@@ -71,6 +71,12 @@ class ArtifactCreated(_message.Message):
     artifact: _artifact_pb2.Artifact
     def __init__(self, artifact: _Optional[_Union[_artifact_pb2.Artifact, _Mapping]] = ...) -> None: ...
 
+class TurnEndHookFinished(_message.Message):
+    __slots__ = ()
+    RESULT_FIELD_NUMBER: _ClassVar[int]
+    result: _result_pb2.TurnEndHookResult
+    def __init__(self, result: _Optional[_Union[_result_pb2.TurnEndHookResult, _Mapping]] = ...) -> None: ...
+
 class RedactionOverridden(_message.Message):
     __slots__ = ()
     AUTHOR_FIELD_NUMBER: _ClassVar[int]

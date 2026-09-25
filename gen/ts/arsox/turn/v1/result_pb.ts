@@ -28,7 +28,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/turn/v1/result.proto.
  */
 export const file_arsox_turn_v1_result: GenFile = /*@__PURE__*/
-  fileDesc("ChphcnNveC90dXJuL3YxL3Jlc3VsdC5wcm90bxINYXJzb3gudHVybi52MSK1AQoMU3RhZ2VPdXRjb21lEiMKBXN0YWdlGAEgASgOMhQuYXJzb3gudHVybi52MS5TdGFnZRI0CgtkaXNwb3NpdGlvbhgCIAEoDjIfLmFyc294LnR1cm4udjEuU3RhZ2VEaXNwb3NpdGlvbhITCgZyZWFzb24YAyABKAlIAIgBARIqCgdlbGFwc2VkGAQgASgLMhkuYXJzb3guY29tbW9uLnYxLkR1cmF0aW9uQgkKB19yZWFzb24i9gEKClR1cm5UaW1pbmcSKAoFdG90YWwYASABKAsyGS5hcnNveC5jb21tb24udjEuRHVyYXRpb24SKwoDbGxtGAIgASgLMhkuYXJzb3guY29tbW9uLnYxLkR1cmF0aW9uSACIAQESOwoTdGltZV90b19maXJzdF90b2tlbhgDIAEoCzIZLmFyc294LmNvbW1vbi52MS5EdXJhdGlvbkgBiAEBEh4KEW1vZGVsX3JvdW5kX3RyaXBzGAQgASgNSAKIAQFCBgoEX2xsbUIWChRfdGltZV90b19maXJzdF90b2tlbkIUChJfbW9kZWxfcm91bmRfdHJpcHMifwoWUHVsbFJlcXVlc3RXYXRjaFJlcG9ydBIbChNwdWxsX3JlcXVlc3RfbnVtYmVyGAEgASgNEhUKDWF0dGVtcHRzX3VzZWQYAiABKA0SFQoNY2hlY2tzX3Bhc3NlZBgDIAEoCBIaChJ0ZXJtaW5hdGlvbl9yZWFzb24YBCABKAkitAkKClR1cm5SZXN1bHQSDwoHdHVybl9pZBgBIAEoCRIRCgl0aHJlYWRfaWQYAiABKAkSKQoGc3RhdHVzGAMgASgOMhkuYXJzb3gudHVybi52MS5UdXJuU3RhdHVzEg8KB3N1bW1hcnkYBCABKAkSKgoGdG9rZW5zGAUgASgLMhouYXJzb3gudXNhZ2UudjEuVG9rZW5Vc2FnZRIqCgRjb3N0GAYgASgLMhwuYXJzb3gudXNhZ2UudjEuQ29zdEVzdGltYXRlEjEKCGJ5X21vZGVsGBMgAygLMh8uYXJzb3gudXNhZ2UudjEuTW9kZWxTdGF0aXN0aWNzEikKBWVycm9yGAcgASgLMhUuYXJzb3guZXJyb3IudjEuRXJyb3JIAIgBARI6Cg9pbmNpZGVudF9jb3VudHMYCCABKAsyIS5hcnNveC5pbmNpZGVudC52MS5JbmNpZGVudENvdW50cxIqCgdtZW1iZXJzGAkgAygLMhkuYXJzb3gudHVybi52MS5UZWFtTWVtYmVyEjEKDWNoYW5nZWRfZmlsZXMYCiADKAsyGi5hcnNveC50dXJuLnYxLkNoYW5nZWRGaWxlEjYKDGludGVncmF0aW9ucxgLIAMoCzIgLmFyc294LnR1cm4udjEuSW50ZWdyYXRpb25SZWNvcmQSNQoPY2hlY2tlcl9yZXN1bHRzGAwgAygLMhwuYXJzb3gudHVybi52MS5DaGVja2VyUmVzdWx0Ei4KCWFydGlmYWN0cxgNIAMoCzIbLmFyc294LmFydGlmYWN0LnYxLkFydGlmYWN0EjoKC3N1Z2dlc3Rpb25zGA4gASgLMiUuYXJzb3guc3VnZ2VzdGlvbi52MS5TdWdnZXN0aW9uUmVwb3J0EisKBnN0YWdlcxgPIAMoCzIbLmFyc294LnR1cm4udjEuU3RhZ2VPdXRjb21lEj8KFHVuYW5zd2VyZWRfcXVlc3Rpb25zGBAgAygLMiEuYXJzb3guaW50ZXJhY3Rpb24udjEuUXVlc3Rpb25TZXQSOQoFd2F0Y2gYESABKAsyJS5hcnNveC50dXJuLnYxLlB1bGxSZXF1ZXN0V2F0Y2hSZXBvcnRIAYgBARIfChJhZ2VudHNfcmVwb19jb21taXQYEiABKAlIAogBARI5CghtZXRhZGF0YRgUIAMoCzInLmFyc294LnR1cm4udjEuVHVyblJlc3VsdC5NZXRhZGF0YUVudHJ5EikKBnRpbWluZxgVIAEoCzIZLmFyc294LnR1cm4udjEuVHVyblRpbWluZxIzCgtzdG9wX3JlYXNvbhgWIAEoDjIZLmFyc294LnR1cm4udjEuU3RvcFJlYXNvbkgDiAEBEjkKC3JhdGVfbGltaXRzGBcgASgLMh8uYXJzb3gudXNhZ2UudjEuUmF0ZUxpbWl0U3RhdHVzSASIAQEaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQggKBl9lcnJvckIICgZfd2F0Y2hCFQoTX2FnZW50c19yZXBvX2NvbW1pdEIOCgxfc3RvcF9yZWFzb25CDgoMX3JhdGVfbGltaXRzIjQKDkdldFR1cm5SZXF1ZXN0EhEKCXRocmVhZF9pZBgBIAEoCRIPCgd0dXJuX2lkGAIgASgJIm8KD0dldFR1cm5SZXNwb25zZRIhCgR0dXJuGAEgASgLMhMuYXJzb3gudHVybi52MS5UdXJuEi4KBnJlc3VsdBgCIAEoCzIZLmFyc294LnR1cm4udjEuVHVyblJlc3VsdEgAiAEBQgkKB19yZXN1bHQqyQEKBVN0YWdlEhUKEVNUQUdFX1VOU1BFQ0lGSUVEEAASDgoKU1RBR0VfUExBThABEhMKD1NUQUdFX1RFQU1fV09SSxACEhIKDlNUQUdFX0NIRUNLRVJTEAMSFQoRU1RBR0VfU0VMRl9SRVZJRVcQBBIPCgtTVEFHRV9NRVJHRRAFEhMKD1NUQUdFX0FSVElGQUNUUxAGEhUKEVNUQUdFX1NVR0dFU1RJT05TEAcSHAoYU1RBR0VfUFVMTF9SRVFVRVNUX1dBVENIEAgqjQEKEFN0YWdlRGlzcG9zaXRpb24SIQodU1RBR0VfRElTUE9TSVRJT05fVU5TUEVDSUZJRUQQABIZChVTVEFHRV9ESVNQT1NJVElPTl9SQU4QARIdChlTVEFHRV9ESVNQT1NJVElPTl9TS0lQUEVEEAISHAoYU1RBR0VfRElTUE9TSVRJT05fRkFJTEVEEAMqlwEKClN0b3BSZWFzb24SGwoXU1RPUF9SRUFTT05fVU5TUEVDSUZJRUQQABIYChRTVE9QX1JFQVNPTl9FTkRfVFVSThABEhoKFlNUT1BfUkVBU09OX01BWF9UT0tFTlMQAhIdChlTVE9QX1JFQVNPTl9TVE9QX1NFUVVFTkNFEAMSFwoTU1RPUF9SRUFTT05fUkVGVVNBTBAEQnYKEWNvbS5hcnNveC50dXJuLnYxQgtSZXN1bHRQcm90b1ABogIDQVRYqgINQXJzb3guVHVybi5WMcoCDUFyc294XFR1cm5cVjHiAhlBcnNveFxUdXJuXFYxXEdQQk1ldGFkYXRh6gIPQXJzb3g6OlR1cm46OlYxYgZwcm90bzM", [file_arsox_artifact_v1_artifact, file_arsox_common_v1_common, file_arsox_error_v1_error, file_arsox_incident_v1_incident, file_arsox_interaction_v1_question, file_arsox_suggestion_v1_suggestion, file_arsox_turn_v1_turn, file_arsox_usage_v1_usage]);
+  fileDesc("ChphcnNveC90dXJuL3YxL3Jlc3VsdC5wcm90bxINYXJzb3gudHVybi52MSK1AQoMU3RhZ2VPdXRjb21lEiMKBXN0YWdlGAEgASgOMhQuYXJzb3gudHVybi52MS5TdGFnZRI0CgtkaXNwb3NpdGlvbhgCIAEoDjIfLmFyc294LnR1cm4udjEuU3RhZ2VEaXNwb3NpdGlvbhITCgZyZWFzb24YAyABKAlIAIgBARIqCgdlbGFwc2VkGAQgASgLMhkuYXJzb3guY29tbW9uLnYxLkR1cmF0aW9uQgkKB19yZWFzb24ivAEKEVR1cm5FbmRIb29rUmVzdWx0EgwKBG5hbWUYASABKAkSMgoHb3V0Y29tZRgCIAEoDjIhLmFyc294LnR1cm4udjEuVHVybkVuZEhvb2tPdXRjb21lEhYKCWV4aXRfY29kZRgDIAEoBUgAiAEBEhMKC291dHB1dF90YWlsGAQgASgJEioKB2VsYXBzZWQYBSABKAsyGS5hcnNveC5jb21tb24udjEuRHVyYXRpb25CDAoKX2V4aXRfY29kZSL2AQoKVHVyblRpbWluZxIoCgV0b3RhbBgBIAEoCzIZLmFyc294LmNvbW1vbi52MS5EdXJhdGlvbhIrCgNsbG0YAiABKAsyGS5hcnNveC5jb21tb24udjEuRHVyYXRpb25IAIgBARI7ChN0aW1lX3RvX2ZpcnN0X3Rva2VuGAMgASgLMhkuYXJzb3guY29tbW9uLnYxLkR1cmF0aW9uSAGIAQESHgoRbW9kZWxfcm91bmRfdHJpcHMYBCABKA1IAogBAUIGCgRfbGxtQhYKFF90aW1lX3RvX2ZpcnN0X3Rva2VuQhQKEl9tb2RlbF9yb3VuZF90cmlwcyJ/ChZQdWxsUmVxdWVzdFdhdGNoUmVwb3J0EhsKE3B1bGxfcmVxdWVzdF9udW1iZXIYASABKA0SFQoNYXR0ZW1wdHNfdXNlZBgCIAEoDRIVCg1jaGVja3NfcGFzc2VkGAMgASgIEhoKEnRlcm1pbmF0aW9uX3JlYXNvbhgEIAEoCSLuCQoKVHVyblJlc3VsdBIPCgd0dXJuX2lkGAEgASgJEhEKCXRocmVhZF9pZBgCIAEoCRIpCgZzdGF0dXMYAyABKA4yGS5hcnNveC50dXJuLnYxLlR1cm5TdGF0dXMSDwoHc3VtbWFyeRgEIAEoCRIqCgZ0b2tlbnMYBSABKAsyGi5hcnNveC51c2FnZS52MS5Ub2tlblVzYWdlEioKBGNvc3QYBiABKAsyHC5hcnNveC51c2FnZS52MS5Db3N0RXN0aW1hdGUSMQoIYnlfbW9kZWwYEyADKAsyHy5hcnNveC51c2FnZS52MS5Nb2RlbFN0YXRpc3RpY3MSKQoFZXJyb3IYByABKAsyFS5hcnNveC5lcnJvci52MS5FcnJvckgAiAEBEjoKD2luY2lkZW50X2NvdW50cxgIIAEoCzIhLmFyc294LmluY2lkZW50LnYxLkluY2lkZW50Q291bnRzEioKB21lbWJlcnMYCSADKAsyGS5hcnNveC50dXJuLnYxLlRlYW1NZW1iZXISMQoNY2hhbmdlZF9maWxlcxgKIAMoCzIaLmFyc294LnR1cm4udjEuQ2hhbmdlZEZpbGUSNgoMaW50ZWdyYXRpb25zGAsgAygLMiAuYXJzb3gudHVybi52MS5JbnRlZ3JhdGlvblJlY29yZBI1Cg9jaGVja2VyX3Jlc3VsdHMYDCADKAsyHC5hcnNveC50dXJuLnYxLkNoZWNrZXJSZXN1bHQSLgoJYXJ0aWZhY3RzGA0gAygLMhsuYXJzb3guYXJ0aWZhY3QudjEuQXJ0aWZhY3QSOgoLc3VnZ2VzdGlvbnMYDiABKAsyJS5hcnNveC5zdWdnZXN0aW9uLnYxLlN1Z2dlc3Rpb25SZXBvcnQSKwoGc3RhZ2VzGA8gAygLMhsuYXJzb3gudHVybi52MS5TdGFnZU91dGNvbWUSPwoUdW5hbnN3ZXJlZF9xdWVzdGlvbnMYECADKAsyIS5hcnNveC5pbnRlcmFjdGlvbi52MS5RdWVzdGlvblNldBI5CgV3YXRjaBgRIAEoCzIlLmFyc294LnR1cm4udjEuUHVsbFJlcXVlc3RXYXRjaFJlcG9ydEgBiAEBEh8KEmFnZW50c19yZXBvX2NvbW1pdBgSIAEoCUgCiAEBEjkKCG1ldGFkYXRhGBQgAygLMicuYXJzb3gudHVybi52MS5UdXJuUmVzdWx0Lk1ldGFkYXRhRW50cnkSKQoGdGltaW5nGBUgASgLMhkuYXJzb3gudHVybi52MS5UdXJuVGltaW5nEjMKC3N0b3BfcmVhc29uGBYgASgOMhkuYXJzb3gudHVybi52MS5TdG9wUmVhc29uSAOIAQESOQoLcmF0ZV9saW1pdHMYFyABKAsyHy5hcnNveC51c2FnZS52MS5SYXRlTGltaXRTdGF0dXNIBIgBARI4Cg50dXJuX2VuZF9ob29rcxgYIAMoCzIgLmFyc294LnR1cm4udjEuVHVybkVuZEhvb2tSZXN1bHQaLwoNTWV0YWRhdGFFbnRyeRILCgNrZXkYASABKAkSDQoFdmFsdWUYAiABKAk6AjgBQggKBl9lcnJvckIICgZfd2F0Y2hCFQoTX2FnZW50c19yZXBvX2NvbW1pdEIOCgxfc3RvcF9yZWFzb25CDgoMX3JhdGVfbGltaXRzIjQKDkdldFR1cm5SZXF1ZXN0EhEKCXRocmVhZF9pZBgBIAEoCRIPCgd0dXJuX2lkGAIgASgJIm8KD0dldFR1cm5SZXNwb25zZRIhCgR0dXJuGAEgASgLMhMuYXJzb3gudHVybi52MS5UdXJuEi4KBnJlc3VsdBgCIAEoCzIZLmFyc294LnR1cm4udjEuVHVyblJlc3VsdEgAiAEBQgkKB19yZXN1bHQq4wEKBVN0YWdlEhUKEVNUQUdFX1VOU1BFQ0lGSUVEEAASDgoKU1RBR0VfUExBThABEhMKD1NUQUdFX1RFQU1fV09SSxACEhIKDlNUQUdFX0NIRUNLRVJTEAMSFQoRU1RBR0VfU0VMRl9SRVZJRVcQBBIPCgtTVEFHRV9NRVJHRRAFEhMKD1NUQUdFX0FSVElGQUNUUxAGEhUKEVNUQUdFX1NVR0dFU1RJT05TEAcSHAoYU1RBR0VfUFVMTF9SRVFVRVNUX1dBVENIEAgSGAoUU1RBR0VfVFVSTl9FTkRfSE9PS1MQCSqNAQoQU3RhZ2VEaXNwb3NpdGlvbhIhCh1TVEFHRV9ESVNQT1NJVElPTl9VTlNQRUNJRklFRBAAEhkKFVNUQUdFX0RJU1BPU0lUSU9OX1JBThABEh0KGVNUQUdFX0RJU1BPU0lUSU9OX1NLSVBQRUQQAhIcChhTVEFHRV9ESVNQT1NJVElPTl9GQUlMRUQQAyrPAQoSVHVybkVuZEhvb2tPdXRjb21lEiUKIVRVUk5fRU5EX0hPT0tfT1VUQ09NRV9VTlNQRUNJRklFRBAAEiMKH1RVUk5fRU5EX0hPT0tfT1VUQ09NRV9TVUNDRUVERUQQARIgChxUVVJOX0VORF9IT09LX09VVENPTUVfRkFJTEVEEAISIwofVFVSTl9FTkRfSE9PS19PVVRDT01FX1RJTUVEX09VVBADEiYKIlRVUk5fRU5EX0hPT0tfT1VUQ09NRV9OT1RfTEFVTkNIRUQQBCqXAQoKU3RvcFJlYXNvbhIbChdTVE9QX1JFQVNPTl9VTlNQRUNJRklFRBAAEhgKFFNUT1BfUkVBU09OX0VORF9UVVJOEAESGgoWU1RPUF9SRUFTT05fTUFYX1RPS0VOUxACEh0KGVNUT1BfUkVBU09OX1NUT1BfU0VRVUVOQ0UQAxIXChNTVE9QX1JFQVNPTl9SRUZVU0FMEARCdgoRY29tLmFyc294LnR1cm4udjFCC1Jlc3VsdFByb3RvUAGiAgNBVFiqAg1BcnNveC5UdXJuLlYxygINQXJzb3hcVHVyblxWMeICGUFyc294XFR1cm5cVjFcR1BCTWV0YWRhdGHqAg9BcnNveDo6VHVybjo6VjFiBnByb3RvMw", [file_arsox_artifact_v1_artifact, file_arsox_common_v1_common, file_arsox_error_v1_error, file_arsox_incident_v1_incident, file_arsox_interaction_v1_question, file_arsox_suggestion_v1_suggestion, file_arsox_turn_v1_turn, file_arsox_usage_v1_usage]);
 
 /**
  * What each stage of the stack actually did.
@@ -73,6 +73,60 @@ export type StageOutcome = Message<"arsox.turn.v1.StageOutcome"> & {
  */
 export const StageOutcomeSchema: GenMessage<StageOutcome> = /*@__PURE__*/
   messageDesc(file_arsox_turn_v1_result, 0);
+
+/**
+ * What one turn end hook did.
+ *
+ * Everything but SUCCEEDED is also a degraded TURN_END_HOOK_FAILED incident.
+ * None of them fails the turn: the hook is post-processing, and the work it
+ * runs after is already done.
+ *
+ * @generated from message arsox.turn.v1.TurnEndHookResult
+ */
+export type TurnEndHookResult = Message<"arsox.turn.v1.TurnEndHookResult"> & {
+  /**
+   * The hook's declared name.
+   *
+   * @generated from field: string name = 1;
+   */
+  name: string;
+
+  /**
+   * @generated from field: arsox.turn.v1.TurnEndHookOutcome outcome = 2;
+   */
+  outcome: TurnEndHookOutcome;
+
+  /**
+   * The status the hook exited with. Absent when it did not exit on its own:
+   * timed out, ended by a signal, or never launched.
+   *
+   * @generated from field: optional int32 exit_code = 3;
+   */
+  exitCode?: number;
+
+  /**
+   * Standard output and standard error together, in the order they arrived,
+   * oldest dropped first past 16 KiB. Masked by the thread's redactor, because
+   * a hook runs with the thread's declared variables in its environment.
+   *
+   * @generated from field: string output_tail = 4;
+   */
+  outputTail: string;
+
+  /**
+   * From launch until it ended, or until it was stopped.
+   *
+   * @generated from field: arsox.common.v1.Duration elapsed = 5;
+   */
+  elapsed?: Duration;
+};
+
+/**
+ * Describes the message arsox.turn.v1.TurnEndHookResult.
+ * Use `create(TurnEndHookResultSchema)` to create a new message.
+ */
+export const TurnEndHookResultSchema: GenMessage<TurnEndHookResult> = /*@__PURE__*/
+  messageDesc(file_arsox_turn_v1_result, 1);
 
 /**
  * Where a turn's wall clock actually went.
@@ -125,7 +179,7 @@ export type TurnTiming = Message<"arsox.turn.v1.TurnTiming"> & {
  * Use `create(TurnTimingSchema)` to create a new message.
  */
 export const TurnTimingSchema: GenMessage<TurnTiming> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_result, 1);
+  messageDesc(file_arsox_turn_v1_result, 2);
 
 /**
  * How a pull request watch window resolved.
@@ -167,7 +221,7 @@ export type PullRequestWatchReport = Message<"arsox.turn.v1.PullRequestWatchRepo
  * Use `create(PullRequestWatchReportSchema)` to create a new message.
  */
 export const PullRequestWatchReportSchema: GenMessage<PullRequestWatchReport> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_result, 2);
+  messageDesc(file_arsox_turn_v1_result, 3);
 
 /**
  * Everything one turn produced.
@@ -257,6 +311,10 @@ export type TurnResult = Message<"arsox.turn.v1.TurnResult"> & {
   checkerResults: CheckerResult[];
 
   /**
+   * What the turn announced as `artifact.created`: every file under the
+   * thread's artifacts/ directory that was new, or whose contents changed, when
+   * the turn ended. Empty when nothing did.
+   *
    * @generated from field: repeated arsox.artifact.v1.Artifact artifacts = 13;
    */
   artifacts: Artifact[];
@@ -336,6 +394,15 @@ export type TurnResult = Message<"arsox.turn.v1.TurnResult"> & {
    * @generated from field: optional arsox.usage.v1.RateLimitStatus rate_limits = 23;
    */
   rateLimits?: RateLimitStatus;
+
+  /**
+   * Every turn end hook the thread declared, in the order they ran. Empty when
+   * it declares none and when the turn was cancelled. The same outcomes reached
+   * the stream as `hook.finished` while they happened.
+   *
+   * @generated from field: repeated arsox.turn.v1.TurnEndHookResult turn_end_hooks = 24;
+   */
+  turnEndHooks: TurnEndHookResult[];
 };
 
 /**
@@ -343,7 +410,7 @@ export type TurnResult = Message<"arsox.turn.v1.TurnResult"> & {
  * Use `create(TurnResultSchema)` to create a new message.
  */
 export const TurnResultSchema: GenMessage<TurnResult> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_result, 3);
+  messageDesc(file_arsox_turn_v1_result, 4);
 
 /**
  * @generated from message arsox.turn.v1.GetTurnRequest
@@ -365,7 +432,7 @@ export type GetTurnRequest = Message<"arsox.turn.v1.GetTurnRequest"> & {
  * Use `create(GetTurnRequestSchema)` to create a new message.
  */
 export const GetTurnRequestSchema: GenMessage<GetTurnRequest> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_result, 4);
+  messageDesc(file_arsox_turn_v1_result, 5);
 
 /**
  * @generated from message arsox.turn.v1.GetTurnResponse
@@ -389,7 +456,7 @@ export type GetTurnResponse = Message<"arsox.turn.v1.GetTurnResponse"> & {
  * Use `create(GetTurnResponseSchema)` to create a new message.
  */
 export const GetTurnResponseSchema: GenMessage<GetTurnResponse> = /*@__PURE__*/
-  messageDesc(file_arsox_turn_v1_result, 5);
+  messageDesc(file_arsox_turn_v1_result, 6);
 
 /**
  * A stage of the per-turn stack.
@@ -441,6 +508,15 @@ export enum Stage {
    * @generated from enum value: STAGE_PULL_REQUEST_WATCH = 8;
    */
   PULL_REQUEST_WATCH = 8,
+
+  /**
+   * The thread's turn end hooks, run after the work and before the artifact
+   * scan. Skipped when the thread declares none, and when the turn was
+   * cancelled.
+   *
+   * @generated from enum value: STAGE_TURN_END_HOOKS = 9;
+   */
+  TURN_END_HOOKS = 9,
 }
 
 /**
@@ -479,6 +555,53 @@ export enum StageDisposition {
  */
 export const StageDispositionSchema: GenEnum<StageDisposition> = /*@__PURE__*/
   enumDesc(file_arsox_turn_v1_result, 1);
+
+/**
+ * How one turn end hook ended.
+ *
+ * @generated from enum arsox.turn.v1.TurnEndHookOutcome
+ */
+export enum TurnEndHookOutcome {
+  /**
+   * @generated from enum value: TURN_END_HOOK_OUTCOME_UNSPECIFIED = 0;
+   */
+  UNSPECIFIED = 0,
+
+  /**
+   * Exited on its own with status 0.
+   *
+   * @generated from enum value: TURN_END_HOOK_OUTCOME_SUCCEEDED = 1;
+   */
+  SUCCEEDED = 1,
+
+  /**
+   * Exited on its own with a nonzero status, or was ended by a signal the
+   * satellite did not send.
+   *
+   * @generated from enum value: TURN_END_HOOK_OUTCOME_FAILED = 2;
+   */
+  FAILED = 2,
+
+  /**
+   * Ran past its timeout, and its whole process group was stopped.
+   *
+   * @generated from enum value: TURN_END_HOOK_OUTCOME_TIMED_OUT = 3;
+   */
+  TIMED_OUT = 3,
+
+  /**
+   * Could not be started at all, such as a program that does not exist.
+   *
+   * @generated from enum value: TURN_END_HOOK_OUTCOME_NOT_LAUNCHED = 4;
+   */
+  NOT_LAUNCHED = 4,
+}
+
+/**
+ * Describes the enum arsox.turn.v1.TurnEndHookOutcome.
+ */
+export const TurnEndHookOutcomeSchema: GenEnum<TurnEndHookOutcome> = /*@__PURE__*/
+  enumDesc(file_arsox_turn_v1_result, 2);
 
 /**
  * Why the agent stopped producing output.
@@ -529,5 +652,5 @@ export enum StopReason {
  * Describes the enum arsox.turn.v1.StopReason.
  */
 export const StopReasonSchema: GenEnum<StopReason> = /*@__PURE__*/
-  enumDesc(file_arsox_turn_v1_result, 2);
+  enumDesc(file_arsox_turn_v1_result, 3);
 

@@ -106,6 +106,8 @@ message ThreadEvent {
 
     RateLimitReported rate_limit_reported = 45;
 
+    TurnEndHookFinished turn_end_hook_finished = 46;
+
     // Every failure, at every severity. The one event type that cannot be
     // switched off: a stream that can be configured to hide failures is worse
     // than no stream.

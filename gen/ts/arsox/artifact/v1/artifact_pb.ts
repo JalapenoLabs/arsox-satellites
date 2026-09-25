@@ -6,10 +6,17 @@
 
 // Files a turn produced, and the workspace they came out of.
 //
-// The agents decide what counts as an artifact. Artifacts are moved up from the
-// repo level into the thread's artifacts/ directory, because repo directories
-// are the most ephemeral part of the workspace and are frequently torn down or
-// recreated, while artifacts should outlive them.
+// Every thread's workspace has an artifacts/ directory, created with the thread
+// and owned by the agent, and its AGENTS.md tells the agent that deliverables
+// belong there and scratch work does not. The agent decides what counts as an
+// artifact by where it puts a file. When each turn ends, after its hooks, the
+// satellite scans the directory and announces every file that is new or whose
+// contents changed as `artifact.created`.
+//
+// Both listings walk the workspace the way the file routes do: one component at
+// a time, never through a symbolic link, and never reporting anything but
+// regular files. Both page in the same order, by path compared one component at
+// a time, so a cursor is the last path of the previous page.
 
 import type { GenFile, GenMessage } from "@bufbuild/protobuf/codegenv2";
 import { fileDesc, messageDesc } from "@bufbuild/protobuf/codegenv2";
@@ -37,7 +44,8 @@ export type Artifact = Message<"arsox.artifact.v1.Artifact"> & {
   name: string;
 
   /**
-   * Path relative to the thread's artifacts/ directory.
+   * Path relative to the thread's artifacts/ directory. The file downloads from
+   * `GET /v1/threads/{thread_id}/files/artifacts/<path>`.
    *
    * @generated from field: string path = 2;
    */
@@ -64,12 +72,16 @@ export type Artifact = Message<"arsox.artifact.v1.Artifact"> & {
   sha256: string;
 
   /**
+   * When the file's current contents were written, as its filesystem reports
+   * the modification time.
+   *
    * @generated from field: arsox.common.v1.Timestamp created_at = 6;
    */
   createdAt?: Timestamp;
 
   /**
-   * Which member produced it, when attributable.
+   * Which member produced it, when attributable. Absent today: the satellite
+   * runs one agent per turn and a file carries no author.
    *
    * @generated from field: optional string member_id = 7;
    */
@@ -102,7 +114,7 @@ export type WorkspaceFile = Message<"arsox.artifact.v1.WorkspaceFile"> & {
   sizeBytes: bigint;
 
   /**
-   * Whether an agent promoted this file to artifacts/.
+   * Whether the file is under the thread's artifacts/ directory.
    *
    * @generated from field: bool is_artifact = 3;
    */
@@ -166,6 +178,11 @@ export const WorkspaceFileWrittenSchema: GenMessage<WorkspaceFileWritten> = /*@_
   messageDesc(file_arsox_artifact_v1_artifact, 2);
 
 /**
+ * GET /v1/threads/{thread_id}/artifacts
+ *
+ * What the thread's artifacts/ directory holds now, whether or not a scan has
+ * announced it yet, each with its SHA-256.
+ *
  * @generated from message arsox.artifact.v1.ListArtifactsRequest
  */
 export type ListArtifactsRequest = Message<"arsox.artifact.v1.ListArtifactsRequest"> & {
@@ -210,6 +227,10 @@ export const ListArtifactsResponseSchema: GenMessage<ListArtifactsResponse> = /*
   messageDesc(file_arsox_artifact_v1_artifact, 4);
 
 /**
+ * GET /v1/threads/{thread_id}/files
+ *
+ * Regular files anywhere in the thread's workspace, artifact or not.
+ *
  * @generated from message arsox.artifact.v1.ListWorkspaceFilesRequest
  */
 export type ListWorkspaceFilesRequest = Message<"arsox.artifact.v1.ListWorkspaceFilesRequest"> & {
@@ -219,8 +240,10 @@ export type ListWorkspaceFilesRequest = Message<"arsox.artifact.v1.ListWorkspace
   threadId: string;
 
   /**
-   * Restrict to files under this workspace-relative prefix. Empty lists
-   * everything.
+   * Restrict to files under this workspace-relative directory, such as
+   * `repos/api`. Checked like a file route's path, so an absolute path, a `.` or
+   * `..` component, or a path through a symbolic link is refused. A directory
+   * that does not exist lists nothing. Empty lists everything.
    *
    * @generated from field: string path_prefix = 2;
    */

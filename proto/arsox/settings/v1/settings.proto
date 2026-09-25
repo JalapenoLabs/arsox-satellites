@@ -23,6 +23,7 @@ package arsox.settings.v1;
 import "arsox/common/v1/common.proto";
 import "arsox/harness/v1/harness.proto";
 import "arsox/settings/v1/budget.proto";
+import "arsox/settings/v1/hook.proto";
 import "arsox/settings/v1/integration.proto";
 import "arsox/settings/v1/limits.proto";
 import "arsox/settings/v1/model.proto";
@@ -121,4 +122,8 @@ message ThreadSettings {
   // Long-running processes started before each turn's harness and stopped when
   // the turn ends, one set per turn. See Service.
   repeated Service services = 30;
+
+  // Commands run after every turn's harness work, in order, before artifacts/
+  // is scanned. See TurnEndHook.
+  repeated TurnEndHook turn_end_hooks = 31;
 }

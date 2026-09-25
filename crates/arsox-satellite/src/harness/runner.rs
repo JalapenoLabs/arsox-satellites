@@ -2615,6 +2615,7 @@ fn assemble(
         timing: Some(harness.timing),
         stop_reason: harness.stop_reason.map(Into::into),
         rate_limits: None,
+        turn_end_hooks: Vec::new(),
     }
 }
 

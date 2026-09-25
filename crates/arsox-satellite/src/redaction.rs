@@ -76,7 +76,8 @@ use arsox_sdk::proto::event::v1::{
     IntegrationConflict, IntegrationLanded, IntegrationRequested, PlanDecided, PlanProposed,
     QuestionAnswered, QuestionAsked, RateLimitReported, RedactionOverridden, ServiceLog,
     ServiceStarted, StatisticsUpdated, TeamChat, TeamDirectMessage, TeamMemberDespawned,
-    TeamMemberSpawned, ThreadEvent, ToolCompleted, ToolStarted, TurnCompleted, TurnStarted,
+    TeamMemberSpawned, ThreadEvent, ToolCompleted, ToolStarted, TurnCompleted, TurnEndHookFinished,
+    TurnStarted,
 };
 use arsox_sdk::proto::incident::v1::Incident;
 use arsox_sdk::proto::interaction::v1::{
@@ -89,7 +90,7 @@ use arsox_sdk::proto::settings::v1::{
 };
 use arsox_sdk::proto::turn::v1::{
     ChangedFile, CheckerResult, IntegrationRecord, PullRequestWatchReport, StageOutcome,
-    TeamMember, Turn, TurnResult,
+    TeamMember, Turn, TurnAttachment, TurnEndHookResult, TurnResult,
 };
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -539,6 +540,7 @@ pub fn scrub_settings(settings: &mut ThreadSettings) {
         team_mode: _,
         timeouts: _,
         turn_defaults: _,
+        turn_end_hooks: _,
         virtual_browser: _,
         watch_pull_requests: _,
     } = settings;
@@ -1065,6 +1067,7 @@ impl Scrub for Payload {
             Self::TurnCompleted(completed) => completed.scrub(by),
             Self::StatisticsUpdated(statistics) => statistics.scrub(by),
             Self::RateLimitReported(reported) => reported.scrub(by),
+            Self::TurnEndHookFinished(finished) => finished.scrub(by),
             Self::Incident(incident) => incident.scrub(by),
         }
     }
@@ -1260,6 +1263,14 @@ impl Scrub for Turn {
     fn scrub(&mut self, by: &Scanner) {
         self.prompt.scrub(by);
         self.metadata.scrub(by);
+        self.attachments.scrub(by);
+    }
+}
+
+/// A path the caller chose. The content type and the size are the satellite's.
+impl Scrub for TurnAttachment {
+    fn scrub(&mut self, by: &Scanner) {
+        self.path.scrub(by);
     }
 }
 
@@ -1283,6 +1294,22 @@ impl Scrub for TurnResult {
         self.unanswered_questions.scrub(by);
         self.watch.scrub(by);
         self.metadata.scrub(by);
+        self.turn_end_hooks.scrub(by);
+    }
+}
+
+impl Scrub for TurnEndHookFinished {
+    fn scrub(&mut self, by: &Scanner) {
+        self.result.scrub(by);
+    }
+}
+
+/// A hook runs with the thread's declared variables in its environment, so what
+/// it printed is scanned like a checker's output. The name is the host's.
+impl Scrub for TurnEndHookResult {
+    fn scrub(&mut self, by: &Scanner) {
+        self.name.scrub(by);
+        self.output_tail.scrub(by);
     }
 }
 

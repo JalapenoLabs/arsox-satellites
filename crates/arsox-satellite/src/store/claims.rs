@@ -155,6 +155,7 @@ impl Store {
                 overrides: row
                     .get::<Option<Vec<u8>>, _>("overrides")
                     .and_then(|bytes| TurnOverrides::decode(bytes.as_slice()).ok()),
+                attachments: Vec::new(),
             },
         }))
     }

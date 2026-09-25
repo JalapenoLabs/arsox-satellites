@@ -97,6 +97,43 @@ pub struct Budget {
     #[prost(message, optional, tag="3")]
     pub max_wall_clock_per_turn: ::core::option::Option<super::super::common::v1::DurationCeiling>,
 }
+/// A command the satellite runs after every turn, before it scans artifacts/.
+///
+/// Declared on the thread, in `ThreadSettings.turn_end_hooks`. When a turn's
+/// harness work is over, whether it completed or failed, the satellite runs the
+/// thread's hooks one at a time in declaration order, and then scans artifacts/.
+/// A hook is therefore the place for deterministic post-processing an agent
+/// should not be trusted to remember: converting what it produced into the
+/// format the host application stores, for instance. A cancelled turn runs no
+/// hooks, because cancelling means stop now.
+///
+/// Each hook runs as the agent account, with the thread's workspace root as its
+/// working directory and the environment a service gets: the scrubbed base, the
+/// thread's declared `env`, and where the turn's services listen. It is host
+/// configuration rather than anything an agent chose, so it is not brokered by
+/// the exec allowlist. It has no standard input.
+///
+/// Every hook's outcome reaches the thread's stream as `hook.finished` and the
+/// turn's result as `TurnResult.turn_end_hooks`. A hook that exits nonzero, runs
+/// past its timeout, or cannot start is recorded as a degraded
+/// TURN_END_HOOK_FAILED incident. It never fails the turn and never stops the
+/// hooks after it or the artifact scan.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TurnEndHook {
+    /// 1 to 64 of `A-Z a-z 0-9 _ -`, unique within the thread ignoring case.
+    #[prost(string, tag="1")]
+    pub name: ::prost::alloc::string::String,
+    /// The program and its arguments, exactly as they are passed to it. No shell
+    /// reads them, so nothing in them is expanded or split. The first element is
+    /// the program: an absolute path, or a name looked up on the satellite's PATH.
+    #[prost(string, repeated, tag="2")]
+    pub argv: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+    /// How long the hook may run before its whole process group is stopped.
+    /// Absent uses 10 minutes. Present must be positive and at most one hour,
+    /// because the thread's next turn waits behind it.
+    #[prost(message, optional, tag="3")]
+    pub timeout: ::core::option::Option<super::super::common::v1::Duration>,
+}
 /// Lets the agents use `gh`. Highly recommended.
 ///
 /// Merge permission lives in PullRequestPolicy, not here, so there is exactly one
@@ -1236,5 +1273,9 @@ pub struct ThreadSettings {
     /// the turn ends, one set per turn. See Service.
     #[prost(message, repeated, tag="30")]
     pub services: ::prost::alloc::vec::Vec<Service>,
+    /// Commands run after every turn's harness work, in order, before artifacts/
+    /// is scanned. See TurnEndHook.
+    #[prost(message, repeated, tag="31")]
+    pub turn_end_hooks: ::prost::alloc::vec::Vec<TurnEndHook>,
 }
 // @@protoc_insertion_point(module)

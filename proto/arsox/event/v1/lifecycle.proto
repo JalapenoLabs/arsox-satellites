@@ -54,8 +54,24 @@ message QuestionAnswered {
   bool timed_out = 3;
 }
 
+// A file under the thread's artifacts/ directory is new, or its contents
+// changed, as of the end of a turn.
+//
+// One event per file, emitted after the turn's hooks ran and before the turn
+// completes, so a host application reacting to it can download the file with
+// `GET /v1/threads/{id}/files/artifacts/<path>` while the thread still holds it.
+// A file announced once is announced again only when its SHA-256 changes, and
+// the satellite remembers what it announced across a restart.
 message ArtifactCreated {
   arsox.artifact.v1.Artifact artifact = 1;
+}
+
+// A turn end hook finished, however it ended.
+//
+// One event per hook, in the order they ran. A hook that did not succeed is
+// also a degraded TURN_END_HOOK_FAILED incident on the same stream.
+message TurnEndHookFinished {
+  arsox.turn.v1.TurnEndHookResult result = 1;
 }
 
 // An agent used the override_redaction tool.

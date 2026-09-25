@@ -122,6 +122,20 @@ pub enum ErrorCode {
     HarnessLaunchFailed = 1000,
     HarnessCrashed = 1001,
     HarnessIdleTimeout = 1002,
+    /// Harness sessions, exported and imported through /v1/threads/{id}/session.
+    ///
+    /// The thread has not opened a harness session yet, or the transcript its
+    /// session id names is no longer on disk, so there is nothing to export.
+    HarnessSessionNotFound = 1003,
+    /// An import was sent to a thread that already has a harness session or any
+    /// turn, queued or finished. A session is imported into a fresh thread, before
+    /// its first turn, so that turn resumes it.
+    HarnessSessionAlreadyStarted = 1004,
+    /// The imported session belongs to a different harness than the thread runs.
+    /// A Claude transcript cannot be resumed by Codex, or the other way round.
+    HarnessSessionMismatch = 1005,
+    /// The imported archive is larger than the satellite accepts in one request.
+    HarnessSessionTooLarge = 1006,
     /// Streaming.
     StreamConsumerLagged = 1100,
     StreamSequenceExpired = 1101,
@@ -169,6 +183,13 @@ pub enum ErrorCode {
     /// A service that had become ready exited during the turn. Recovered when a
     /// restart brought it back, degraded once the turn's restarts were spent.
     ServiceExited = 1601,
+    /// Turn end hooks, declared in `ThreadSettings.turn_end_hooks` and run after
+    /// each turn's work.
+    ///
+    /// A hook exited nonzero, ran past its timeout, or could not start. Recorded as
+    /// a degraded incident carrying its outcome and output tail. The turn, the
+    /// hooks after it, and the artifact scan all go on regardless.
+    TurnEndHookFailed = 1700,
 }
 impl ErrorCode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -232,6 +253,10 @@ impl ErrorCode {
             Self::HarnessLaunchFailed => "ERROR_CODE_HARNESS_LAUNCH_FAILED",
             Self::HarnessCrashed => "ERROR_CODE_HARNESS_CRASHED",
             Self::HarnessIdleTimeout => "ERROR_CODE_HARNESS_IDLE_TIMEOUT",
+            Self::HarnessSessionNotFound => "ERROR_CODE_HARNESS_SESSION_NOT_FOUND",
+            Self::HarnessSessionAlreadyStarted => "ERROR_CODE_HARNESS_SESSION_ALREADY_STARTED",
+            Self::HarnessSessionMismatch => "ERROR_CODE_HARNESS_SESSION_MISMATCH",
+            Self::HarnessSessionTooLarge => "ERROR_CODE_HARNESS_SESSION_TOO_LARGE",
             Self::StreamConsumerLagged => "ERROR_CODE_STREAM_CONSUMER_LAGGED",
             Self::StreamSequenceExpired => "ERROR_CODE_STREAM_SEQUENCE_EXPIRED",
             Self::StreamSubprotocolUnsupported => "ERROR_CODE_STREAM_SUBPROTOCOL_UNSUPPORTED",
@@ -246,6 +271,7 @@ impl ErrorCode {
             Self::SetupFailed => "ERROR_CODE_SETUP_FAILED",
             Self::ServiceStartFailed => "ERROR_CODE_SERVICE_START_FAILED",
             Self::ServiceExited => "ERROR_CODE_SERVICE_EXITED",
+            Self::TurnEndHookFailed => "ERROR_CODE_TURN_END_HOOK_FAILED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -306,6 +332,10 @@ impl ErrorCode {
             "ERROR_CODE_HARNESS_LAUNCH_FAILED" => Some(Self::HarnessLaunchFailed),
             "ERROR_CODE_HARNESS_CRASHED" => Some(Self::HarnessCrashed),
             "ERROR_CODE_HARNESS_IDLE_TIMEOUT" => Some(Self::HarnessIdleTimeout),
+            "ERROR_CODE_HARNESS_SESSION_NOT_FOUND" => Some(Self::HarnessSessionNotFound),
+            "ERROR_CODE_HARNESS_SESSION_ALREADY_STARTED" => Some(Self::HarnessSessionAlreadyStarted),
+            "ERROR_CODE_HARNESS_SESSION_MISMATCH" => Some(Self::HarnessSessionMismatch),
+            "ERROR_CODE_HARNESS_SESSION_TOO_LARGE" => Some(Self::HarnessSessionTooLarge),
             "ERROR_CODE_STREAM_CONSUMER_LAGGED" => Some(Self::StreamConsumerLagged),
             "ERROR_CODE_STREAM_SEQUENCE_EXPIRED" => Some(Self::StreamSequenceExpired),
             "ERROR_CODE_STREAM_SUBPROTOCOL_UNSUPPORTED" => Some(Self::StreamSubprotocolUnsupported),
@@ -320,6 +350,7 @@ impl ErrorCode {
             "ERROR_CODE_SETUP_FAILED" => Some(Self::SetupFailed),
             "ERROR_CODE_SERVICE_START_FAILED" => Some(Self::ServiceStartFailed),
             "ERROR_CODE_SERVICE_EXITED" => Some(Self::ServiceExited),
+            "ERROR_CODE_TURN_END_HOOK_FAILED" => Some(Self::TurnEndHookFailed),
             _ => None,
         }
     }

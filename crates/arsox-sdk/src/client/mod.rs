@@ -670,6 +670,7 @@ impl ThreadHandle {
                     idempotency_key: options.idempotency_key,
                     metadata: options.metadata.into_iter().collect(),
                     overrides: options.overrides,
+                    attachments: Vec::new(),
                 },
             )
             .await?;
