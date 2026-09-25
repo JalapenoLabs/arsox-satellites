@@ -49,6 +49,10 @@ const POINTER_FILES: [&str; 2] = ["CLAUDE.md", "CODEX.md"];
 ///   operator quotes when asking what a run did.
 /// - **`repos/`**, because a repo is cloned exactly once and an agent that goes
 ///   looking for its own checkout finds nothing.
+/// - **`artifacts/`**, because it is the one place the host application
+///   collects files from, and an agent that leaves its deliverable anywhere else
+///   has produced something nobody receives. Scratch work is named as not
+///   belonging there, because everything in it is announced to the host.
 /// - **What follows the header**, because the satellite's facts and the
 ///   operator's instruction end up in one file, and an agent that cannot tell
 ///   them apart cannot tell which of the two it may argue with.
@@ -64,6 +68,10 @@ itself and is not overridable.
 - This thread is `{thread_id}`. It names your workspace directory and every
   artifact you leave behind.
 - Repositories are cloned once each into `{workspace}/repos/`.
+- Files you produce as deliverables belong in `{workspace}/artifacts/`, in
+  subdirectories if that helps. Every file there is collected and handed to the
+  operator when your turn ends, so scratch work, intermediate files, and anything
+  you were not asked to deliver belong elsewhere in the workspace.
 - Everything below this section is instruction from the operator who created
   this thread.
 ";
@@ -108,6 +116,27 @@ pub async fn write_instructions(
     // it resolves to a temporary directory, and both are true statements.
     let workspace = super::thread_directory(root, thread_id)?;
     super::create_directory(&workspace).await?;
+
+    // Through the confined walk rather than by path. The workspace is the
+    // agent's from its first turn on, and a workspace rebuilt after a restart
+    // may already hold whatever the agent left where artifacts/ belongs.
+    let walk_root = workspace.clone();
+    let created = tokio::task::spawn_blocking(move || {
+        super::confined::ensure_directory(&walk_root, &[crate::artifacts::DIRECTORY.to_owned()])
+    })
+    .await;
+
+    let failure = match created {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(std::io::Error::other(error)),
+        Err(panicked) => Some(std::io::Error::other(panicked)),
+    };
+    if let Some(source) = failure {
+        return Err(WorkspaceError::Create {
+            path: workspace.join(crate::artifacts::DIRECTORY),
+            source,
+        });
+    }
 
     let assembled = assemble(&layers(&workspace, thread_id, settings));
     write(&workspace.join(AGENTS_FILE), &assembled).await?;
@@ -213,6 +242,17 @@ mod tests {
         assert!(file.contains(&as_text(&fixture_workspace())));
         assert!(file.contains(THREAD));
         assert!(file.contains("repos/"), "{file}");
+    }
+
+    #[test]
+    fn the_header_says_where_deliverables_go_and_that_scratch_work_does_not() {
+        let file = assembled("");
+
+        assert!(
+            file.contains(&format!("{}/artifacts/", as_text(&fixture_workspace()))),
+            "{file}"
+        );
+        assert!(file.contains("scratch work"), "{file}");
     }
 
     #[test]

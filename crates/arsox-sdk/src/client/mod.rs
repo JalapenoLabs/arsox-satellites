@@ -26,7 +26,10 @@ pub use files::{ByteStream, FileDownload};
 #[doc(inline)]
 pub use relay::{Relay, RelayAnswerer, RelayEvent};
 
-use crate::proto::artifact::v1::WorkspaceFileWritten;
+use crate::proto::artifact::v1::{
+    Artifact, ListArtifactsRequest, ListArtifactsResponse, ListWorkspaceFilesRequest,
+    ListWorkspaceFilesResponse, WorkspaceFileWritten,
+};
 use crate::proto::common::v1::{PageRequest, Timestamp};
 use crate::proto::error::v1::Error as ContractError;
 use crate::proto::error::v1::ErrorCode;
@@ -906,6 +909,121 @@ impl ThreadHandle {
             .await?;
 
         Ok(Relay::new(socket))
+    }
+
+    /// Lists every file in this thread's artifacts/ directory, with its hash.
+    ///
+    /// Follows every page, which is right here and nowhere else in this SDK:
+    /// artifacts/ holds what an agent deliberately delivered, a handful of files
+    /// rather than a tree, and a caller asking for a thread's artifacts wants
+    /// all of them. [`Self::artifacts_page`] reads one page at a time.
+    ///
+    /// Each [`Artifact::path`] is relative to artifacts/, so the file downloads
+    /// with `read_file(&format!("artifacts/{}", artifact.path))`.
+    ///
+    /// ```no_run
+    /// # async fn run(thread: arsox_sdk::client::ThreadHandle) -> arsox_sdk::client::Result<()> {
+    /// for artifact in thread.artifacts().await? {
+    ///     let download = thread.read_file(&format!("artifacts/{}", artifact.path)).await?;
+    ///     println!("{} is {} bytes, sha256 {}", artifact.name, download.content_length(), artifact.sha256);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the thread is unknown or collected, or the
+    /// satellite is unreachable.
+    pub async fn artifacts(&self) -> Result<Vec<Artifact>> {
+        let mut artifacts = Vec::new();
+        let mut cursor = String::new();
+
+        loop {
+            let page = self
+                .artifacts_page(PageRequest {
+                    limit: 0,
+                    cursor: cursor.clone(),
+                })
+                .await?;
+            artifacts.extend(page.artifacts);
+
+            let next = page.page.map(|page| page.next_cursor).unwrap_or_default();
+
+            // A satellite that handed back the cursor it was sent would page
+            // forever, and a loop that trusts it would never return.
+            if next.is_empty() || next == cursor {
+                return Ok(artifacts);
+            }
+            cursor = next;
+        }
+    }
+
+    /// Lists one page of this thread's artifacts/ directory.
+    ///
+    /// Artifacts are ordered by path, compared one component at a time, and
+    /// `page.next_cursor` in the response is where the next page starts. It is
+    /// empty on the last page.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the thread is unknown or collected, the cursor is
+    /// not one a listing produced, or the satellite is unreachable.
+    pub async fn artifacts_page(&self, page: PageRequest) -> Result<ListArtifactsResponse> {
+        self.satellite
+            .send(
+                reqwest::Method::GET,
+                &format!("/v1/threads/{}/artifacts", self.thread_id),
+                &ListArtifactsRequest {
+                    thread_id: self.thread_id.clone(),
+                    page: Some(page),
+                },
+            )
+            .await
+    }
+
+    /// Lists one page of the regular files anywhere in this thread's workspace.
+    ///
+    /// `path_prefix` restricts the listing to a directory, such as `repos/api`,
+    /// and an empty one lists everything. Files are ordered by path, compared one
+    /// component at a time, and `page.next_cursor` in the response is where the
+    /// next page starts. One page rather than all of them, because a workspace
+    /// with a checkout in it holds tens of thousands of files.
+    ///
+    /// ```no_run
+    /// # async fn run(thread: arsox_sdk::client::ThreadHandle) -> arsox_sdk::client::Result<()> {
+    /// use arsox_sdk::proto::common::v1::PageRequest;
+    ///
+    /// let listing = thread.workspace_files("repos/api/dist", PageRequest::default()).await?;
+    /// for file in listing.files {
+    ///     println!("{} ({} bytes)", file.path, file.size_bytes);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns `WORKSPACE_PATH_INVALID` for a prefix that is absolute, holds a
+    /// `.` or `..` component, or crosses a symbolic link;
+    /// `WORKSPACE_FILE_NOT_REGULAR` for a prefix naming a file; and an error
+    /// when the thread is unknown or the satellite is unreachable.
+    pub async fn workspace_files(
+        &self,
+        path_prefix: &str,
+        page: PageRequest,
+    ) -> Result<ListWorkspaceFilesResponse> {
+        self.satellite
+            .send(
+                reqwest::Method::GET,
+                &format!("/v1/threads/{}/files", self.thread_id),
+                &ListWorkspaceFilesRequest {
+                    thread_id: self.thread_id.clone(),
+                    path_prefix: path_prefix.to_owned(),
+                    page: Some(page),
+                },
+            )
+            .await
     }
 
     /// Streams a file out of this thread's workspace.

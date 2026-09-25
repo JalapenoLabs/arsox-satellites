@@ -11,9 +11,10 @@ host to satellite.
 | the relay socket | `wss /v1/threads/{id}/relay` | tool calls down, results up |
 | the agent-facing MCP server | `http://127.0.0.1:<proxy>/t/{token}/mcp/{server}` | the relayed tools, to the harness |
 | workspace files | `GET` and `PUT /v1/threads/{id}/files/{path}` | one file's bytes, either way |
+| workspace listings | `GET /v1/threads/{id}/files` and `GET /v1/threads/{id}/artifacts` | one page of paths, sizes, and hashes |
 
-The code is `src/relay.rs`, `src/relay/socket.rs`, `src/relay/mcp.rs`, and
-`src/workspace/files.rs`.
+The code is `src/relay.rs`, `src/relay/socket.rs`, `src/relay/mcp.rs`,
+`src/workspace/files.rs`, `src/workspace/confined.rs`, and `src/artifacts.rs`.
 
 A relayed server is the choice when the tools belong to the host application.
 When they have to run beside the workspace instead, such as an MCP server driving
@@ -217,6 +218,11 @@ component below it is opened relative to the directory handle above it with
 `O_NOFOLLOW`. A link anywhere on the way is refused whatever it points at, and a
 component swapped after it was opened changes nothing a handle refers to.
 
+One module does this, `workspace::confined`, and everything that reaches into a
+tree an agent owns goes through it: these routes, the listings below, the
+artifact scan, turn attachments, and harness session export and import. A rule
+about links then holds everywhere or nowhere.
+
 | Refused | Answer |
 |---|---|
 | empty, absolute, an empty, `.`, or `..` component, or a NUL | `400 WORKSPACE_PATH_INVALID` |
@@ -259,14 +265,47 @@ largest object one request uploads to the object stores a host application moves
 these files onward to, so a larger file could not travel on whole anyway.
 
 On a platform without a descriptor-relative walk, which is anything but Unix,
-both routes answer `INTERNAL`.
+every one of these routes answers `INTERNAL`.
+
+### Listing what is there
+
+`GET /v1/threads/{id}/files` answers `ListWorkspaceFilesResponse` and
+`GET /v1/threads/{id}/artifacts` answers `ListArtifactsResponse`. Both carry
+their request as a protobuf body on the `GET`, as every listing in the contract
+does, and both page with `common.PageRequest`: 50 by default and at most 500.
+
+**Order is by path, compared one component at a time.** That is the order a
+depth-first walk visits files in when each directory's names are sorted, so
+`a/b` comes before `a-c` even though a string comparison says otherwise. It is
+what lets a page start after its cursor without walking everything before it:
+a directory that sorts before the cursor and does not lead to it is skipped
+whole. The cursor is the last path of the previous page.
+
+Only regular files are listed. A symbolic link is neither followed nor
+reported, and neither is a FIFO, a socket, a device, a staged write, or a name
+that is not UTF-8, which the contract cannot spell.
+
+| Listing | `path_prefix` | A path is relative to | Carries |
+|---|---|---|---|
+| files | a directory, checked like a file route's path; one trailing `/` is forgiven | the workspace root | size, modification time, whether it is under artifacts/ |
+| artifacts | none: always artifacts/ | artifacts/ | size, SHA-256, content type, modification time |
+
+A prefix naming a directory that does not exist lists nothing, and one naming a
+file answers `409 WORKSPACE_FILE_NOT_REGULAR`. A cursor that is not a relative
+path answers `400 REQUEST_FIELD_INVALID`.
+
+The artifacts listing hashes every file it returns. It reuses a hash the last
+artifact scan recorded when the file's inode, size, and change time still match
+it, and hashes the rest on the spot, and it never writes the record: reading
+what a thread holds must not change what its next scan announces. See
+[the workspace doc](./workspace.md#artifacts).
 
 ## Roadmap
 
 - **Content other than text.** `ToolContent` is a oneof with one arm today;
   images and embedded resources are additive.
-- **Node and Python clients** for the relay and the file routes. The contract is
-  already in both packages.
+- **Node and Python clients** for the relay and the file transfer routes. The
+  contract is already in both packages, and both list files and artifacts.
 - **Measuring Claude under the narrow posture** with a relayed server, where the
   `mcp__<name>` allow rule is what lets the call through. The rule is rendered
   the same way for both kinds of server and unit tested, and the declared-server

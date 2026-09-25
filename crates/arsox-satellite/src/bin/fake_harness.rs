@@ -75,6 +75,13 @@
 //!   was configured with, for a test that needs a recording the process-wide
 //!   variable does not carry. The vocabulary still has to match the harness
 //!   being stood in for, which is the caller's to get right.
+//! - `[[write=PATH]]` writes a file at PATH, relative to the working directory,
+//!   before the transcript, creating the directories on the way. Its contents
+//!   are PATH itself, so two writes of the same path produce the same bytes and
+//!   a test can tell files apart by reading them. It is how a test has the
+//!   agent leave something in artifacts/, and it may appear more than once.
+//!   `[[write=PATH=TEXT]]` writes TEXT instead, for a test that needs a file to
+//!   change between turns.
 //! - `[[unrecognized=N]]` emits N lines of an event type nothing maps, before
 //!   the transcript, which is what a CLI release adding an event type looks like
 //!   from the satellite's side. The mapper records a degraded incident and drops
@@ -211,6 +218,22 @@ async fn main() {
 
         if let Err(error) = std::fs::write(&file, environment.join("\n")) {
             eprintln!("could not record the environment to {file}: {error}");
+        }
+    }
+
+    for written in text_directives(&prompt, "write") {
+        let (path, contents) = written
+            .split_once('=')
+            .unwrap_or((written.as_str(), written.as_str()));
+        let path = std::path::Path::new(path);
+
+        let created = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(path, contents));
+
+        if let Err(error) = created {
+            eprintln!("could not write {}: {error}", path.display());
         }
     }
 
@@ -371,10 +394,25 @@ fn directive(prompt: &str, key: &str) -> Option<usize> {
 
 /// Reads a `[[key=value]]` directive out of the prompt as written.
 fn text_directive(prompt: &str, key: &str) -> Option<String> {
-    let opener = format!("[[{key}=");
-    let start = prompt.find(&opener)? + opener.len();
-    let rest = prompt.get(start..)?;
-    let end = rest.find("]]")?;
+    text_directives(prompt, key).into_iter().next()
+}
 
-    rest.get(..end).map(str::to_owned)
+/// Reads every `[[key=value]]` directive for one key, in the order written.
+fn text_directives(prompt: &str, key: &str) -> Vec<String> {
+    let opener = format!("[[{key}=");
+    let mut found = Vec::new();
+    let mut rest = prompt;
+
+    while let Some(start) = rest.find(&opener) {
+        rest = &rest[start + opener.len()..];
+
+        let Some(end) = rest.find("]]") else {
+            break;
+        };
+
+        found.push(rest[..end].to_owned());
+        rest = &rest[end..];
+    }
+
+    found
 }

@@ -19,6 +19,7 @@
 //! a missing thread is one concept from the query to the HTTP response rather
 //! than being translated twice and drifting apart in the middle.
 
+mod artifacts;
 mod claims;
 mod events;
 mod incidents;
@@ -26,6 +27,7 @@ mod setup;
 mod threads;
 mod turns;
 
+pub use artifacts::RecordedArtifact;
 pub use claims::{ClaimedTurn, Interrupted};
 pub use events::AppendEvent;
 pub use incidents::{IncidentFilter, IncidentListing};
@@ -45,10 +47,10 @@ use std::str::FromStr as _;
 const NANOS_PER_SECOND: i64 = 1_000_000_000;
 
 /// Page size used when a caller asks for none.
-const DEFAULT_PAGE: u32 = 50;
+pub(crate) const DEFAULT_PAGE: u32 = 50;
 
 /// Largest page a caller can ask for.
-const MAX_PAGE: u32 = 500;
+pub(crate) const MAX_PAGE: u32 = 500;
 
 /// Splits a listing cursor back into its sort key and row id.
 ///

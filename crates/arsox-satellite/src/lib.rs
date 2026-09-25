@@ -16,12 +16,14 @@
 //! explicitly with `ARSOX_ALLOW_INSECURE=true`, which warns loudly on every boot.
 
 mod api;
+pub mod artifacts;
 pub mod broker;
 pub mod collector;
 pub mod commands;
 pub mod disk;
 pub mod egress;
 pub mod harness;
+pub mod media;
 pub mod privilege;
 pub mod proxy;
 pub mod redaction;
@@ -430,6 +432,7 @@ fn router(satellite: Arc<Satellite>) -> Router {
         .merge(stream::sockets::routes())
         .merge(relay::socket::routes())
         .merge(workspace::files::routes())
+        .merge(artifacts::routes())
         .merge(setup::routes())
         .route_layer(from_fn_with_state(Arc::clone(&satellite), require_auth));
 

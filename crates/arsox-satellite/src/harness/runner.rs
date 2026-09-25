@@ -52,11 +52,13 @@ use crate::proxy::budget::{Ceilings, Crossing, Meter};
 use crate::redaction::Redactor;
 use crate::store::{AppendEvent, ClaimedTurn, Store};
 use crate::timeouts::Bounds;
+use arsox_sdk::proto::artifact::v1::Artifact;
 use arsox_sdk::proto::common::v1::{Duration, Timestamp};
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
 use arsox_sdk::proto::event::v1::{
-    BudgetWarning, Ceiling, CheckerResultEvent, ThreadEndReason, TurnCompleted, TurnStarted,
+    ArtifactCreated, BudgetWarning, Ceiling, CheckerResultEvent, ThreadEndReason, TurnCompleted,
+    TurnStarted,
 };
 use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::incident::v1::{Disposition, Incident, IncidentCounts};
@@ -618,6 +620,40 @@ impl Checked {
     }
 }
 
+/// What a turn's closing steps amounted to, for its report.
+///
+/// Carried beside the work's own outcome rather than folded into it, because
+/// the closing steps run however the work ended, a failure included, and a
+/// failure's result is built somewhere else.
+#[derive(Debug)]
+struct Closing {
+    /// What the artifact scan announced.
+    artifacts: Vec<Artifact>,
+
+    artifacts_stage: StageOutcome,
+}
+
+impl Closing {
+    /// The closing of a turn that stopped before any work began.
+    fn never_reached() -> Self {
+        Self {
+            artifacts: Vec::new(),
+            artifacts_stage: stage_outcome(
+                Stage::Artifacts,
+                StageDisposition::Skipped,
+                Some("the turn stopped before any work began".to_owned()),
+                None,
+            ),
+        }
+    }
+
+    /// Writes the closing steps into the turn's result.
+    fn apply(self, result: &mut TurnResult) {
+        result.artifacts = self.artifacts;
+        result.stages.push(self.artifacts_stage);
+    }
+}
+
 /// Why a fix cycle ended the stage rather than producing another attempt.
 #[derive(Debug)]
 struct StoppedEarly {
@@ -758,7 +794,9 @@ impl Runner {
         )
         .await;
 
-        let (status, mut result) = match self.drive(&claimed).await {
+        let (driven, closing) = self.drive(&claimed).await;
+
+        let (status, mut result) = match driven {
             Ok(finished) => finished,
             Err(failure) => {
                 // Fatal by construction: `drive` only returns an error when the
@@ -779,6 +817,10 @@ impl Runner {
                 (TurnStatus::Failed, failure.into_result(&claimed))
             }
         };
+
+        // Whatever the work amounted to, the turn's closing steps ran after it
+        // and their outcomes belong in its report.
+        closing.apply(&mut result);
 
         // Counted once, here, rather than inside `assemble`. This is the one
         // point every ending passes through, and it is past the last incident
@@ -871,9 +913,15 @@ impl Runner {
     /// the work can have. The turn is not over, and its result is not recorded,
     /// until they are gone. A turn future dropped before that, by a satellite
     /// shutting down, kills them as it drops. See [`crate::services`].
-    async fn drive(&self, claimed: &ClaimedTurn) -> Result<(TurnStatus, TurnResult), Failure> {
+    async fn drive(
+        &self,
+        claimed: &ClaimedTurn,
+    ) -> (Result<(TurnStatus, TurnResult), Failure>, Closing) {
         let ceilings = Ceilings::from_budget(claimed.settings.budget.as_ref());
-        let prepared = self.prepare(claimed, &ceilings).await?;
+        let prepared = match self.prepare(claimed, &ceilings).await {
+            Ok(prepared) => prepared,
+            Err(failure) => return (Err(failure), Closing::never_reached()),
+        };
 
         // The guard is held here rather than inside `open`, because the grant
         // has to outlive every session in the turn, the checker fix cycle
@@ -897,9 +945,73 @@ impl Runner {
         .await;
 
         let worked = self.work(claimed, &mut context).await;
+
+        // Before the services stop, so a step that talks to one still can.
+        let closing = self.close(claimed).await;
         context.services.stop().await;
 
-        worked
+        (worked, closing)
+    }
+
+    /// Runs what every turn ends with once its work is over.
+    ///
+    /// The artifact scan, whatever the work amounted to: a turn that failed
+    /// halfway may still have left the file it was asked for, and losing work
+    /// already paid for to a failure later in the turn is the wrong trade.
+    async fn close(&self, claimed: &ClaimedTurn) -> Closing {
+        let at = Attribution::of(claimed);
+        let started = tokio::time::Instant::now();
+
+        match crate::artifacts::scan(&self.store, &self.workspace_root, at.thread_id).await {
+            Ok(announced) => {
+                for artifact in &announced {
+                    self.append(
+                        at,
+                        "artifact.created",
+                        None,
+                        Payload::ArtifactCreated(ArtifactCreated {
+                            artifact: Some(artifact.clone()),
+                        }),
+                    )
+                    .await;
+                }
+
+                Closing {
+                    artifacts_stage: stage_outcome(
+                        Stage::Artifacts,
+                        StageDisposition::Ran,
+                        None,
+                        Some(started.elapsed()),
+                    ),
+                    artifacts: announced,
+                }
+            }
+            Err(error) => {
+                let reason = format!("the artifacts directory could not be scanned: {error}");
+
+                // Degraded: the work happened and what is missing is its
+                // announcement. The record is unchanged, so the next turn's scan
+                // announces these files instead.
+                self.record_incident(
+                    at,
+                    ErrorCode::Internal,
+                    Disposition::Degraded,
+                    false,
+                    &reason,
+                )
+                .await;
+
+                Closing {
+                    artifacts_stage: stage_outcome(
+                        Stage::Artifacts,
+                        StageDisposition::Failed,
+                        Some(reason),
+                        Some(started.elapsed()),
+                    ),
+                    artifacts: Vec::new(),
+                }
+            }
+        }
     }
 
     /// The turn's sessions and checkers, with everything they share open.
@@ -2517,8 +2629,18 @@ fn checker_stage(
     reason: Option<String>,
     elapsed: Option<std::time::Duration>,
 ) -> StageOutcome {
+    stage_outcome(Stage::Checkers, disposition, reason, elapsed)
+}
+
+/// One stage's outcome, with its elapsed time in the contract's shape.
+fn stage_outcome(
+    stage: Stage,
+    disposition: StageDisposition,
+    reason: Option<String>,
+    elapsed: Option<std::time::Duration>,
+) -> StageOutcome {
     StageOutcome {
-        stage: Stage::Checkers.into(),
+        stage: stage.into(),
         disposition: disposition.into(),
         reason,
         elapsed: elapsed.map(|elapsed| Duration {
@@ -2552,12 +2674,13 @@ fn choice_for(claimed: &ClaimedTurn) -> TurnChoice {
 
 /// Folds what the harness and the checkers reported into the full turn result.
 ///
-/// A turn is bigger than a harness run: self-review, artifact scanning, and
-/// suggestions are all stages the harness knows nothing about. They are reported
-/// as skipped rather than omitted, so "not run" never reads as "found nothing".
+/// A turn is bigger than a harness run: self-review and suggestions are stages
+/// the harness knows nothing about. They are reported as skipped rather than
+/// omitted, so "not run" never reads as "found nothing".
 ///
-/// Checkers are the one of those stages that exists, so its outcome comes from
-/// `checked` rather than from the unimplemented list.
+/// Checkers are a stage that exists, so its outcome comes from `checked` rather
+/// than from the unimplemented list. The closing steps, the artifact scan among
+/// them, are added by [`Closing::apply`] once they have run.
 fn assemble(
     claimed: &ClaimedTurn,
     harness: Option<HarnessResult>,
@@ -2570,7 +2693,6 @@ fn assemble(
         Stage::Plan,
         Stage::SelfReview,
         Stage::Merge,
-        Stage::Artifacts,
         Stage::Suggestions,
     ]
     .into_iter()

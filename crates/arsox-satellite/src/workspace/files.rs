@@ -9,20 +9,14 @@
 //! and push in what an agent needs: every byte moves on a request the host
 //! application opened.
 //!
+//! `GET /v1/threads/{id}/files` lists what the workspace holds, and
+//! `GET /v1/threads/{id}/artifacts` lists its artifacts/ directory with each
+//! file's SHA-256, both paged in path order.
+//!
 //! # The workspace is the agent's, so every path is hostile
 //!
-//! An agent can create any file, directory, or symbolic link under its own
-//! workspace, at any moment, including between two system calls the satellite
-//! makes. A path that is resolved to an absolute location, checked, and then
-//! opened by name is a race the agent can win: swap a directory for a link to
-//! `/` in the gap and the satellite, running as root, reads or writes wherever
-//! the link points.
-//!
-//! So nothing here opens a path by name. The thread's directory is opened once,
-//! and every component below it is opened *relative to the directory handle
-//! above it*, with `O_NOFOLLOW`, one at a time. A symbolic link anywhere on the
-//! way is refused rather than followed, whatever it points at, and there is no
-//! window in which a swapped component changes what a handle already refers to.
+//! Every path is walked by [`super::confined`], one component at a time from the
+//! thread's directory, never through a symbolic link.
 //!
 //! | Refused | Answer |
 //! |---|---|
@@ -30,10 +24,6 @@
 //! | any component, or the file itself, is a symbolic link | `400 WORKSPACE_PATH_INVALID` |
 //! | nothing at the path, for a read | `404 WORKSPACE_FILE_NOT_FOUND` |
 //! | a directory, FIFO, socket, or device at the path or in its way | `409 WORKSPACE_FILE_NOT_REGULAR` |
-//!
-//! A read opens the file with `O_NONBLOCK` as well, because an agent can leave a
-//! FIFO where a file was expected and a blocking open on one waits forever for a
-//! writer that never comes. The type is checked on the open handle afterwards.
 //!
 //! # A write lands whole or not at all
 //!
@@ -49,8 +39,13 @@
 //! byte is written, and the stream is counted as it arrives, so a body cannot
 //! write past what it declared.
 
+use super::confined::{self, FileError, components};
+use crate::api::Protobuf;
 use crate::{Satellite, contract_error, protobuf};
-use arsox_sdk::proto::artifact::v1::WorkspaceFileWritten;
+use arsox_sdk::proto::artifact::v1::{
+    ListWorkspaceFilesRequest, ListWorkspaceFilesResponse, WorkspaceFile, WorkspaceFileWritten,
+};
+use arsox_sdk::proto::common::v1::{PageRequest, PageResponse};
 use arsox_sdk::proto::error::v1::ErrorCode;
 use axum::Router;
 use axum::body::{Body, Bytes};
@@ -78,36 +73,9 @@ pub const MAX_WRITE_BYTES: u64 = 5 * 1024 * 1024 * 1024;
 /// enough that many concurrent downloads hold a trivial amount of memory.
 const READ_CHUNK: usize = 64 * 1024;
 
-/// The name a write is staged under beside its destination, before the uuid.
-///
-/// A dot file, so a listing an agent glances at does not lead with it, and a
-/// fixed prefix, so an operator who finds one left by a satellite killed mid
-/// transfer knows what it is.
-const STAGING_PREFIX: &str = ".arsox-upload-";
-
-/// Why a workspace path could not be read or written.
-#[derive(Debug, thiserror::Error)]
-pub enum FileError {
-    /// The reason completes "the path ...".
-    #[error("the path {0}")]
-    InvalidPath(&'static str),
-
-    #[error("nothing is at that path")]
-    NotFound,
-
-    #[error("something other than a regular file is at that path or in its way")]
-    NotRegular,
-
-    #[error("the file is larger than the {MAX_WRITE_BYTES} bytes one write may carry")]
-    TooLarge,
-
-    #[error("the file could not be accessed: {0}")]
-    Io(#[from] std::io::Error),
-}
-
 impl FileError {
     /// The response a caller is given for this failure.
-    fn response(&self, path: &str) -> Response {
+    pub(crate) fn response(&self, path: &str) -> Response {
         let (status, code) = match self {
             Self::InvalidPath(_) => (StatusCode::BAD_REQUEST, ErrorCode::WorkspacePathInvalid),
             Self::NotFound => (StatusCode::NOT_FOUND, ErrorCode::WorkspaceFileNotFound),
@@ -130,37 +98,125 @@ impl FileError {
     }
 }
 
-/// Splits a workspace-relative path into the components it names.
+/// Where a listing starts, and how much of it a caller asked for.
+///
+/// `base` is prepended to the cursor, so a listing whose paths are relative to
+/// a directory, such as the artifacts listing, can hand out cursors in its own
+/// terms. A cursor is a path, and it is checked like one: a caller that could
+/// send `..` there could not escape anything, since it is only ever compared,
+/// but a cursor no listing produced is a bug worth saying so about.
 ///
 /// # Errors
 ///
-/// Returns [`FileError::InvalidPath`] for an empty or absolute path, for any
-/// empty, `.`, or `..` component, and for a NUL anywhere, which no filesystem
-/// name can hold.
-pub fn components(path: &str) -> Result<Vec<&str>, FileError> {
-    if path.is_empty() {
-        return Err(FileError::InvalidPath("is empty"));
-    }
+/// Answers `REQUEST_FIELD_INVALID` for a cursor that is not a relative path,
+/// boxed because a response is large and the refusal is the rare path.
+pub(crate) fn listing_page(
+    request: Option<PageRequest>,
+    base: &[String],
+) -> Result<confined::Page, Box<Response>> {
+    let request = request.unwrap_or_default();
 
-    if path.starts_with('/') {
-        return Err(FileError::InvalidPath(
-            "is absolute rather than relative to the workspace",
-        ));
-    }
+    let limit = match request.limit {
+        0 => crate::store::DEFAULT_PAGE,
+        asked => asked.min(crate::store::MAX_PAGE),
+    };
 
-    if path.contains('\0') {
-        return Err(FileError::InvalidPath("contains a NUL byte"));
-    }
+    let after = if request.cursor.is_empty() {
+        None
+    } else {
+        let pieces = confined::owned_components(&request.cursor).map_err(|error| {
+            Box::new(contract_error(
+                StatusCode::BAD_REQUEST,
+                ErrorCode::RequestFieldInvalid,
+                &format!("page.cursor {:?}: {error}", request.cursor),
+            ))
+        })?;
 
-    let pieces: Vec<&str> = path.split('/').collect();
+        Some(base.iter().cloned().chain(pieces).collect())
+    };
 
-    if pieces.iter().any(|piece| matches!(*piece, "" | "." | "..")) {
-        return Err(FileError::InvalidPath(
-            "has an empty, '.', or '..' component",
-        ));
-    }
+    Ok(confined::Page {
+        after,
+        limit: Some(usize::try_from(limit).unwrap_or(usize::MAX)),
+    })
+}
 
-    Ok(pieces)
+/// Lists the regular files in a thread's workspace, one page at a time.
+async fn list_files(
+    State(satellite): State<Arc<Satellite>>,
+    Path(thread_id): Path<String>,
+    Protobuf(request): Protobuf<ListWorkspaceFilesRequest>,
+) -> Response {
+    let directory = match thread_workspace(&satellite, &thread_id).await {
+        Ok(directory) => directory,
+        Err(response) => return response,
+    };
+
+    // One trailing separator is forgiven, because `repos/api/` is how a person
+    // writes a directory. Everything else about the prefix is checked like a
+    // file route's path.
+    let prefix_text = request
+        .path_prefix
+        .strip_suffix('/')
+        .unwrap_or(&request.path_prefix)
+        .to_owned();
+    let prefix = if prefix_text.is_empty() {
+        Vec::new()
+    } else {
+        match confined::owned_components(&prefix_text) {
+            Ok(prefix) => prefix,
+            Err(error) => return error.response(&prefix_text),
+        }
+    };
+
+    let page = match listing_page(request.page, &[]) {
+        Ok(page) => page,
+        Err(response) => return *response,
+    };
+
+    let listed =
+        tokio::task::spawn_blocking(move || confined::list(&directory, &prefix, &page)).await;
+
+    let listing = match listed {
+        Ok(Ok(listing)) => listing,
+        Ok(Err(error)) => return error.response(&prefix_text),
+        Err(panicked) => {
+            return FileError::Io(std::io::Error::other(panicked)).response(&prefix_text);
+        }
+    };
+
+    let next_cursor = if listing.more {
+        listing
+            .entries
+            .last()
+            .map(confined::Entry::joined)
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    let files = listing
+        .entries
+        .into_iter()
+        .map(|entry| WorkspaceFile {
+            // Under the directory rather than the directory itself, which a
+            // listing of regular files never reports anyway.
+            is_artifact: entry.path.len() > 1 && entry.path[0] == crate::artifacts::DIRECTORY,
+            path: entry.joined(),
+            size_bytes: entry.size_bytes,
+            modified_at: Some(crate::store::from_nanos(entry.modified_nanos)),
+        })
+        .collect();
+
+    protobuf(&ListWorkspaceFilesResponse {
+        files,
+        page: Some(PageResponse {
+            next_cursor,
+            // Counting every file would walk the whole tree on every page.
+            // Absent says "not computed" rather than claiming a total.
+            total: None,
+        }),
+    })
 }
 
 /// Streams a file out of a thread's workspace.
@@ -370,7 +426,7 @@ fn declared_length(headers: &HeaderMap) -> Result<u64, LengthRefusal> {
 }
 
 /// The workspace directory of a thread that exists.
-async fn thread_workspace(
+pub(crate) async fn thread_workspace(
     satellite: &Satellite,
     thread_id: &str,
 ) -> Result<std::path::PathBuf, Response> {
@@ -389,488 +445,10 @@ async fn thread_workspace(
 
 /// The file routes, to be mounted behind authentication.
 pub(crate) fn routes() -> Router<Arc<Satellite>> {
-    Router::new().route(
-        "/v1/threads/{thread_id}/files/{*path}",
-        get(read_file).put(write_file),
-    )
-}
-
-/// The descriptor-relative walk, on the platforms that have one.
-#[cfg(unix)]
-mod confined {
-    use super::{FileError, STAGING_PREFIX};
-    use rustix::fd::{AsFd, OwnedFd};
-    use rustix::fs::{AtFlags, FileType, Mode, OFlags};
-    use rustix::io::Errno;
-    use std::path::Path;
-
-    /// Directories created on the way to a written file.
-    const DIRECTORY_MODE: u32 = 0o755;
-
-    /// A written file. The agent owns it, so it can change this as it likes.
-    const FILE_MODE: u32 = 0o644;
-
-    /// Flags every directory in a walk is opened with.
-    fn directory_flags() -> OFlags {
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC
-    }
-
-    /// Opens the directory `pieces` names below `root`, creating what is
-    /// missing when `create` is set.
-    fn walk(root: &Path, pieces: &[String], create: bool) -> Result<OwnedFd, FileError> {
-        // The thread directory is the satellite's own: its parent is the
-        // workspace root, which the agent cannot write. It is still opened
-        // without following a link, which costs nothing.
-        let mut directory = match rustix::fs::open(root, directory_flags(), Mode::empty()) {
-            Ok(directory) => directory,
-            Err(Errno::NOENT) => return Err(FileError::NotFound),
-            Err(errno) => return Err(FileError::Io(errno.into())),
-        };
-
-        for piece in pieces {
-            directory = descend(&directory, piece, create)?;
-        }
-
-        Ok(directory)
-    }
-
-    /// Opens one directory below another, never through a link.
-    fn descend(directory: &OwnedFd, piece: &str, create: bool) -> Result<OwnedFd, FileError> {
-        match rustix::fs::openat(directory, piece, directory_flags(), Mode::empty()) {
-            Ok(child) => return Ok(child),
-            Err(Errno::NOENT) if create => {}
-            Err(errno) => return Err(classify(directory, piece, errno)),
-        }
-
-        match rustix::fs::mkdirat(directory, piece, Mode::from_raw_mode(DIRECTORY_MODE)) {
-            // Somebody else created it between the two calls, which the open
-            // below settles either way.
-            Ok(()) | Err(Errno::EXIST) => {}
-            Err(errno) => return Err(classify(directory, piece, errno)),
-        }
-
-        let child = rustix::fs::openat(directory, piece, directory_flags(), Mode::empty())
-            .map_err(|errno| classify(directory, piece, errno))?;
-
-        give_to_agent(&child)?;
-
-        Ok(child)
-    }
-
-    /// Names what an open that failed ran into.
-    ///
-    /// `O_NOFOLLOW` reports a link as `ELOOP`, and `O_DIRECTORY` reports a link
-    /// or a file as `ENOTDIR` depending on the kernel, so the entry itself is
-    /// looked at, without following it, to say which.
-    fn classify(directory: &OwnedFd, piece: &str, errno: Errno) -> FileError {
-        if errno == Errno::NOENT {
-            return FileError::NotFound;
-        }
-
-        match rustix::fs::statat(directory, piece, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(stat) => match FileType::from_raw_mode(stat.st_mode) {
-                FileType::Symlink => {
-                    FileError::InvalidPath("crosses a symbolic link, which is never followed")
-                }
-                // A directory that still would not open is not something the
-                // agent arranged, so it is reported as the failure it is.
-                FileType::Directory => FileError::Io(errno.into()),
-                // A file, FIFO, socket, or device where a directory or a
-                // file was needed.
-                _other => FileError::NotRegular,
-            },
-            Err(Errno::NOENT) => FileError::NotFound,
-            Err(_unreadable) => FileError::Io(errno.into()),
-        }
-    }
-
-    /// Opens a regular file for reading, returning it and its size.
-    pub(super) fn open_file(
-        root: &Path,
-        pieces: &[String],
-    ) -> Result<(std::fs::File, u64), FileError> {
-        let Some((leaf, parents)) = pieces.split_last() else {
-            return Err(FileError::InvalidPath("is empty"));
-        };
-
-        let directory = walk(root, parents, false)?;
-
-        // `O_NONBLOCK` so a FIFO left where a file was expected answers at once
-        // instead of waiting for a writer. It changes nothing for a regular file.
-        let flags = OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC;
-        let file = rustix::fs::openat(&directory, leaf.as_str(), flags, Mode::empty())
-            .map_err(|errno| classify(&directory, leaf, errno))?;
-
-        let stat = rustix::fs::fstat(&file).map_err(std::io::Error::from)?;
-        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
-            return Err(FileError::NotRegular);
-        }
-
-        let size = u64::try_from(stat.st_size).unwrap_or_default();
-
-        Ok((std::fs::File::from(file), size))
-    }
-
-    /// A write staged beside its destination, removed unless it is committed.
-    #[derive(Debug)]
-    pub(super) struct Staged {
-        directory: OwnedFd,
-        staging: String,
-        leaf: String,
-        created: bool,
-        committed: bool,
-    }
-
-    /// Creates the staged file a write streams into.
-    pub(super) fn stage(
-        root: &Path,
-        pieces: &[String],
-    ) -> Result<(Staged, std::fs::File), FileError> {
-        let Some((leaf, parents)) = pieces.split_last() else {
-            return Err(FileError::InvalidPath("is empty"));
-        };
-
-        let directory = walk(root, parents, true)?;
-
-        // Checked now so a write aimed at a directory or a link is refused
-        // before a byte is sent, rather than after the whole body arrived. The
-        // rename checks again, because the agent can change this meanwhile.
-        let created = match rustix::fs::statat(&directory, leaf.as_str(), AtFlags::SYMLINK_NOFOLLOW)
-        {
-            Ok(stat) => match FileType::from_raw_mode(stat.st_mode) {
-                FileType::RegularFile => false,
-                FileType::Symlink => {
-                    return Err(FileError::InvalidPath(
-                        "names a symbolic link, which is never written through",
-                    ));
-                }
-                _other => return Err(FileError::NotRegular),
-            },
-            Err(Errno::NOENT) => true,
-            Err(errno) => return Err(FileError::Io(errno.into())),
-        };
-
-        let staging = format!("{STAGING_PREFIX}{}", uuid::Uuid::now_v7());
-
-        let flags =
-            OFlags::WRONLY | OFlags::CREATE | OFlags::EXCL | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-        let file = rustix::fs::openat(
-            &directory,
-            staging.as_str(),
-            flags,
-            Mode::from_raw_mode(FILE_MODE),
+    Router::new()
+        .route("/v1/threads/{thread_id}/files", get(list_files))
+        .route(
+            "/v1/threads/{thread_id}/files/{*path}",
+            get(read_file).put(write_file),
         )
-        .map_err(std::io::Error::from)?;
-
-        let staged = Staged {
-            directory,
-            staging,
-            leaf: leaf.clone(),
-            created,
-            committed: false,
-        };
-
-        // After `staged` exists, so a failure here still removes the file.
-        give_to_agent(&file)?;
-
-        Ok((staged, std::fs::File::from(file)))
-    }
-
-    impl Staged {
-        /// Renames the staged file over its destination.
-        ///
-        /// Returns whether the write created the file rather than replacing one.
-        pub(super) fn commit(mut self) -> Result<bool, FileError> {
-            match rustix::fs::renameat(
-                &self.directory,
-                self.staging.as_str(),
-                &self.directory,
-                self.leaf.as_str(),
-            ) {
-                Ok(()) => {
-                    self.committed = true;
-                    Ok(self.created)
-                }
-                // Something that is not a file took the destination while the
-                // body was arriving.
-                Err(Errno::ISDIR | Errno::NOTDIR | Errno::NOTEMPTY) => Err(FileError::NotRegular),
-                Err(errno) => Err(FileError::Io(errno.into())),
-            }
-        }
-    }
-
-    /// Removes a staged file that never reached its destination.
-    ///
-    /// A single unlink on a handle the satellite already holds, so running it
-    /// synchronously on whichever thread drops this costs less than handing it
-    /// to a blocking pool.
-    impl Drop for Staged {
-        fn drop(&mut self) {
-            if self.committed {
-                return;
-            }
-
-            if let Err(errno) =
-                rustix::fs::unlinkat(&self.directory, self.staging.as_str(), AtFlags::empty())
-            {
-                tracing::warn!(
-                    event.name = "workspace.file.staging_left",
-                    file.name = self.staging,
-                    "could not remove a staged write that did not complete: {errno}",
-                );
-            }
-        }
-    }
-
-    /// Hands something the satellite created to the agent account, by handle.
-    fn give_to_agent(handle: impl AsFd) -> Result<(), FileError> {
-        crate::privilege::give_handle_to_agent(handle).map_err(FileError::Io)
-    }
-}
-
-/// The same operations, refused, where there is no descriptor-relative walk.
-#[cfg(not(unix))]
-mod confined {
-    use super::FileError;
-    use std::path::Path;
-
-    fn unsupported() -> FileError {
-        FileError::Io(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "workspace files are served only on Unix, where a path can be walked without \
-             following links",
-        ))
-    }
-
-    pub(super) fn open_file(
-        _root: &Path,
-        _pieces: &[String],
-    ) -> Result<(std::fs::File, u64), FileError> {
-        Err(unsupported())
-    }
-
-    #[derive(Debug)]
-    pub(super) struct Staged;
-
-    impl Staged {
-        pub(super) fn commit(self) -> Result<bool, FileError> {
-            Err(unsupported())
-        }
-    }
-
-    pub(super) fn stage(
-        _root: &Path,
-        _pieces: &[String],
-    ) -> Result<(Staged, std::fs::File), FileError> {
-        Err(unsupported())
-    }
-}
-
-#[cfg(all(test, unix))]
-mod tests {
-    use super::confined::{open_file, stage};
-    use super::*;
-    use std::io::{Read as _, Write as _};
-    use std::os::unix::fs::symlink;
-
-    /// A scratch workspace, removed when the test ends.
-    struct Scratch(std::path::PathBuf);
-
-    impl Scratch {
-        fn new() -> Self {
-            let root = std::env::temp_dir().join(format!("arsox-files-{}", uuid::Uuid::now_v7()));
-            std::fs::create_dir_all(&root).expect("should create the scratch workspace");
-            Self(root)
-        }
-    }
-
-    impl Drop for Scratch {
-        fn drop(&mut self) {
-            drop(std::fs::remove_dir_all(&self.0));
-        }
-    }
-
-    fn owned(path: &str) -> Vec<String> {
-        components(path)
-            .expect("a valid path")
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
-    }
-
-    fn read(root: &std::path::Path, path: &str) -> Result<String, FileError> {
-        let (mut file, size) = open_file(root, &owned(path))?;
-        let mut contents = String::new();
-        file.read_to_string(&mut contents).expect("readable");
-        assert_eq!(size, contents.len() as u64);
-        Ok(contents)
-    }
-
-    fn write(root: &std::path::Path, path: &str, contents: &str) -> Result<bool, FileError> {
-        let (staged, mut file) = stage(root, &owned(path))?;
-        file.write_all(contents.as_bytes()).expect("writable");
-        staged.commit()
-    }
-
-    #[test]
-    fn a_path_that_could_leave_the_workspace_is_refused_before_anything_opens() {
-        for hostile in [
-            "",
-            "/etc/passwd",
-            "..",
-            "../escape",
-            "repos/../../escape",
-            "./file",
-            "repos//file",
-            "repos/",
-            "nul\0byte",
-        ] {
-            assert!(
-                matches!(components(hostile), Err(FileError::InvalidPath(_))),
-                "{hostile:?} should be refused"
-            );
-        }
-
-        assert_eq!(
-            components("repos/api/.../out put.txt").expect("valid"),
-            ["repos", "api", "...", "out put.txt"]
-        );
-    }
-
-    #[test]
-    fn a_file_is_written_whole_and_read_back() {
-        let scratch = Scratch::new();
-
-        assert!(write(&scratch.0, "inbox/deep/hello.txt", "hello").expect("written"));
-        assert_eq!(
-            read(&scratch.0, "inbox/deep/hello.txt").expect("read"),
-            "hello"
-        );
-
-        // Replacing reports that nothing was created.
-        assert!(!write(&scratch.0, "inbox/deep/hello.txt", "again").expect("written"));
-        assert_eq!(
-            read(&scratch.0, "inbox/deep/hello.txt").expect("read"),
-            "again"
-        );
-
-        // No staged file is left beside it.
-        let names: Vec<String> = std::fs::read_dir(scratch.0.join("inbox/deep"))
-            .expect("listable")
-            .map(|entry| {
-                entry
-                    .expect("an entry")
-                    .file_name()
-                    .to_string_lossy()
-                    .into_owned()
-            })
-            .collect();
-        assert_eq!(names, ["hello.txt"]);
-    }
-
-    #[test]
-    fn a_write_that_is_never_committed_leaves_nothing_behind() {
-        let scratch = Scratch::new();
-
-        let (staged, mut file) = stage(&scratch.0, &owned("half.txt")).expect("staged");
-        file.write_all(b"half").expect("writable");
-        drop(staged);
-
-        assert_eq!(
-            std::fs::read_dir(&scratch.0).expect("listable").count(),
-            0,
-            "the staged file should be removed"
-        );
-    }
-
-    #[test]
-    fn a_symbolic_link_to_a_file_outside_is_neither_read_nor_written_through() {
-        let scratch = Scratch::new();
-        let outside = Scratch::new();
-        std::fs::write(outside.0.join("secret"), "outside").expect("written");
-
-        symlink(outside.0.join("secret"), scratch.0.join("link")).expect("linked");
-
-        assert!(matches!(
-            read(&scratch.0, "link"),
-            Err(FileError::InvalidPath(_))
-        ));
-        assert!(matches!(
-            write(&scratch.0, "link", "overwritten"),
-            Err(FileError::InvalidPath(_))
-        ));
-        assert_eq!(
-            std::fs::read_to_string(outside.0.join("secret")).expect("readable"),
-            "outside"
-        );
-    }
-
-    #[test]
-    fn a_symbolic_link_to_a_directory_in_the_middle_is_never_crossed() {
-        let scratch = Scratch::new();
-        let outside = Scratch::new();
-        std::fs::create_dir_all(outside.0.join("etc")).expect("created");
-        std::fs::write(outside.0.join("etc/passwd"), "outside").expect("written");
-
-        std::fs::create_dir_all(scratch.0.join("repos")).expect("created");
-        symlink(&outside.0, scratch.0.join("repos/escape")).expect("linked");
-
-        assert!(matches!(
-            read(&scratch.0, "repos/escape/etc/passwd"),
-            Err(FileError::InvalidPath(_))
-        ));
-        assert!(matches!(
-            write(&scratch.0, "repos/escape/etc/planted", "planted"),
-            Err(FileError::InvalidPath(_))
-        ));
-        assert!(!outside.0.join("etc/planted").exists());
-    }
-
-    #[test]
-    fn a_directory_or_a_fifo_is_not_a_regular_file() {
-        let scratch = Scratch::new();
-        std::fs::create_dir_all(scratch.0.join("folder")).expect("created");
-
-        assert!(matches!(
-            read(&scratch.0, "folder"),
-            Err(FileError::NotRegular)
-        ));
-        assert!(matches!(
-            write(&scratch.0, "folder", "contents"),
-            Err(FileError::NotRegular)
-        ));
-
-        // A FIFO answers at once rather than waiting forever for a writer.
-        rustix::fs::mkfifoat(
-            rustix::fs::CWD,
-            scratch.0.join("pipe"),
-            rustix::fs::Mode::from_raw_mode(0o600),
-        )
-        .expect("a fifo");
-        assert!(matches!(
-            read(&scratch.0, "pipe"),
-            Err(FileError::NotRegular)
-        ));
-
-        // A file where a directory is needed.
-        std::fs::write(scratch.0.join("plain"), "file").expect("written");
-        assert!(matches!(
-            read(&scratch.0, "plain/below"),
-            Err(FileError::NotRegular)
-        ));
-    }
-
-    #[test]
-    fn nothing_at_the_path_is_not_found() {
-        let scratch = Scratch::new();
-
-        assert!(matches!(
-            read(&scratch.0, "missing"),
-            Err(FileError::NotFound)
-        ));
-        assert!(matches!(
-            read(&scratch.0, "missing/deeper"),
-            Err(FileError::NotFound)
-        ));
-    }
 }
