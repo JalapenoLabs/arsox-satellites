@@ -15,6 +15,12 @@ host to satellite.
 The code is `src/relay.rs`, `src/relay/socket.rs`, `src/relay/mcp.rs`, and
 `src/workspace/files.rs`.
 
+A relayed server is the choice when the tools belong to the host application.
+When they have to run beside the workspace instead, such as an MCP server driving
+an editor that works on the thread's files, the thread declares a
+[service](./services.md) and an MCP server that names it, and the satellite runs
+both for each turn.
+
 ## Declaring relayed tools
 
 A thread lists them in `ThreadSettings.relayed_mcp_servers`. Each

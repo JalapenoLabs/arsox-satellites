@@ -31,10 +31,20 @@ class McpServer(_message.Message):
     NAME_FIELD_NUMBER: _ClassVar[int]
     URL_FIELD_NUMBER: _ClassVar[int]
     HEADERS_FIELD_NUMBER: _ClassVar[int]
+    SERVICE_FIELD_NUMBER: _ClassVar[int]
     name: str
     url: str
     headers: _containers.MessageMap[str, _common_pb2.Secret]
-    def __init__(self, name: _Optional[str] = ..., url: _Optional[str] = ..., headers: _Optional[_Mapping[str, _common_pb2.Secret]] = ...) -> None: ...
+    service: ServiceEndpoint
+    def __init__(self, name: _Optional[str] = ..., url: _Optional[str] = ..., headers: _Optional[_Mapping[str, _common_pb2.Secret]] = ..., service: _Optional[_Union[ServiceEndpoint, _Mapping]] = ...) -> None: ...
+
+class ServiceEndpoint(_message.Message):
+    __slots__ = ()
+    SERVICE_FIELD_NUMBER: _ClassVar[int]
+    PATH_FIELD_NUMBER: _ClassVar[int]
+    service: str
+    path: str
+    def __init__(self, service: _Optional[str] = ..., path: _Optional[str] = ...) -> None: ...
 
 class RelayedMcpServer(_message.Message):
     __slots__ = ()

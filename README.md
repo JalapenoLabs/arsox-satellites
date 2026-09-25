@@ -48,7 +48,7 @@ Serve the API over TLS whenever it is reachable outside a trusted network. The s
 
 **The satellite listens on 8080, and the image exposes it.** `docker run -p` is how a container's reachable address is decided, so nothing about running one changes. `ARSOX_PORT` overrides the listen port for the runs with no port mapping in front of them: a test suite starting two satellites at once, or a bare-metal process sharing a host. Use it there, and use the port mapping for containers. A value outside 1 to 65535, or one that is not a number at all, warns and falls back to 8080 rather than stopping the boot.
 
-**Neither is your LLM provider key.** An agent's environment carries no `ARSOX_*` variable and no provider credential. Model requests go through the satellite's own [LLM proxy](#the-model-axis), which attaches the real credential on the way out, so an agent holds a token that is worth nothing anywhere else and stops working when its turn ends. A key an agent can read is a key it can print into a log, commit to a repo, or spend outside every ceiling you set.
+**Neither is your LLM provider key.** An agent's environment carries no provider credential, and no `ARSOX_*` variable but the `ARSOX_SERVICE_*` addresses of the thread's own [services](#services-and-long-running-processes). Model requests go through the satellite's own [LLM proxy](#the-model-axis), which attaches the real credential on the way out, so an agent holds a token that is worth nothing anywhere else and stops working when its turn ends. A key an agent can read is a key it can print into a log, commit to a repo, or spend outside every ceiling you set.
 
 <!-- TODO: Enter code details about how to configure it -->
 <!-- TODO: Show SDK examples of how to use it -->
@@ -586,6 +586,13 @@ Each control gets its own code, because "denied" without saying which gate close
 |---|---|---|
 | `SETUP_FAILED` | no | the [setup script](#satellite-setup) exited nonzero, ran past its bound, or could not start; recorded as an incident with no thread |
 
+**Services**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `SERVICE_START_FAILED` | no | a declared service got no port, would not launch, exited before it was ready, or never passed its readiness probe; the turn went on without it |
+| `SERVICE_EXITED` | no | a ready service exited during the turn; `recovered` when a restart brought it back, `degraded` once the turn's restarts were spent |
+
 **Internal**
 
 | Code | Retryable | Meaning |
@@ -660,6 +667,7 @@ Every long-running operation has a bound, and every bound is configurable per th
 | single LLM request | 10 minutes | counts as an endpoint failure and triggers the retry or failover policy |
 | turn wall clock | unset | see [Budgets and cost ceilings](#budgets-and-cost-ceilings) |
 | harness idle (no output at all) | 15 minutes | the harness is considered hung and restarted once |
+| a service's readiness probe | 60 seconds, per service | the service is stopped, recorded as `SERVICE_START_FAILED`, and the turn goes on without it |
 
 ### Failure recovery
 
@@ -967,11 +975,11 @@ Enforced today:
 | Control | Default | How it is enforced |
 |---|---|---|
 | Token and cost ceilings | required | The Arsox LLM proxy, which every model request traverses. Usage is metered as it streams and the next request past a ceiling is refused before it reaches the provider. |
-| Credential isolation | always | `ARSOX_SECRET`, provider keys, and every `ARSOX_*` variable are scrubbed from the environment of every spawned process: harness, git, setup commands, and checkers alike. |
+| Credential isolation | always | `ARSOX_SECRET`, provider keys, and every `ARSOX_*` variable are scrubbed from the environment of every spawned process: harness, git, setup commands, checkers, and services alike. The only `ARSOX_*` an agent is given is `ARSOX_SERVICE_*`, minted per turn. |
 | Timeouts | documented defaults | Exec commands, model requests, and harness idle are bounded per thread by the satellite. See [Timeouts](#timeouts). |
 | Tool permissions | working posture | Thread permission settings reach the harness as launch flags. This layer is advisory: it shapes what the harness will do, and the exec broker below is what constrains it. |
 | Exec allowlist | preset, unbrokered | A thread that declares `exec: NONE` or `exec: CUSTOM` runs with a root-owned shim directory as its whole `PATH`. Commands outside the allowlist are refused by exact argv match, reported as `PERMISSION_COMMAND_DENIED`, and recorded as `blocked` incidents. Agents are unprivileged and the shims are root-owned, so no flag or prompt reaches them. **Scope, stated plainly**: this shapes name resolution, so an absolute path still runs and an allowed interpreter still executes anything. `PRESET` and an undeclared `exec` keep the full `PATH`. See [Deterministic enforcement](./docs/enforcement.md). |
-| Privilege separation | always, in the image | The satellite runs as root and every process it spawns drops to the unprivileged `arsox` account: harness, `git`, setup commands, and checkers. Off root, the deterministic layer does not engage and boot says so. |
+| Privilege separation | always, in the image | The satellite runs as root and every process it spawns drops to the unprivileged `arsox` account: harness, `git`, setup commands, checkers, and services. Off root, the deterministic layer does not engage and boot says so. |
 | Push at all | allowed | A root-owned `pre-push` hook, installed outside every worktree and pointed at by `core.hooksPath`. A thread that denies pushing refuses every push with `PERMISSION_PUSH_DENIED`, recorded as a `blocked` incident. **Scope, stated plainly**: the hook runs as the agent, because the push does, so `git push --no-verify` or a `core.hooksPath` the agent sets on its own command line gets around it. What it holds is every push that does not set out to disable it. See [Deterministic enforcement](./docs/enforcement.md). |
 | Protected branches | none | The same hook, matching the ref as it will exist on the remote, so deleting a protected branch is refused exactly like writing to one. `PERMISSION_BRANCH_PROTECTED` carries `details.ref`. Same scope as the row above. |
 | Network egress | unspecified, ungated | A thread that declares `web` or names `additional_domains` has its agents pointed at the Arsox egress proxy, which decides every request on the host it names. A denied host is answered 403 with `PERMISSION_DOMAIN_DENIED` and recorded as a `blocked` incident carrying `details.host`. No TLS is intercepted: a `CONNECT` names its host, which is exactly what a domain list can express. **Scope, stated plainly**: pointing a process at a proxy is an environment variable, so a process can unset it and Node's built-in `fetch` never read it. Closing that needs the route closure, which is deployment configuration and is written out in [Deterministic enforcement](./docs/enforcement.md#the-route-closure-is-deployment-configuration). A thread that declared nothing reaches the network as it always has. A gated thread is admitted to the exact host of every [MCP server](#mcp) it declared. |
@@ -1173,47 +1181,37 @@ All of this can be disabled, leaving the agents to use their own judgment. That 
 
 ## Services and long-running processes
 
-Three members each run `yarn dev` and two of them fail to bind port 3000. This is the most predictable way a parallel team wastes a turn, and it is worth designing for rather than hoping the agents coordinate.
-
-The reframe that makes it tractable: **two members running `yarn dev` is not a port conflict, it is a duplicate nobody wanted.** They do not each need a dev server. They need one dev server they can both reach. Arsox solves it by making that the only outcome available.
-
-### Declared services
-
-Declare long-running processes in [repo settings](#repo-settings), alongside setup commands and checkers:
+Some work needs a helper running beside the agent rather than a command the agent runs: a headless editor bridge and the MCP server that talks to it, a dev server a browser is pointed at. Declare those as **services**, on the thread:
 
 ```typescript
 services: [
   {
-    name: 'web',
-    command: 'yarn dev',
-    port: 3000,
-    readyWhen: { httpGet: '/health', timeoutSeconds: 120 },
-    isolation: 'shared'
+    name: 'blender',
+    command: 'blender --background --python bridge.py -- --port "$PORT"',
+    readyWhen: { httpGet: '/health', timeout: { seconds: 120n } }
   }
+],
+mcpServers: [
+  { name: 'blender', service: { service: 'blender', path: '/mcp' } }
 ]
 ```
 
-A declared service is **started once per thread, not once per member.** It starts lazily on first use, so a turn that never touches the frontend never pays for a dev server. Arsox reference-counts holders, health-checks with `readyWhen` before handing anything back, and every member receives the address in its environment:
+**Every turn gets its own set, and none outlives it.** Before a turn's harness starts, the satellite starts the thread's services in declaration order, each on a loopback port of its own and each waiting on its readiness probe before the next starts. When the turn ends, however it ends, it stops every one of them, taking the whole process group with it. Two threads running at once therefore never share a service process or anything it holds in memory, and a thread idling for a week holds no process at all. The cost is that in-memory state does not survive from one turn to the next; anything worth keeping belongs in the workspace.
+
+Every service is told its own port as `PORT`. Every service after it, and the harness, are told where it listens:
 
 ```
-ARSOX_SERVICE_WEB_URL=http://127.0.0.1:3000
+ARSOX_SERVICE_BLENDER_PORT=41873
+ARSOX_SERVICE_BLENDER_URL=http://127.0.0.1:41873
 ```
 
-Members are told to use that variable rather than assume a port. Service stdout and stderr stream as `service.log` events and are readable on disk, so an agent debugging a failed request can read the server's side of it.
+Leave `port` out and the satellite assigns a free one per turn, leased so no other turn on the satellite is handed it; name one and you get exactly that port, or a `SERVICE_START_FAILED` incident when something already holds it. An [MCP server](#mcp) can name a service instead of a URL and is rendered at the service's port for both harnesses.
 
-If `readyWhen` never passes, the member that asked gets a failure carrying the log tail rather than a timeout with no explanation. Services idle-time out, and are torn down with the thread.
+A service that never becomes ready is stopped and recorded as a `degraded` `SERVICE_START_FAILED` incident carrying its log tail, and the turn goes on without it. One that exits after it was ready is restarted up to three times per turn. Service output streams as `service.log` events unless you turn them off.
 
-### Ad-hoc long-running commands
+**This separates state; it is not a security boundary.** Every thread's agent runs as the same unprivileged account in the same network namespace, so an agent can dial another concurrently running thread's service on its loopback port. A service that must not be reachable from another thread should demand a credential its own thread holds. Per-member network namespaces are the roadmap for a real boundary.
 
-Agents will still run things you did not declare. The [exec broker](#permissions) already sees every command, so it handles this without the agents having to cooperate.
-
-A command that has not exited and is listening on a port gets promoted to a service automatically, keyed by repo plus normalized command. **The first member to run it gets a process. Every later member running the same command gets the first one's URL instead of a second process.** No coordination, no negotiation, no second server, and no port collision, because the second one is never started.
-
-### When members genuinely need their own
-
-Set `isolation: 'per-member'` and each member gets its own instance inside its own network namespace. Hardcoded ports stop mattering, because member A's `:3000` and member B's `:3000` are different sockets.
-
-This is the escape hatch, not the default, and it costs real memory: N copies of your dev server rather than one. Reach for it when instances must not share state, such as a test suite that truncates a database on boot.
+A service declared on a repo, in `Repo.services`, is refused at thread creation. The details, and the reasoning behind each, are in [the services doc](./docs/services.md).
 
 ## Virtual browser
 
@@ -1233,7 +1231,7 @@ Arsox provides browser control as [MCP](#mcp) tools: navigate, click, type, resi
 
 **Each member gets its own browser context, not its own browser process.** Contexts are isolated in cookies, storage, and session while sharing one Chrome, which keeps memory sane when several members are looking at pages at once.
 
-The browser points at [declared services](#declared-services) through the same `ARSOX_SERVICE_*` addresses, so "run the app and look at it" is two features composing rather than one feature reimplementing the other.
+The browser points at [declared services](#services-and-long-running-processes) through the same `ARSOX_SERVICE_*` addresses, so "run the app and look at it" is two features composing rather than one feature reimplementing the other.
 
 ### Screenshots and artifacts
 
@@ -1475,7 +1473,8 @@ A server is a remote MCP server spoken to over **streamable HTTP**. A local stdi
 |---|---|
 | the list | at most 16 servers, names unique ignoring case |
 | `name` | 1 to 64 of `A-Z a-z 0-9 _ -`, and not starting with `arsox`, which is reserved for Arsox's own tools |
-| `url` | `http` or `https`, with a host, no credentials in it, no `${`, and at most 2048 characters |
+| `url` | `http` or `https`, with a host, no credentials in it, no `${`, and at most 2048 characters; empty when `service` is set |
+| `service` | instead of `url`: a service the thread declares, and a path starting with `/`, rendered as `http://127.0.0.1:<port><path>` |
 | `headers` | at most 8 per server, valid HTTP header names of at most 128 characters, unique ignoring case |
 | a header value | at most 4096 bytes, with no line break and no NUL |
 
@@ -1483,7 +1482,7 @@ A server is a remote MCP server spoken to over **streamable HTTP**. A local stdi
 
 **A Claude thread with servers loads only those servers.** A repo's own `.mcp.json` would otherwise connect without asking. Codex has no equivalent switch, so its own configuration still applies. The agents may call every tool a declared server offers, including under a restricted `exec` policy.
 
-**A thread with a web policy can reach its servers without naming them.** Each server's exact host is admitted to the [egress proxy](./docs/enforcement.md#a-declared-mcp-servers-host-is-admitted-exactly), and nothing beneath it. A server on loopback never goes through the proxy at all.
+**A thread with a web policy can reach its servers without naming them.** Each server's exact host is admitted to the [egress proxy](./docs/enforcement.md#a-declared-mcp-servers-host-is-admitted-exactly), and nothing beneath it. A server on loopback, including every server a [service](#services-and-long-running-processes) runs, never goes through the proxy at all.
 
 The details, and the reasoning behind each, are in [the harness doc](./docs/harness.md#mcp-servers-reach-the-harness-as-launch-arguments).
 
@@ -1515,30 +1514,34 @@ Each turn runs through a fixed stack.
 2. Arsox provisions the workspace: clones repos and the [agents repo](#agents-repo), prefetches [issues and tickets](#issue-and-ticket-prefetch), assembles `AGENTS.md`, and runs setup commands
 3. A turn starts (SDK call)
 4. If plan mode is enabled, a plan agent works through a plan and awaits review. It may also decide no plan is needed and skip this step.
-5. A commander is spawned, ingests the job, and spawns its team. Each member receives its own worktree.
-6. The team works, integrating through the commander's queue as they go. [Services](#services-and-long-running-processes) start lazily here, on first use.
-7. The team despawns
-8. Automated checkers run. Failures return to the commander to reassign. Checkers may be failing for reasons the agents deliberately accept, so the commander can skip them. A skip applies to this turn only and never carries into future turns.
-9. Automated self-review runs, if enabled
-10. Auto squash or merge runs, if enabled
-11. The commander scans for artifacts
-12. Artifacts upload to the SDK, if the SDK wants them returned automatically
-13. Suggestions stage runs, if enabled
-14. [PR watching](#watching-pull-requests) begins, if enabled. The turn ends; the thread stays alive until the watch resolves.
+5. The thread's [services](#services-and-long-running-processes) start, in declaration order, each ready before the next.
+6. A commander is spawned, ingests the job, and spawns its team. Each member receives its own worktree.
+7. The team works, integrating through the commander's queue as they go.
+8. The team despawns
+9. Automated checkers run. Failures return to the commander to reassign. Checkers may be failing for reasons the agents deliberately accept, so the commander can skip them. A skip applies to this turn only and never carries into future turns.
+10. Automated self-review runs, if enabled
+11. Auto squash or merge runs, if enabled
+12. The commander scans for artifacts
+13. Artifacts upload to the SDK, if the SDK wants them returned automatically
+14. Suggestions stage runs, if enabled
+15. The thread's services stop, however the turn ended
+16. [PR watching](#watching-pull-requests) begins, if enabled. The turn ends; the thread stays alive until the watch resolves.
 
 **A new turn on an existing thread:**
 1. A turn starts (SDK call)
 2. A plan agent is created with fresh context and analyzes the turn plus history. It decides whether a plan is needed, and creates one if so.
-3. The commander is spawned with its previous context intact and spawns its team. The commander chooses per member whether that member starts with a clean slate or with its previous context.
-4. The team works, integrating as before. Services already running from a prior turn are reused rather than restarted.
-5. The team despawns
-6. Automated checkers run, as above
-7. Automated self-review runs, if enabled
-8. Auto squash or merge runs, if enabled
-9. The commander scans for artifacts
-10. Artifacts upload to the SDK, if requested
-11. Suggestions stage runs, if enabled
-12. PR watching begins, if enabled
+3. The thread's services start again, fresh: nothing from a prior turn is still running
+4. The commander is spawned with its previous context intact and spawns its team. The commander chooses per member whether that member starts with a clean slate or with its previous context.
+5. The team works, integrating as before.
+6. The team despawns
+7. Automated checkers run, as above
+8. Automated self-review runs, if enabled
+9. Auto squash or merge runs, if enabled
+10. The commander scans for artifacts
+11. Artifacts upload to the SDK, if requested
+12. Suggestions stage runs, if enabled
+13. The thread's services stop
+14. PR watching begins, if enabled
 
 While the satellite's [setup script](#satellite-setup) is running, both stacks wait at their first satellite step: provisioning does not start and no turn is claimed until it finishes.
 

@@ -12,14 +12,36 @@ import "arsox/common/v1/common.proto";
 // despawn, request_integration, and override_redaction. Those are MCP schemas
 // offered to the agents rather than part of this contract, so they are not
 // defined anywhere in these files.
+//
+// A server is reached at a literal `url`, or at one of the thread's own
+// services through `service`. Exactly one of the two is set.
 message McpServer {
   string name = 1;
+
+  // Where the server listens, over streamable HTTP. Empty when `service` is set.
   string url = 2;
 
   // Sent on every request to the server. Header values are credentials far more
   // often than not, so they carry the same type as every other credential and
   // come back redacted.
   map<string, arsox.common.v1.Secret> headers = 3;
+
+  // A server run by one of the thread's services, for an address that only
+  // exists once the turn has started it. Absent when `url` is set.
+  optional ServiceEndpoint service = 4;
+}
+
+// An MCP server served by one of the thread's own services.
+//
+// The satellite renders it as `http://127.0.0.1:<port><path>`, with the port the
+// service was given for the turn. Loopback, so an agent reaches it directly and
+// never through the egress proxy.
+message ServiceEndpoint {
+  // The `name` of a service declared in `ThreadSettings.services`.
+  string service = 1;
+
+  // The path the server answers on, starting with `/`, such as `/mcp`.
+  string path = 2;
 }
 
 // A server whose tools the host application answers itself, over the relay.

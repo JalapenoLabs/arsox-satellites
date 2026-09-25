@@ -193,7 +193,7 @@ refusing every unknown host would mean no SSH remote ever clones.
 wants a credential blocks on a terminal that is not there, and the satellite has
 no way to notice.
 
-Every spawned process, git and setup commands alike, goes through
+Every spawned process, git, setup commands, and services alike, goes through
 `harness::spawn::scrubbed_command`, which strips every `ARSOX_*` variable and
 every provider credential, and hands the child down to the unprivileged `arsox`
 account. The same scrub and the same drop a harness gets, for the same reasons.

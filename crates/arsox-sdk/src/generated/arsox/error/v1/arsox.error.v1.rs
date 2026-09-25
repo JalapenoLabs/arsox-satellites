@@ -159,6 +159,16 @@ pub enum ErrorCode {
     /// its exit code, and the tail of its output. Work proceeds without whatever
     /// the script was meant to install.
     SetupFailed = 1500,
+    /// Services, declared in `ThreadSettings.services` and started for each turn.
+    ///
+    /// A service did not become ready: it failed its readiness probe until the
+    /// probe's timeout, exited before it passed, or could not be given its port.
+    /// Recorded as a degraded incident carrying the log tail, and the turn goes on
+    /// without the service.
+    ServiceStartFailed = 1600,
+    /// A service that had become ready exited during the turn. Recovered when a
+    /// restart brought it back, degraded once the turn's restarts were spent.
+    ServiceExited = 1601,
 }
 impl ErrorCode {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -234,6 +244,8 @@ impl ErrorCode {
             Self::RelayClientReplaced => "ERROR_CODE_RELAY_CLIENT_REPLACED",
             Self::RelayNotDeclared => "ERROR_CODE_RELAY_NOT_DECLARED",
             Self::SetupFailed => "ERROR_CODE_SETUP_FAILED",
+            Self::ServiceStartFailed => "ERROR_CODE_SERVICE_START_FAILED",
+            Self::ServiceExited => "ERROR_CODE_SERVICE_EXITED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -306,6 +318,8 @@ impl ErrorCode {
             "ERROR_CODE_RELAY_CLIENT_REPLACED" => Some(Self::RelayClientReplaced),
             "ERROR_CODE_RELAY_NOT_DECLARED" => Some(Self::RelayNotDeclared),
             "ERROR_CODE_SETUP_FAILED" => Some(Self::SetupFailed),
+            "ERROR_CODE_SERVICE_START_FAILED" => Some(Self::ServiceStartFailed),
+            "ERROR_CODE_SERVICE_EXITED" => Some(Self::ServiceExited),
             _ => None,
         }
     }

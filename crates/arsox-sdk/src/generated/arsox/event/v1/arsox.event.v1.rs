@@ -474,28 +474,35 @@ pub struct CheckerResultEvent {
     #[prost(message, optional, tag="2")]
     pub result: ::core::option::Option<super::super::turn::v1::CheckerResult>,
 }
+/// A declared service passed its readiness probe and is serving.
+///
+/// Emitted once per start: again after a restart brings a service back within the
+/// same turn, with the same address.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServiceStarted {
+    /// The repo that declared the service. Empty for a service declared on the
+    /// thread, which is every service today: `Repo.services` is refused.
     #[prost(string, tag="1")]
     pub repo: ::prost::alloc::string::String,
     #[prost(string, tag="2")]
     pub service_name: ::prost::alloc::string::String,
-    /// The address handed to members as ARSOX_SERVICE_<NAME>_URL.
+    /// The address handed to the harness as ARSOX_SERVICE_<NAME>_URL.
     #[prost(string, tag="3")]
     pub url: ::prost::alloc::string::String,
     /// True when the exec broker promoted an undeclared long-running command to a
-    /// service rather than the thread declaring it. The first member to run the
-    /// command gets a process, and every later member running the same command gets
-    /// this URL instead of a second process. No coordination, no negotiation, and
-    /// no port collision, because the second server is never started.
+    /// service rather than the thread declaring it. Always false today: the broker
+    /// does not promote commands, and every service is declared.
     #[prost(bool, tag="4")]
     pub auto_promoted: bool,
-    /// Absent for a shared service. Present when isolation is per-member.
+    /// Absent for a shared service, which is every service today. Present when
+    /// isolation is per-member.
     #[prost(string, optional, tag="5")]
     pub member_id: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// A line of service output, so an agent debugging a failed request can read the
 /// server's side of it.
+///
+/// Emitted unless `StreamSettings.include_service_logs` is false.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServiceLog {
     #[prost(string, tag="1")]

@@ -15,10 +15,18 @@ export const file_arsox_event_v1_service: GenFile = /*@__PURE__*/
   fileDesc("ChxhcnNveC9ldmVudC92MS9zZXJ2aWNlLnByb3RvEg5hcnNveC5ldmVudC52MSJ+Cg5TZXJ2aWNlU3RhcnRlZBIMCgRyZXBvGAEgASgJEhQKDHNlcnZpY2VfbmFtZRgCIAEoCRILCgN1cmwYAyABKAkSFQoNYXV0b19wcm9tb3RlZBgEIAEoCBIWCgltZW1iZXJfaWQYBSABKAlIAIgBAUIMCgpfbWVtYmVyX2lkIl0KClNlcnZpY2VMb2cSFAoMc2VydmljZV9uYW1lGAEgASgJEisKB2NoYW5uZWwYAiABKA4yGi5hcnNveC5ldmVudC52MS5Mb2dDaGFubmVsEgwKBGxpbmUYAyABKAkqWQoKTG9nQ2hhbm5lbBIbChdMT0dfQ0hBTk5FTF9VTlNQRUNJRklFRBAAEhYKEkxPR19DSEFOTkVMX1NURE9VVBABEhYKEkxPR19DSEFOTkVMX1NUREVSUhACQnwKEmNvbS5hcnNveC5ldmVudC52MUIMU2VydmljZVByb3RvUAGiAgNBRViqAg5BcnNveC5FdmVudC5WMcoCDkFyc294XEV2ZW50XFYx4gIaQXJzb3hcRXZlbnRcVjFcR1BCTWV0YWRhdGHqAhBBcnNveDo6RXZlbnQ6OlYxYgZwcm90bzM");
 
 /**
+ * A declared service passed its readiness probe and is serving.
+ *
+ * Emitted once per start: again after a restart brings a service back within the
+ * same turn, with the same address.
+ *
  * @generated from message arsox.event.v1.ServiceStarted
  */
 export type ServiceStarted = Message<"arsox.event.v1.ServiceStarted"> & {
   /**
+   * The repo that declared the service. Empty for a service declared on the
+   * thread, which is every service today: `Repo.services` is refused.
+   *
    * @generated from field: string repo = 1;
    */
   repo: string;
@@ -29,7 +37,7 @@ export type ServiceStarted = Message<"arsox.event.v1.ServiceStarted"> & {
   serviceName: string;
 
   /**
-   * The address handed to members as ARSOX_SERVICE_<NAME>_URL.
+   * The address handed to the harness as ARSOX_SERVICE_<NAME>_URL.
    *
    * @generated from field: string url = 3;
    */
@@ -37,17 +45,16 @@ export type ServiceStarted = Message<"arsox.event.v1.ServiceStarted"> & {
 
   /**
    * True when the exec broker promoted an undeclared long-running command to a
-   * service rather than the thread declaring it. The first member to run the
-   * command gets a process, and every later member running the same command gets
-   * this URL instead of a second process. No coordination, no negotiation, and
-   * no port collision, because the second server is never started.
+   * service rather than the thread declaring it. Always false today: the broker
+   * does not promote commands, and every service is declared.
    *
    * @generated from field: bool auto_promoted = 4;
    */
   autoPromoted: boolean;
 
   /**
-   * Absent for a shared service. Present when isolation is per-member.
+   * Absent for a shared service, which is every service today. Present when
+   * isolation is per-member.
    *
    * @generated from field: optional string member_id = 5;
    */
@@ -64,6 +71,8 @@ export const ServiceStartedSchema: GenMessage<ServiceStarted> = /*@__PURE__*/
 /**
  * A line of service output, so an agent debugging a failed request can read the
  * server's side of it.
+ *
+ * Emitted unless `StreamSettings.include_service_logs` is false.
  *
  * @generated from message arsox.event.v1.ServiceLog
  */

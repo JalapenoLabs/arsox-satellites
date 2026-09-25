@@ -197,14 +197,29 @@ async fn create_thread(
         }
     }
 
+    // A service's name becomes variable names, its command runs before every
+    // turn, and a service declared on a repo would be a declaration nothing
+    // reads. Refused here, naming the field and the service, rather than
+    // discovered as a degraded incident on every turn the thread runs.
+    if let Err(reason) = crate::services::refusal(&settings) {
+        return contract_error(
+            StatusCode::BAD_REQUEST,
+            ErrorCode::RequestFieldInvalid,
+            &reason,
+        );
+    }
+
     // A server's name reaches a CLI's config keys and its tool names, and its
     // URL and headers reach the harness's launch. A relayed server's tools are
-    // shown to the model on every request. Refused here, naming the field and
-    // the server, rather than skipped at launch where nobody who could fix it
-    // is listening. The reason never carries a header value.
-    if let Err(reason) =
-        crate::harness::mcp::refusal(&settings.mcp_servers, &settings.relayed_mcp_servers)
-    {
+    // shown to the model on every request, and a server run by a service must
+    // name one the thread declares. Refused here, naming the field and the
+    // server, rather than skipped at launch where nobody who could fix it is
+    // listening. The reason never carries a header value.
+    if let Err(reason) = crate::harness::mcp::refusal(
+        &settings.mcp_servers,
+        &settings.relayed_mcp_servers,
+        &settings.services,
+    ) {
         return contract_error(
             StatusCode::BAD_REQUEST,
             ErrorCode::RequestFieldInvalid,

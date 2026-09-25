@@ -364,12 +364,12 @@ async fn drain<R: AsyncRead + Unpin>(pipe: &mut Option<R>, into: &mut Vec<u8>) {
     }
 }
 
-/// The shell a declared command is written for.
+/// The shell a declared command, or a service, is written for.
 ///
 /// The satellite image is Linux and `sh` is what these commands assume. The
 /// Windows arm exists so the same code path runs on a developer machine rather
 /// than being skipped there and first exercised in CI.
-const fn shell() -> (&'static str, &'static str) {
+pub(crate) const fn shell() -> (&'static str, &'static str) {
     if cfg!(windows) {
         ("cmd", "/C")
     } else {

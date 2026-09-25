@@ -616,39 +616,64 @@ impl WatchTrigger {
 }
 /// A long-running process the agents need rather than a command they run.
 ///
-/// Three members each running `yarn dev` is not a port conflict, it is a
-/// duplicate nobody wanted. They do not each need a dev server, they need one
-/// dev server they can both reach, and declaring it here makes that the only
-/// outcome available.
+/// Declared on the thread, in `ThreadSettings.services`. Before each turn's
+/// harness starts, the satellite starts the thread's services in declaration
+/// order, waiting for each to pass its readiness probe before starting the next,
+/// and it stops every one of them when the turn ends, however it ends. A turn
+/// therefore never shares a service process with another thread's turn, and
+/// nothing keeps running while a thread sits idle. State a service holds in
+/// memory does not survive from one turn to the next; anything worth keeping
+/// belongs in the workspace.
 ///
-/// Started lazily on first use, so a turn that never touches the frontend never
-/// pays for a dev server. Every member receives the address as
-/// ARSOX_SERVICE_<NAME>_URL and is told to use it rather than assume a port.
+/// Each service runs as the agent account, through `sh -c`, with the thread's
+/// workspace root as its working directory and the same environment a repo's
+/// setup commands get: the scrubbed base plus the thread's declared `env`. It is
+/// host configuration rather than anything an agent chose, so it is not brokered
+/// by the exec allowlist.
+///
+/// Every service is told its own port as `PORT`. Every service after it, and the
+/// harness, are told where it listens as `ARSOX_SERVICE_<NAME>_PORT` and
+/// `ARSOX_SERVICE_<NAME>_URL`, the second being `<http://127.0.0.1:<port>`.>
+/// `<NAME>` is `name` upper-cased with `-` written as `_`.
+///
+/// A service that never becomes ready is recorded as a degraded
+/// SERVICE_START_FAILED incident carrying its log tail, and the turn goes on
+/// without it. One that exits after it was ready is restarted a bounded number of
+/// times per turn.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Service {
+    /// 1 to 64 of `A-Z a-z 0-9 _ -`, unique within the thread once upper-cased with
+    /// `-` written as `_`, so each service has exactly one set of variable names.
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
+    /// Shell text, run through `sh -c`. Should listen on `$PORT`.
     #[prost(string, tag="2")]
     pub command: ::prost::alloc::string::String,
-    /// The port the service listens on inside the container.
+    /// The loopback port the service listens on. Absent has the satellite assign a
+    /// free one for each turn, which is what keeps two threads declaring the same
+    /// service from colliding. Present asks for that port exactly, from 1024 to
+    /// 65535, and a service whose fixed port is already taken is not started.
     #[prost(uint32, optional, tag="3")]
     pub port: ::core::option::Option<u32>,
     #[prost(message, optional, tag="4")]
     pub ready_when: ::core::option::Option<ReadinessProbe>,
+    /// Unspecified or SHARED. PER_MEMBER is refused; see ServiceIsolation.
     #[prost(enumeration="ServiceIsolation", tag="5")]
     pub isolation: i32,
 }
-/// How Arsox decides the service is up before handing its address to an agent.
+/// How Arsox decides the service is up before the harness starts.
 ///
-/// If the probe never passes, the member that asked gets a failure carrying the
-/// log tail rather than a timeout with no explanation.
+/// A probe that never passes records a degraded SERVICE_START_FAILED incident
+/// carrying the service's log tail, rather than a turn that waits with no
+/// explanation.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReadinessProbe {
-    /// Path polled on the service's port until it answers 2xx. Absent probes a
-    /// successful TCP connect to `port` instead.
+    /// Path polled on the service's port until it answers 2xx. Starts with `/`.
+    /// Absent probes a successful TCP connect to the port instead.
     #[prost(string, optional, tag="1")]
     pub http_get: ::core::option::Option<::prost::alloc::string::String>,
-    /// How long to keep probing. Absent uses the satellite's default.
+    /// How long to keep probing. Absent, zero, or negative uses the satellite's
+    /// default of 60 seconds.
     #[prost(message, optional, tag="2")]
     pub timeout: ::core::option::Option<super::super::common::v1::Duration>,
 }
@@ -657,14 +682,14 @@ pub struct ReadinessProbe {
 #[repr(i32)]
 pub enum ServiceIsolation {
     Unspecified = 0,
-    /// One instance per thread, reference counted across every member. The
-    /// default, and the reason three agents do not race to bind port 3000: the
-    /// second one is never started.
+    /// One instance per turn, shared by every agent in it. The default, and what
+    /// an unspecified isolation means. Two threads never share one: each turn
+    /// starts its own process on its own port.
     Shared = 1,
     /// One instance per member, each in its own network namespace, so hardcoded
-    /// ports stop mattering. The escape hatch, not the default: it costs N copies
-    /// of your dev server. Reach for it when instances must not share state, such
-    /// as a test suite that truncates a database on boot.
+    /// ports stop mattering and one instance cannot reach another. Not implemented:
+    /// a thread declaring it is refused with REQUEST_FIELD_INVALID. It is the
+    /// roadmap for isolation that is a boundary rather than a separation of state.
     PerMember = 2,
 }
 impl ServiceIsolation {
@@ -771,6 +796,8 @@ pub struct Repo {
     /// verification.
     #[prost(string, tag="6")]
     pub checker: ::prost::alloc::string::String,
+    /// Refused with REQUEST_FIELD_INVALID when not empty. Services are declared on
+    /// the thread, in `ThreadSettings.services`, and started for each of its turns.
     #[prost(message, repeated, tag="7")]
     pub services: ::prost::alloc::vec::Vec<Service>,
 }
@@ -979,10 +1006,14 @@ pub struct TeamMode {
 /// despawn, request_integration, and override_redaction. Those are MCP schemas
 /// offered to the agents rather than part of this contract, so they are not
 /// defined anywhere in these files.
+///
+/// A server is reached at a literal `url`, or at one of the thread's own
+/// services through `service`. Exactly one of the two is set.
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct McpServer {
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
+    /// Where the server listens, over streamable HTTP. Empty when `service` is set.
     #[prost(string, tag="2")]
     pub url: ::prost::alloc::string::String,
     /// Sent on every request to the server. Header values are credentials far more
@@ -990,6 +1021,24 @@ pub struct McpServer {
     /// come back redacted.
     #[prost(map="string, message", tag="3")]
     pub headers: ::std::collections::HashMap<::prost::alloc::string::String, super::super::common::v1::Secret>,
+    /// A server run by one of the thread's services, for an address that only
+    /// exists once the turn has started it. Absent when `url` is set.
+    #[prost(message, optional, tag="4")]
+    pub service: ::core::option::Option<ServiceEndpoint>,
+}
+/// An MCP server served by one of the thread's own services.
+///
+/// The satellite renders it as `<http://127.0.0.1:<port><path>`,> with the port the
+/// service was given for the turn. Loopback, so an agent reaches it directly and
+/// never through the egress proxy.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ServiceEndpoint {
+    /// The `name` of a service declared in `ThreadSettings.services`.
+    #[prost(string, tag="1")]
+    pub service: ::prost::alloc::string::String,
+    /// The path the server answers on, starting with `/`, such as `/mcp`.
+    #[prost(string, tag="2")]
+    pub path: ::prost::alloc::string::String,
 }
 /// A server whose tools the host application answers itself, over the relay.
 ///
@@ -1183,5 +1232,9 @@ pub struct ThreadSettings {
     /// TurnOverrides.
     #[prost(message, optional, tag="29")]
     pub turn_defaults: ::core::option::Option<TurnOverrides>,
+    /// Long-running processes started before each turn's harness and stopped when
+    /// the turn ends, one set per turn. See Service.
+    #[prost(message, repeated, tag="30")]
+    pub services: ::prost::alloc::vec::Vec<Service>,
 }
 // @@protoc_insertion_point(module)

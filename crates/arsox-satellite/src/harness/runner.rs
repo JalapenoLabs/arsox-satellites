@@ -559,6 +559,13 @@ struct TurnContext {
     /// The proxy holds no database on purpose, so what it sees arrives here, at
     /// the one thing that owns the turn and can record against it.
     incidents: mpsc::UnboundedReceiver<Incident>,
+
+    /// The thread's services, started for this turn and stopped with it.
+    ///
+    /// Held beside the grant for the reason the grant is: every session in the
+    /// turn, a checker fix cycle and a restart included, reaches the same
+    /// processes on the same ports, and none of them outlives the turn.
+    services: crate::services::Running,
 }
 
 /// What the checker stage amounted to.
@@ -659,6 +666,10 @@ pub struct Runner {
 
     /// What every turn this runner drives is admitted to.
     gates: Gates,
+
+    /// The loopback ports every running turn's services hold, so no two turns
+    /// are ever handed the same one. See [`crate::services`].
+    service_ports: crate::services::Leases,
 }
 
 impl Runner {
@@ -679,6 +690,7 @@ impl Runner {
             capacity: Arc::new(Semaphore::new(max_concurrent_threads as usize)),
             collector,
             gates,
+            service_ports: crate::services::Leases::default(),
         }
     }
 
@@ -853,6 +865,12 @@ impl Runner {
     /// because the proxy grant, the meter, and the wall clock are all withdrawn
     /// or restarted at its edges. A fix cycle outside it would be a second turn
     /// wearing the first one's name, spending past the ceiling the first one set.
+    ///
+    /// The thread's services are started here, once the turn is open and before
+    /// its first session, and stopped here after the last one, on every ending
+    /// the work can have. The turn is not over, and its result is not recorded,
+    /// until they are gone. A turn future dropped before that, by a satellite
+    /// shutting down, kills them as it drops. See [`crate::services`].
     async fn drive(&self, claimed: &ClaimedTurn) -> Result<(TurnStatus, TurnResult), Failure> {
         let ceilings = Ceilings::from_budget(claimed.settings.budget.as_ref());
         let prepared = self.prepare(claimed, &ceilings).await?;
@@ -862,8 +880,36 @@ impl Runner {
         // included, and be withdrawn however the turn ends.
         let (mut context, _grant) = self.open(claimed, &ceilings, prepared).await;
 
+        // After `open`, so the time they take to become ready is counted on the
+        // turn's wall clock. It is not enforced until the first session reads
+        // the clock; each service's readiness timeout bounds startup instead.
+        context.services = crate::services::Running::start(
+            &claimed.settings,
+            crate::services::TurnScope {
+                store: self.store.clone(),
+                thread_id: claimed.turn.thread_id.clone(),
+                turn_id: claimed.turn.turn_id.clone(),
+                redactor: claimed.redactor.clone(),
+                working_dir: context.working_dir.clone(),
+            },
+            &self.service_ports,
+        )
+        .await;
+
+        let worked = self.work(claimed, &mut context).await;
+        context.services.stop().await;
+
+        worked
+    }
+
+    /// The turn's sessions and checkers, with everything they share open.
+    async fn work(
+        &self,
+        claimed: &ClaimedTurn,
+        context: &mut TurnContext,
+    ) -> Result<(TurnStatus, TurnResult), Failure> {
         let consumed = self
-            .session_with_restart(claimed, &mut context, &claimed.turn.prompt)
+            .session_with_restart(claimed, context, &claimed.turn.prompt)
             .await?;
 
         if consumed.cancelled {
@@ -917,8 +963,7 @@ impl Runner {
         // harness crashed or reported an error made no such claim, and resuming
         // the session that just failed would spend two more of them proving it.
         let checked = if turn_status == TurnStatus::Completed {
-            self.check(claimed, &mut context, &mut reported_result)
-                .await
+            self.check(claimed, context, &mut reported_result).await
         } else {
             Checked::skipped("the harness did not finish, so there was nothing to verify")
         };
@@ -1185,6 +1230,9 @@ impl Runner {
             redactor: claimed.redactor.clone(),
             crossings: reported,
             incidents: reported_incidents,
+            // Started once the turn is open, so the wall clock above counts the
+            // time they take. See `drive`.
+            services: crate::services::Running::default(),
         };
 
         let grant = RevokeOnDrop {
@@ -1418,6 +1466,7 @@ impl Runner {
                     proxy_url: ticket.proxy_url(),
                 }),
                 exec_broker: context.shims.clone(),
+                services: context.services.addresses().clone(),
             },
             // Read per turn rather than held on the runner, so a thread's
             // posture and its MCP servers are whatever its settings say now.

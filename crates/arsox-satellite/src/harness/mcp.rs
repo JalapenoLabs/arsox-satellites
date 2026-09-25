@@ -61,6 +61,16 @@
 //! two lists share one namespace. Codex is also told to wait on a relayed call
 //! for longer than the relay's own deadline, because its default is a minute.
 //!
+//! # Servers run by the thread's own services
+//!
+//! A server may name one of the thread's [services](crate::services) instead of
+//! a URL, for an address that only exists once a turn has started the service.
+//! It is rendered as `http://127.0.0.1:<port><path>` with the port the service
+//! was given, and is otherwise a declared server like any other: it counts
+//! toward `--strict-mcp-config`, is allowed by name under the narrow posture,
+//! and may carry headers. It opens no host on the egress allowlist, because
+//! loopback is reached directly.
+//!
 //! # Validation happens twice
 //!
 //! [`refusal`] runs at thread creation, where the caller is still listening and
@@ -70,7 +80,10 @@
 //! so the second gate is load-bearing rather than tidy.
 
 use crate::harness::spawn::AgentVar;
-use arsox_sdk::proto::settings::v1::{McpServer, RelayedMcpServer, RelayedTool};
+use crate::services::Addresses;
+use arsox_sdk::proto::settings::v1::{
+    McpServer, RelayedMcpServer, RelayedTool, Service, ServiceEndpoint,
+};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
@@ -158,11 +171,18 @@ const CODEX_RELAYED_TOOL_TIMEOUT: Duration =
 /// The two lists share one namespace, because both reach the agent as
 /// `mcp__<name>` and a CLI holds one server per name.
 ///
+/// A server reached through a service must name one of `services`, the
+/// thread's own declarations, exactly as it was declared.
+///
 /// # Errors
 ///
 /// Returns the first reason found, which is enough for a caller to fix and
 /// resubmit.
-pub fn refusal(servers: &[McpServer], relayed: &[RelayedMcpServer]) -> Result<(), String> {
+pub fn refusal(
+    servers: &[McpServer],
+    relayed: &[RelayedMcpServer],
+    services: &[Service],
+) -> Result<(), String> {
     const DECLARED: &str = "settings.mcp_servers";
     const RELAYED: &str = "settings.relayed_mcp_servers";
 
@@ -171,6 +191,20 @@ pub fn refusal(servers: &[McpServer], relayed: &[RelayedMcpServer]) -> Result<()
             return Err(format!(
                 "{field}: declares {count} servers, and a thread may declare at most \
                  {MAX_SERVERS}"
+            ));
+        }
+    }
+
+    for server in servers {
+        if let Some(endpoint) = server.service.as_ref()
+            && !services
+                .iter()
+                .any(|service| service.name == endpoint.service)
+        {
+            return Err(format!(
+                "{DECLARED}: server {:?} is reached through service {:?}, which \
+                 settings.services does not declare",
+                server.name, endpoint.service
             ));
         }
     }
@@ -237,7 +271,10 @@ fn name_refusal(name: &str) -> Option<String> {
 }
 
 /// Whether a name uses only the characters both CLIs accept in a tool name.
-fn is_identifier(name: &str) -> bool {
+///
+/// Also the rule a service name follows, since a service name becomes part of a
+/// variable name and nothing wider would survive the trip.
+pub(crate) fn is_identifier(name: &str) -> bool {
     name.chars()
         .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
 }
@@ -332,7 +369,11 @@ fn server_refusal(server: &McpServer) -> Option<String> {
         return Some(reason);
     }
 
-    if let Some(reason) = url_refusal(&server.url) {
+    let reached = match server.service.as_ref() {
+        None => url_refusal(&server.url),
+        Some(endpoint) => endpoint_refusal(&server.url, endpoint),
+    };
+    if let Some(reason) = reached {
         return Some(format!("server {name:?} {reason}"));
     }
 
@@ -363,8 +404,37 @@ fn server_refusal(server: &McpServer) -> Option<String> {
     None
 }
 
+/// Why a server reached through a service may not be used, completing "server
+/// `name` ...".
+///
+/// Exactly one of the two addresses, because a server with both would be
+/// rendered as one of them and the other would be a declaration that silently
+/// does nothing. Whether the service exists is the thread's question rather than
+/// the server's, and [`refusal`] asks it.
+fn endpoint_refusal(url: &str, endpoint: &ServiceEndpoint) -> Option<String> {
+    if !url.is_empty() {
+        return Some("sets both a url and a service, and must set exactly one".to_owned());
+    }
+
+    if endpoint.service.is_empty() {
+        return Some("is reached through a service but names none".to_owned());
+    }
+
+    crate::services::path_refusal(&endpoint.path)
+        .map(|reason| format!("is reached through a service at a path that {reason}"))
+}
+
 /// Why a server URL may not be used, completing "server `name` ...".
-fn url_refusal(url: &str) -> Option<&'static str> {
+fn url_refusal(url: &str) -> Option<String> {
+    if url.is_empty() {
+        return Some("needs a url, or a service to be reached through".to_owned());
+    }
+
+    literal_url_refusal(url).map(str::to_owned)
+}
+
+/// The rule a literal server URL follows.
+fn literal_url_refusal(url: &str) -> Option<&'static str> {
     if url.len() > MAX_URL {
         return Some("has a URL longer than 2048 characters");
     }
@@ -442,16 +512,26 @@ struct HeaderBinding<'a> {
     value: &'a str,
 }
 
+/// How the harness reaches one server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reached {
+    /// At the URL the thread declared.
+    Url,
+
+    /// On loopback, at a port one of the thread's services was given.
+    Service,
+
+    /// Served by the satellite for the host application to answer.
+    Relay,
+}
+
 /// One server a turn launches with, and its headers in a stable order.
 #[derive(Debug)]
 struct ServerBinding<'a> {
     name: &'a str,
     url: String,
     headers: Vec<HeaderBinding<'a>>,
-
-    /// Served by the satellite for the host application to answer, rather
-    /// than reached by the harness directly.
-    relayed: bool,
+    reached: Reached,
 }
 
 /// The servers one launch carries, decided once and rendered for each consumer.
@@ -481,11 +561,20 @@ impl<'a> Launch<'a> {
     /// `{grant}/mcp/{name}`, so they reach the launch only when `grant`, the
     /// model grant's base URL, is present. Declared servers come first, so a
     /// name both lists claim goes to the declared one.
+    ///
+    /// A declared server reached through a service is rendered at the port
+    /// `services` holds for it, and skipped with a warning when it holds none.
+    /// A service keeps its port for the whole turn whether or not it became
+    /// ready, so none means it was never leased one: its fixed port was taken,
+    /// or the kernel offered none, and a `SERVICE_START_FAILED` incident says
+    /// so. Settings stored before the API checked the service is declared are
+    /// the other way here.
     #[must_use]
     pub fn of(
         servers: &'a [McpServer],
         relayed: &'a [RelayedMcpServer],
         grant: Option<&str>,
+        services: &Addresses,
     ) -> Self {
         let mut seen = BTreeSet::new();
         let mut bound = Vec::new();
@@ -529,6 +618,10 @@ impl<'a> Launch<'a> {
                 continue;
             }
 
+            let Some((url, reached)) = address_of(server, services) else {
+                continue;
+            };
+
             let server_index = bound.len();
             let ordered: BTreeMap<&str, &str> = server
                 .headers
@@ -548,9 +641,9 @@ impl<'a> Launch<'a> {
 
             bound.push(ServerBinding {
                 name: &server.name,
-                url: server.url.clone(),
+                url,
                 headers,
-                relayed: false,
+                reached,
             });
         }
 
@@ -579,7 +672,7 @@ impl<'a> Launch<'a> {
                 name: &server.name,
                 url: format!("{}/mcp/{}", grant.trim_end_matches('/'), server.name),
                 headers: Vec::new(),
-                relayed: true,
+                reached: Reached::Relay,
             });
         }
 
@@ -677,7 +770,7 @@ impl<'a> Launch<'a> {
             args.push("-c".to_owned());
             args.push(format!("{prefix}.url={}", toml_string(&server.url)));
 
-            if server.relayed {
+            if server.reached == Reached::Relay {
                 args.push("-c".to_owned());
                 args.push(format!(
                     "{prefix}.tool_timeout_sec={}",
@@ -714,14 +807,14 @@ impl<'a> Launch<'a> {
     /// The exact host of every server this launch carries.
     ///
     /// For the egress allowlist, which admits these hosts and nothing beneath
-    /// them. Relayed servers are left out: they are served on the satellite's
-    /// loopback proxy, which an agent reaches directly rather than through the
+    /// them. Relayed servers and servers run by a service are left out: both
+    /// are on loopback, which an agent reaches directly rather than through the
     /// egress proxy, exactly as it reaches its model.
     #[must_use]
     pub fn hosts(&self) -> Vec<String> {
         self.servers
             .iter()
-            .filter(|server| !server.relayed)
+            .filter(|server| server.reached == Reached::Url)
             .filter_map(|server| {
                 let parsed = reqwest::Url::parse(&server.url).ok()?;
                 let host = parsed.host_str()?;
@@ -734,6 +827,32 @@ impl<'a> Launch<'a> {
             })
             .collect()
     }
+}
+
+/// Where a declared server is reached, and how, when it can be.
+///
+/// A server run by a service whose port `services` does not hold is withheld
+/// with a warning naming it, rather than rendered at an address nothing serves.
+fn address_of(server: &McpServer, services: &Addresses) -> Option<(String, Reached)> {
+    let Some(endpoint) = server.service.as_ref() else {
+        return Some((server.url.clone(), Reached::Url));
+    };
+
+    let Some(port) = services.port_of(&endpoint.service) else {
+        tracing::warn!(
+            event.name = "harness.mcp.service_unbound",
+            mcp.server = server.name,
+            mcp.service = endpoint.service,
+            "an MCP server was withheld from the agent: service {{mcp.service}} was given no \
+             port this turn",
+        );
+        return None;
+    };
+
+    Some((
+        format!("http://127.0.0.1:{port}{}", endpoint.path),
+        Reached::Service,
+    ))
 }
 
 /// A string as a quoted TOML basic string.
@@ -764,6 +883,7 @@ mod tests {
                     )
                 })
                 .collect::<HashMap<String, Secret>>(),
+            service: None,
         }
     }
 
@@ -781,7 +901,7 @@ mod tests {
 
     /// The refusal for declared servers alone, which most tests here are about.
     fn declared_refusal(servers: &[McpServer]) -> Result<(), String> {
-        refusal(servers, &[])
+        refusal(servers, &[], &[])
     }
 
     /// A relayed server offering the named tools, each with a valid schema.
@@ -806,14 +926,18 @@ mod tests {
     #[test]
     fn an_ordinary_relayed_server_is_accepted_beside_declared_ones() {
         assert_eq!(
-            refusal(&[storage()], &[relayed("elysium", &["upload", "download"])]),
+            refusal(
+                &[storage()],
+                &[relayed("elysium", &["upload", "download"])],
+                &[]
+            ),
             Ok(())
         );
     }
 
     #[test]
     fn a_name_is_unique_across_both_lists_whatever_its_case() {
-        let error = refusal(&[storage()], &[relayed("Storage", &["upload"])])
+        let error = refusal(&[storage()], &[relayed("Storage", &["upload"])], &[])
             .expect_err("should be refused");
 
         assert!(
@@ -826,7 +950,8 @@ mod tests {
     #[test]
     fn a_relayed_server_name_follows_the_declared_rule() {
         for name in ["", "has.dot", "arsox-tools"] {
-            let error = refusal(&[], &[relayed(name, &["upload"])]).expect_err("should be refused");
+            let error =
+                refusal(&[], &[relayed(name, &["upload"])], &[]).expect_err("should be refused");
             assert!(
                 error.starts_with("settings.relayed_mcp_servers:"),
                 "{error}"
@@ -837,12 +962,14 @@ mod tests {
     #[test]
     fn a_tool_needs_a_unique_identifier_name() {
         for tools in [&["has space"][..], &[""], &["upload", "upload"]] {
-            let error = refusal(&[], &[relayed("elysium", tools)]).expect_err("should be refused");
+            let error =
+                refusal(&[], &[relayed("elysium", tools)], &[]).expect_err("should be refused");
             assert!(error.contains("tool"), "{error}");
         }
 
         let long = "t".repeat(MAX_TOOL_NAME + 1);
-        refusal(&[], &[relayed("elysium", &[&long])]).expect_err("a long name should be refused");
+        refusal(&[], &[relayed("elysium", &[&long])], &[])
+            .expect_err("a long name should be refused");
     }
 
     #[test]
@@ -858,7 +985,7 @@ mod tests {
             let mut server = relayed("elysium", &["upload"]);
             server.tools[0].input_schema_json = schema.to_owned();
 
-            let error = refusal(&[], &[server]).expect_err("should be refused");
+            let error = refusal(&[], &[server], &[]).expect_err("should be refused");
             assert!(error.contains("schema"), "{schema:?}: {error}");
         }
 
@@ -867,7 +994,7 @@ mod tests {
             r#"{{"type":"object","description":"{}"}}"#,
             "d".repeat(MAX_INPUT_SCHEMA)
         );
-        refusal(&[], &[oversized]).expect_err("an oversized schema should be refused");
+        refusal(&[], &[oversized], &[]).expect_err("an oversized schema should be refused");
     }
 
     #[test]
@@ -875,29 +1002,29 @@ mod tests {
         let many_servers: Vec<RelayedMcpServer> = (0..=MAX_SERVERS)
             .map(|index| relayed(&format!("server-{index}"), &["upload"]))
             .collect();
-        refusal(&[], &many_servers).expect_err("too many servers should be refused");
+        refusal(&[], &many_servers, &[]).expect_err("too many servers should be refused");
 
         let tool_names: Vec<String> = (0..=MAX_RELAYED_TOOLS)
             .map(|index| format!("tool-{index}"))
             .collect();
         let borrowed: Vec<&str> = tool_names.iter().map(String::as_str).collect();
-        refusal(&[], &[relayed("elysium", &borrowed)])
+        refusal(&[], &[relayed("elysium", &borrowed)], &[])
             .expect_err("too many tools should be refused");
 
         let mut described = relayed("elysium", &["upload"]);
         described.tools[0].description = "d".repeat(MAX_TOOL_DESCRIPTION + 1);
-        refusal(&[], &[described]).expect_err("a long description should be refused");
+        refusal(&[], &[described], &[]).expect_err("a long description should be refused");
 
         let mut instructed = relayed("elysium", &["upload"]);
         instructed.instructions = "i".repeat(MAX_INSTRUCTIONS + 1);
-        refusal(&[], &[instructed]).expect_err("long instructions should be refused");
+        refusal(&[], &[instructed], &[]).expect_err("long instructions should be refused");
     }
 
     #[test]
     fn a_relayed_server_is_served_on_the_turns_grant_to_both_harnesses() {
         let declared = [storage()];
         let relayed = [relayed("elysium", &["upload"])];
-        let launch = Launch::of(&declared, &relayed, Some(GRANT));
+        let launch = Launch::of(&declared, &relayed, Some(GRANT), &Addresses::default());
 
         assert_eq!(launch.names(), ["storage", "elysium"]);
 
@@ -941,7 +1068,7 @@ mod tests {
     #[test]
     fn relayed_servers_alone_still_hold_claude_to_the_declared_set() {
         let relayed = [relayed("elysium", &["upload"])];
-        let args = Launch::of(&[], &relayed, Some(GRANT)).claude_args();
+        let args = Launch::of(&[], &relayed, Some(GRANT), &Addresses::default()).claude_args();
 
         assert!(args.contains(&"--strict-mcp-config".to_owned()), "{args:?}");
     }
@@ -950,7 +1077,11 @@ mod tests {
     fn a_launch_with_no_grant_serves_no_relayed_server() {
         let relayed = [relayed("elysium", &["upload"])];
 
-        assert!(Launch::of(&[], &relayed, None).names().is_empty());
+        assert!(
+            Launch::of(&[], &relayed, None, &Addresses::default())
+                .names()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -959,7 +1090,7 @@ mod tests {
         let relayed = [relayed("STORAGE", &["upload"])];
 
         assert_eq!(
-            Launch::of(&declared, &relayed, Some(GRANT)).names(),
+            Launch::of(&declared, &relayed, Some(GRANT), &Addresses::default()).names(),
             ["storage"]
         );
     }
@@ -1125,7 +1256,7 @@ mod tests {
     fn claude_is_handed_references_rather_than_values() {
         // argv is readable by anything on the host that can run `ps`. The value
         // travels in the environment and the command line names the variable.
-        let args = Launch::of(&[storage()], &[], None).claude_args();
+        let args = Launch::of(&[storage()], &[], None, &Addresses::default()).claude_args();
 
         assert_eq!(args[0], "--mcp-config");
         assert_eq!(args[2], "--strict-mcp-config");
@@ -1161,6 +1292,7 @@ mod tests {
             ],
             &[],
             None,
+            &Addresses::default(),
         )
         .environment();
 
@@ -1196,6 +1328,7 @@ mod tests {
             &[storage(), server("plain", "http://127.0.0.1:9000/mcp", &[])],
             &[],
             None,
+            &Addresses::default(),
         )
         .codex_args();
 
@@ -1216,9 +1349,21 @@ mod tests {
 
     #[test]
     fn a_thread_with_no_servers_changes_nothing_about_its_launch() {
-        assert!(Launch::of(&[], &[], None).claude_args().is_empty());
-        assert!(Launch::of(&[], &[], None).codex_args().is_empty());
-        assert!(Launch::of(&[], &[], None).environment().is_empty());
+        assert!(
+            Launch::of(&[], &[], None, &Addresses::default())
+                .claude_args()
+                .is_empty()
+        );
+        assert!(
+            Launch::of(&[], &[], None, &Addresses::default())
+                .codex_args()
+                .is_empty()
+        );
+        assert!(
+            Launch::of(&[], &[], None, &Addresses::default())
+                .environment()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1236,15 +1381,18 @@ mod tests {
             server("storage", "https://duplicate.example.com/mcp", &[]),
         ];
 
-        assert_eq!(Launch::of(&servers, &[], None).names(), ["storage"]);
+        assert_eq!(
+            Launch::of(&servers, &[], None, &Addresses::default()).names(),
+            ["storage"]
+        );
         assert!(
-            !Launch::of(&servers, &[], None)
+            !Launch::of(&servers, &[], None, &Addresses::default())
                 .codex_args()
                 .concat()
                 .contains("bad.name")
         );
         assert!(
-            !Launch::of(&servers, &[], None)
+            !Launch::of(&servers, &[], None, &Addresses::default())
                 .codex_args()
                 .concat()
                 .contains("duplicate")
@@ -1252,8 +1400,142 @@ mod tests {
 
         // Numbered after the skip, so the variables stay dense.
         assert_eq!(
-            Launch::of(&servers, &[], None).environment()[0].key,
+            Launch::of(&servers, &[], None, &Addresses::default()).environment()[0].key,
             "MCP_HEADER_SECRET_0_0"
+        );
+    }
+
+    /// A server run by the named service, answering on `path`.
+    fn served_by(name: &str, service: &str, path: &str) -> McpServer {
+        McpServer {
+            name: name.to_owned(),
+            service: Some(ServiceEndpoint {
+                service: service.to_owned(),
+                path: path.to_owned(),
+            }),
+            ..McpServer::default()
+        }
+    }
+
+    /// A service the thread declares, as far as the MCP rule reads one.
+    fn declared_service(name: &str) -> Service {
+        Service {
+            name: name.to_owned(),
+            command: "blender --background --python bridge.py".to_owned(),
+            ..Service::default()
+        }
+    }
+
+    /// Where a turn's services listen, as the runner hands them to a launch.
+    fn listening(services: &[(&str, u16)]) -> Addresses {
+        services
+            .iter()
+            .map(|(name, port)| crate::services::Address {
+                name: (*name).to_owned(),
+                port: *port,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_server_run_by_a_declared_service_is_accepted() {
+        assert_eq!(
+            refusal(
+                &[served_by("blender", "blender-mcp", "/mcp"), storage()],
+                &[],
+                &[declared_service("blender-mcp")],
+            ),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_server_run_by_a_service_the_thread_never_declared_is_refused() {
+        let error = refusal(
+            &[served_by("blender", "blender-mcp", "/mcp")],
+            &[],
+            &[declared_service("BLENDER-MCP")],
+        )
+        .expect_err("should be refused");
+
+        assert!(error.starts_with("settings.mcp_servers:"), "{error}");
+        assert!(error.contains("does not declare"), "{error}");
+    }
+
+    #[test]
+    fn a_server_sets_exactly_one_of_a_url_and_a_service() {
+        let services = [declared_service("blender-mcp")];
+
+        let both = McpServer {
+            url: "https://elysium.example.com/mcp".to_owned(),
+            ..served_by("blender", "blender-mcp", "/mcp")
+        };
+        let error = refusal(&[both], &[], &services).expect_err("both should be refused");
+        assert!(error.contains("exactly one"), "{error}");
+
+        let neither = McpServer {
+            name: "blender".to_owned(),
+            ..McpServer::default()
+        };
+        let error = refusal(&[neither], &[], &services).expect_err("neither should be refused");
+        assert!(error.contains("needs a url"), "{error}");
+    }
+
+    #[test]
+    fn a_service_path_starts_with_a_slash_and_stays_on_loopback() {
+        let services = [declared_service("blender-mcp")];
+
+        for path in ["", "mcp", "/has space", "/${HOME}"] {
+            let error = refusal(&[served_by("blender", "blender-mcp", path)], &[], &services)
+                .expect_err("should be refused");
+            assert!(error.contains("path"), "{path:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_server_run_by_a_service_is_rendered_on_its_port_for_both_harnesses() {
+        let servers = [served_by("blender", "blender-mcp", "/mcp"), storage()];
+        let launch = Launch::of(
+            &servers,
+            &[],
+            Some(GRANT),
+            &listening(&[("blender-mcp", 41_234)]),
+        );
+
+        // Named like any declared server, so the narrow posture allows it.
+        assert_eq!(launch.names(), ["blender", "storage"]);
+
+        let args = launch.claude_args();
+        let config: serde_json::Value =
+            serde_json::from_str(&args[1]).expect("the config should be JSON");
+        assert_eq!(
+            config["mcpServers"]["blender"]["url"],
+            "http://127.0.0.1:41234/mcp"
+        );
+        assert!(args.contains(&"--strict-mcp-config".to_owned()), "{args:?}");
+
+        let codex = launch.codex_args();
+        assert!(
+            codex.contains(&"mcp_servers.blender.url=\"http://127.0.0.1:41234/mcp\"".to_owned()),
+            "{codex:?}"
+        );
+        // Not relayed, so not given the relay's long wait.
+        assert!(
+            !codex.iter().any(|arg| arg.contains("tool_timeout_sec")),
+            "{codex:?}"
+        );
+
+        // Loopback, reached directly, so it opens no host on the allowlist.
+        assert_eq!(launch.hosts(), ["elysium.example.com"]);
+    }
+
+    #[test]
+    fn a_server_whose_service_was_given_no_port_is_withheld_rather_than_misaddressed() {
+        let servers = [served_by("blender", "blender-mcp", "/mcp"), storage()];
+
+        assert_eq!(
+            Launch::of(&servers, &[], None, &Addresses::default()).names(),
+            ["storage"]
         );
     }
 
@@ -1267,7 +1549,7 @@ mod tests {
         ];
 
         assert_eq!(
-            Launch::of(&servers, &[], None).hosts(),
+            Launch::of(&servers, &[], None, &Addresses::default()).hosts(),
             ["elysium.example.com", "127.0.0.1", "elysium-api"]
         );
     }

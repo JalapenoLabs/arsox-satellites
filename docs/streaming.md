@@ -86,6 +86,20 @@ Satellite-scoped incidents reach no thread socket, because they belong to no
 thread and these sockets carry thread content only. See
 [incidents](./incidents.md).
 
+## Service events
+
+A thread's [services](./services.md) put two event types on its stream:
+`service.started` once a service passes its readiness probe, carrying the URL the
+harness was given, and `service.log` for every line a service writes on either
+pipe. Both belong to the turn that started the service, and the last line a
+service writes on its way out lands before that turn's `turn.completed`.
+
+`service.log` is the first event type a stream setting switches off:
+`StreamSettings.include_service_logs` set to `false` keeps the lines off the
+stream, and absent includes them. The lines are still kept for the incident a
+failing service records. The other `include_*` settings are in the contract and
+not yet read.
+
 ## JSON frames
 
 Documented in the README as a debugging affordance for hand-driven clients, and

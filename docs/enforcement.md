@@ -25,7 +25,8 @@ Inside the image there are two identities:
 
 **Every child the satellite spawns is handed down to `arsox`**, with one
 exception named below: the host application's own setup script. Harness
-processes, `git`, a repo's setup commands, and checkers alike. The drop happens
+processes, `git`, a repo's setup commands, checkers, and the thread's
+[services](./services.md) alike. The drop happens
 in `harness::spawn::scrubbed_command`, which is the one function every spawn site
 already goes through for the credential scrub, so a new spawn site inherits both
 guarantees by construction rather than by somebody remembering.
@@ -303,12 +304,13 @@ Which leaves the engagement rule, in full:
 | `NONE` | yes | the shim directory, allowlist empty but for the floor |
 | `CUSTOM` | yes | the shim directory, allowlist as declared |
 
-### Setup commands and checkers are not brokered
+### Setup commands, checkers, and services are not brokered
 
-A repo's `setup_commands` and its `checker` come from the host application, not
-from an agent. They are configuration being executed as configured, and they keep
-the full `PATH`. They still drop to the agent account, so they cannot write
-anything root owns.
+A repo's `setup_commands` and its `checker`, and the thread's `services`, come
+from the host application, not from an agent. They are configuration being
+executed as configured, and they keep the full `PATH`. They still drop to the
+agent account, so they cannot write anything root owns. A service is not pointed
+at the egress proxy either, for the same reason a setup command is not.
 
 Brokering them would mean an operator's own `yarn install` had to appear in an
 allowlist written for the agent, which reads as a bug every single time.
@@ -648,6 +650,8 @@ Three limits, each a consequence of the rule rather than an exception to it:
   both, in `harness::mcp`, so a server that never reaches the agent never widens
   what the agent can reach.
 - **An IPv6 literal host is not admitted**, for the reason above.
+- **A server one of the thread's services runs opens no host.** It is rendered on
+  `127.0.0.1`, which the next paragraph covers.
 
 Both CLIs route their MCP traffic through the proxy variables: measured against
 Claude 2.1.235 and Codex 0.147.0, each sent its MCP requests to a stand-in proxy

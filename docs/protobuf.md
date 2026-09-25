@@ -39,7 +39,7 @@ proto/
                    prefetch            Prefetch, PrefetchInjection
                    secret              EnvVar, Redaction, RedactionMode, StarCount
                    permission          Permissions, WebAccess, ExecAccess
-                   tool                McpServer, RelayedMcpServer, RelayedTool, VirtualBrowser, Viewport
+                   tool                McpServer, ServiceEndpoint, RelayedMcpServer, RelayedTool, VirtualBrowser, Viewport
                    limits              StreamSettings, ResourceLimits, Timeouts
     thread/v1/     thread              Thread, ThreadState, thread endpoints
     turn/v1/       turn                TurnStatus, Turn, report vocabulary, endpoints
@@ -252,8 +252,8 @@ Each gets one **entry point**, not one file.
 | TypeScript | one per **proto file** | package `index.ts` barrel |
 | Python | one per **proto file** | PEP 420 namespace packages |
 
-`prost` merges every file in a package into a single `.rs`, so the 14 files of
-`arsox.settings.v1` still generate one `arsox.settings.v1.rs` holding all 32
+`prost` merges every file in a package into a single `.rs`, so the 15 files of
+`arsox.settings.v1` still generate one `arsox.settings.v1.rs` holding all 36
 messages. Splitting a package into more files costs the Rust output nothing.
 `prost` emits no module tree of its own, so `prost-crate` writes the `mod.rs`
 wiring that turns those per-package files into a crate the Rust SDK can depend

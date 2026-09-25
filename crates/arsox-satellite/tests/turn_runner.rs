@@ -2153,6 +2153,7 @@ fn with_mcp_server(base: ThreadSettings) -> ThreadSettings {
         mcp_servers: vec![arsox_sdk::proto::settings::v1::McpServer {
             name: "storage".to_owned(),
             url: "https://elysium.example.com/mcp/storage".to_owned(),
+            service: None,
             headers: [(
                 "Authorization".to_owned(),
                 arsox_sdk::proto::common::v1::Secret {
@@ -2219,4 +2220,433 @@ async fn a_declared_mcp_server_reaches_the_harness_with_its_header_in_the_enviro
             "{label}: the header value should reach the harness's environment"
         );
     }
+}
+
+/// Waits for a turn to reach a terminal state, for as long as `bound`.
+///
+/// Separate from [`settle`], whose bound suits a transcript replayed at once.
+/// A turn with services spends real time starting and stopping processes.
+#[cfg(unix)]
+async fn settle_within(
+    store: &Store,
+    thread_id: &str,
+    turn_id: &str,
+    bound: Duration,
+) -> TurnStatus {
+    let deadline = tokio::time::Instant::now() + bound;
+
+    while tokio::time::Instant::now() < deadline {
+        let (turn, _result) = store.turn(thread_id, turn_id).await.expect("should read");
+        let status = TurnStatus::try_from(turn.status).unwrap_or(TurnStatus::Unspecified);
+
+        if !matches!(status, TurnStatus::Queued | TurnStatus::Running) {
+            return status;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+
+    panic!("the turn never reached a terminal state within {bound:?}");
+}
+
+/// A service that serves its working directory on `$PORT`.
+///
+/// `python3` because every image and runner this suite meets carries one, and
+/// its `http.server` is a real listener with no dependencies. `exec` keeps the
+/// server as the group's leader, so the pid a test reads is the group.
+#[cfg(target_os = "linux")]
+fn file_server(name: &str, before: &str) -> arsox_sdk::proto::settings::v1::Service {
+    arsox_sdk::proto::settings::v1::Service {
+        name: name.to_owned(),
+        command: format!(
+            "{before} echo $$ > {name}.pid; exec python3 -m http.server --bind 127.0.0.1 \"$PORT\""
+        ),
+        ..Default::default()
+    }
+}
+
+/// Reads a small file a service or the stand-in harness wrote, once it exists.
+#[cfg(target_os = "linux")]
+async fn written(path: &std::path::Path) -> String {
+    for _attempt in 0..200 {
+        if let Ok(text) = std::fs::read_to_string(path)
+            && !text.trim().is_empty()
+        {
+            return text;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    panic!("{} was never written", path.display());
+}
+
+/// The value one `KEY=VALUE` line of a recorded environment holds.
+#[cfg(target_os = "linux")]
+fn recorded_value(environment: &str, key: &str) -> Option<String> {
+    environment
+        .lines()
+        .find_map(|line| line.strip_prefix(&format!("{key}=")))
+        .map(str::to_owned)
+}
+
+/// Every process on this host that has not exited, as its pid and its group.
+///
+/// Read from `/proc` rather than by signalling, so the answer is the same
+/// whether or not this test may signal what it finds. The fields of
+/// `/proc/<pid>/stat` are counted past the parenthesised command name, which may
+/// itself contain spaces: the state, the parent, then the process group.
+///
+/// A zombie is left out. It has exited and waits only to be reaped, and on a
+/// host whose init is slow to reap orphans it keeps its pid and its group long
+/// after anything could be said to be running.
+#[cfg(target_os = "linux")]
+fn living_processes() -> Vec<(u32, u32)> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+
+    entries
+        .flatten()
+        .filter_map(|entry| {
+            let pid = entry.file_name().to_str()?.parse::<u32>().ok()?;
+            let stat = std::fs::read_to_string(entry.path().join("stat")).ok()?;
+            let (_command, rest) = stat.rsplit_once(')')?;
+            let fields: Vec<&str> = rest.split_whitespace().collect();
+
+            let exited = matches!(fields.first(), Some(&"Z" | &"X"));
+            let group = fields.get(2)?.parse::<u32>().ok()?;
+
+            (!exited).then_some((pid, group))
+        })
+        .collect()
+}
+
+/// Whether any process still running is in `group`.
+#[cfg(target_os = "linux")]
+fn group_alive(group: u32) -> bool {
+    living_processes()
+        .iter()
+        .any(|(_pid, member_of)| *member_of == group)
+}
+
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn a_turns_services_start_before_the_harness_and_are_gone_when_it_ends() {
+    use arsox_sdk::proto::settings::v1::{McpServer, ServiceEndpoint};
+
+    let settings = ThreadSettings {
+        services: vec![
+            // A child left in the background is in the service's group without
+            // being its leader, which is what proves the whole group is stopped
+            // rather than only the process the satellite spawned.
+            file_server("files", "sleep 300 & echo $! > straggler.pid;"),
+            // Started second, so it is told where the first one listens.
+            file_server("second", "echo \"$ARSOX_SERVICE_FILES_URL\" > second.seen;"),
+        ],
+        mcp_servers: vec![McpServer {
+            name: "files-mcp".to_owned(),
+            service: Some(ServiceEndpoint {
+                service: "files".to_owned(),
+                path: "/mcp".to_owned(),
+            }),
+            ..Default::default()
+        }],
+        ..ThreadSettings::default()
+    };
+
+    let (harness, thread_id, turn_id) = start_prepared(
+        "run the probe [[record_env=services.environ]] [[record_argv=services.argv]] \
+         [[hang=2500]]",
+        settings,
+        |workspace, thread_id| {
+            let root = workspace.join(thread_id);
+            std::fs::create_dir_all(&root).expect("should create the workspace");
+            std::fs::write(root.join("marker.txt"), "served from this thread")
+                .expect("should write the marker");
+        },
+    )
+    .await;
+
+    let root = harness.workspace.path().join(&thread_id);
+
+    // The harness records its environment before it hangs, so while it hangs
+    // the services it was told about are up and serving this thread's files.
+    let environment = written(&root.join("services.environ")).await;
+    let url = recorded_value(&environment, "ARSOX_SERVICE_FILES_URL")
+        .expect("the harness should be told where the service listens");
+    let port = recorded_value(&environment, "ARSOX_SERVICE_FILES_PORT")
+        .expect("the harness should be told the service's port");
+    assert_eq!(url, format!("http://127.0.0.1:{port}"));
+    assert!(recorded_value(&environment, "ARSOX_SERVICE_SECOND_URL").is_some());
+
+    let served = reqwest::get(format!("{url}/marker.txt"))
+        .await
+        .expect("the service should be listening")
+        .text()
+        .await
+        .expect("should read the body");
+    assert_eq!(served, "served from this thread");
+
+    assert_eq!(
+        written(&root.join("second.seen")).await.trim(),
+        url,
+        "a later service is told where an earlier one listens"
+    );
+
+    let argv = written(&root.join("services.argv")).await;
+    assert!(
+        argv.contains(&format!("http://127.0.0.1:{port}/mcp")),
+        "an MCP server run by a service is rendered on its port: {argv}"
+    );
+
+    let leader: u32 = written(&root.join("files.pid"))
+        .await
+        .trim()
+        .parse()
+        .expect("the service should record its pid");
+    let straggler: u32 = written(&root.join("straggler.pid"))
+        .await
+        .trim()
+        .parse()
+        .expect("the service should record its background child");
+    assert!(group_alive(leader), "the service runs while the turn does");
+    assert!(
+        living_processes().contains(&(straggler, leader)),
+        "the background child is in the service's group"
+    );
+
+    assert_eq!(
+        settle_within(
+            &harness.store,
+            &thread_id,
+            &turn_id,
+            Duration::from_secs(30)
+        )
+        .await,
+        TurnStatus::Completed
+    );
+
+    // Stopped before the turn is recorded, so there is nothing to wait for.
+    assert!(
+        !group_alive(leader),
+        "the service's group outlived its turn"
+    );
+    assert!(
+        !living_processes()
+            .iter()
+            .any(|(pid, _group)| *pid == straggler),
+        "a child in the service's group outlived its turn"
+    );
+
+    assert_services_bracketed_the_harness(&harness.store, &thread_id, &url).await;
+
+    assert!(
+        incidents_coded(&harness.store, &thread_id, ErrorCode::ServiceStartFailed)
+            .await
+            .is_empty()
+    );
+}
+
+/// The stream a turn with two services leaves: both announced before the agent
+/// speaks, the first at `url`, and every line they wrote before the result.
+#[cfg(target_os = "linux")]
+async fn assert_services_bracketed_the_harness(store: &Store, thread_id: &str, url: &str) {
+    let events = store
+        .events_after(thread_id, 0, 1000)
+        .await
+        .expect("should replay");
+    let names: Vec<&str> = events.iter().map(|event| event.r#type.as_str()).collect();
+
+    let first_started = names
+        .iter()
+        .position(|name| *name == "service.started")
+        .expect("a ready service is announced");
+    let first_agent = names
+        .iter()
+        .position(|name| *name == "agent.message")
+        .expect("the transcript speaks");
+    assert!(
+        first_started < first_agent,
+        "services start before the harness: {names:?}"
+    );
+    assert_eq!(
+        names
+            .iter()
+            .filter(|name| **name == "service.started")
+            .count(),
+        2,
+        "{names:?}"
+    );
+
+    let announced: Vec<&str> = events
+        .iter()
+        .filter_map(|event| match &event.payload {
+            Some(Payload::ServiceStarted(started)) => Some(started.url.as_str()),
+            _other => None,
+        })
+        .collect();
+    assert!(announced.contains(&url), "{announced:?}");
+
+    // `http.server` logs every request it answers, so the one this test made
+    // reaches the stream as the service's own output.
+    assert!(
+        events.iter().any(|event| matches!(
+            &event.payload,
+            Some(Payload::ServiceLog(log)) if log.service_name == "files"
+                && log.line.contains("/marker.txt")
+        )),
+        "the service's output should reach the stream"
+    );
+
+    // The last service line lands before the turn's own result.
+    let completed = names
+        .iter()
+        .position(|name| *name == "turn.completed")
+        .expect("the turn completes");
+    let last_log = names
+        .iter()
+        .rposition(|name| *name == "service.log")
+        .expect("the service logged");
+    assert!(last_log < completed, "{names:?}");
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_service_that_never_becomes_ready_is_degraded_and_the_turn_goes_on() {
+    let settings = ThreadSettings {
+        services: vec![arsox_sdk::proto::settings::v1::Service {
+            name: "broken".to_owned(),
+            command: "echo the bridge could not load its addon; exit 3".to_owned(),
+            ..Default::default()
+        }],
+        ..ThreadSettings::default()
+    };
+
+    let (harness, thread_id, turn_id) = start_with("run the probe", settings).await;
+
+    assert_eq!(
+        settle_within(
+            &harness.store,
+            &thread_id,
+            &turn_id,
+            Duration::from_secs(30)
+        )
+        .await,
+        TurnStatus::Completed,
+        "a missing helper is not worth the turn"
+    );
+
+    let failed = incidents_coded(&harness.store, &thread_id, ErrorCode::ServiceStartFailed).await;
+    assert_eq!(failed.len(), 1, "{failed:?}");
+    assert_eq!(
+        failed[0].disposition,
+        i32::from(arsox_sdk::proto::incident::v1::Disposition::Degraded)
+    );
+
+    let details = failed[0].details.as_ref().expect("should carry evidence");
+    assert_eq!(text_field(details, "service"), Some("broken"));
+    assert!(
+        text_field(details, "output_tail")
+            .is_some_and(|tail| tail.contains("could not load its addon")),
+        "the log tail says why: {details:?}"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn a_service_that_exits_is_restarted_and_the_recovery_recorded() {
+    // Serves for a second on its first start and then exits, and serves for
+    // good on every start after that. The marker lives in the workspace, so a
+    // restart is a new process that can tell it is one.
+    let settings = ThreadSettings {
+        services: vec![arsox_sdk::proto::settings::v1::Service {
+            name: "flaky".to_owned(),
+            command: "if [ -e flaky.started ]; then \
+                          exec python3 -m http.server --bind 127.0.0.1 \"$PORT\"; \
+                      fi; \
+                      touch flaky.started; \
+                      timeout 1 python3 -m http.server --bind 127.0.0.1 \"$PORT\"; \
+                      exit 7"
+                .to_owned(),
+            ..Default::default()
+        }],
+        ..ThreadSettings::default()
+    };
+
+    let (harness, thread_id, turn_id) = start_with("run the probe [[hang=3500]]", settings).await;
+
+    assert_eq!(
+        settle_within(
+            &harness.store,
+            &thread_id,
+            &turn_id,
+            Duration::from_secs(30)
+        )
+        .await,
+        TurnStatus::Completed
+    );
+
+    let exited = incidents_coded(&harness.store, &thread_id, ErrorCode::ServiceExited).await;
+    assert_eq!(exited.len(), 1, "{exited:?}");
+    assert_eq!(
+        exited[0].disposition,
+        i32::from(arsox_sdk::proto::incident::v1::Disposition::Recovered),
+        "a restart that worked is recorded as one"
+    );
+
+    let events = harness
+        .store
+        .events_after(&thread_id, 0, 1000)
+        .await
+        .expect("should replay");
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.r#type == "service.started")
+            .count(),
+        2,
+        "announced again once it is back"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn service_logs_stay_off_the_stream_when_the_thread_declines_them() {
+    let settings = ThreadSettings {
+        services: vec![arsox_sdk::proto::settings::v1::Service {
+            name: "chatty".to_owned(),
+            command: "echo hello from the service; exec python3 -m http.server --bind 127.0.0.1 \"$PORT\""
+                .to_owned(),
+            ..Default::default()
+        }],
+        stream: Some(arsox_sdk::proto::settings::v1::StreamSettings {
+            include_service_logs: Some(false),
+            ..Default::default()
+        }),
+        ..ThreadSettings::default()
+    };
+
+    let (harness, thread_id, turn_id) = start_with("run the probe", settings).await;
+
+    assert_eq!(
+        settle_within(
+            &harness.store,
+            &thread_id,
+            &turn_id,
+            Duration::from_secs(30)
+        )
+        .await,
+        TurnStatus::Completed
+    );
+
+    let names: Vec<String> = harness
+        .store
+        .events_after(&thread_id, 0, 1000)
+        .await
+        .expect("should replay")
+        .into_iter()
+        .map(|event| event.r#type)
+        .collect();
+
+    assert!(names.contains(&"service.started".to_owned()), "{names:?}");
+    assert!(!names.contains(&"service.log".to_owned()), "{names:?}");
 }

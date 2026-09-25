@@ -46,6 +46,14 @@ pub const DEFAULT_LLM_REQUEST: Duration = Duration::from_mins(10);
 /// says nothing for a quarter of an hour has stopped rather than slowed.
 pub const DEFAULT_HARNESS_IDLE: Duration = Duration::from_mins(15);
 
+/// How long a service may take to pass its readiness probe.
+///
+/// A service's own `ready_when.timeout` overrides it. Long enough for an
+/// interpreter to import its world and bind, which is where a cold start spends
+/// its time, and short enough that a service which will never come up costs a
+/// turn a minute rather than its whole wall clock.
+pub const DEFAULT_SERVICE_READY: Duration = Duration::from_mins(1);
+
 /// The bounds one thread's operations run under.
 ///
 /// Resolved once from the thread's settings, then carried to the three places
@@ -107,7 +115,7 @@ impl Bounds {
 /// before it drew breath, which nobody types on purpose, and a negative one is
 /// not a span at all. Refusing them here means the enforcement sites never have
 /// to ask whether their bound is real.
-fn bound(
+pub(crate) fn bound(
     declared: Option<&arsox_sdk::proto::common::v1::Duration>,
     fallback: Duration,
 ) -> Duration {

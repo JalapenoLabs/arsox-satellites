@@ -156,6 +156,18 @@ enum ErrorCode {
   // its exit code, and the tail of its output. Work proceeds without whatever
   // the script was meant to install.
   ERROR_CODE_SETUP_FAILED = 1500;
+
+  // Services, declared in `ThreadSettings.services` and started for each turn.
+  //
+  // A service did not become ready: it failed its readiness probe until the
+  // probe's timeout, exited before it passed, or could not be given its port.
+  // Recorded as a degraded incident carrying the log tail, and the turn goes on
+  // without the service.
+  ERROR_CODE_SERVICE_START_FAILED = 1600;
+
+  // A service that had become ready exited during the turn. Recovered when a
+  // restart brought it back, degraded once the turn's restarts were spent.
+  ERROR_CODE_SERVICE_EXITED = 1601;
 }
 
 // The single error shape, on every transport.

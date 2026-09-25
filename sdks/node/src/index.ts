@@ -62,6 +62,7 @@ export { ThreadOrder, ThreadState } from './proto/arsox/thread/v1/thread_pb.js'
 export { SetupState } from './proto/arsox/satellite/v1/setup_pb.js'
 export { TurnOrder, TurnStatus } from './proto/arsox/turn/v1/turn_pb.js'
 export { Stage, StageDisposition } from './proto/arsox/turn/v1/result_pb.js'
+export { ServiceIsolation } from './proto/arsox/settings/v1/service_pb.js'
 
 // Schemas, for a consumer that needs to encode or decode a message itself.
 export { ThreadSettingsSchema } from './proto/arsox/settings/v1/settings_pb.js'
@@ -86,6 +87,14 @@ export type {
 } from './proto/arsox/satellite/v1/satellite_pb.js'
 export type { SetupStatus } from './proto/arsox/satellite/v1/setup_pb.js'
 export type { ThreadSettings } from './proto/arsox/settings/v1/settings_pb.js'
+export type {
+  ReadinessProbe,
+  Service
+} from './proto/arsox/settings/v1/service_pb.js'
+export type {
+  McpServer,
+  ServiceEndpoint
+} from './proto/arsox/settings/v1/tool_pb.js'
 export type { Thread, ThreadSummary } from './proto/arsox/thread/v1/thread_pb.js'
 export type { Turn } from './proto/arsox/turn/v1/turn_pb.js'
 export type { StageOutcome, TurnResult } from './proto/arsox/turn/v1/result_pb.js'

@@ -10,7 +10,18 @@ which is a silent defect in a billing-adjacent number.
 
 from __future__ import annotations
 
-from arsox_sdk import Duration, ThreadEvent, ThreadSettings, TokenUsage, TurnStatus
+from arsox_sdk import (
+    Duration,
+    McpServer,
+    ReadinessProbe,
+    Service,
+    ServiceEndpoint,
+    ServiceIsolation,
+    ThreadEvent,
+    ThreadSettings,
+    TokenUsage,
+    TurnStatus,
+)
 from arsox_sdk.proto.arsox.turn.v1 import result_pb2
 
 
@@ -92,3 +103,41 @@ def test_an_event_frame_round_trips() -> None:
     # The payload is a oneof in everything but name: only the field matching the
     # type is set.
     assert not received.HasField("tool_completed")
+
+
+def test_a_thread_service_and_the_mcp_server_it_runs_survive_the_wire() -> None:
+    """A helper process, and an MCP server addressed through it rather than a URL."""
+    sent = ThreadSettings(
+        idle_ttl=Duration(seconds=3600),
+        services=[
+            Service(
+                name="blender-mcp",
+                command='blender --background --python bridge.py -- --port "$PORT"',
+                ready_when=ReadinessProbe(http_get="/health", timeout=Duration(seconds=120)),
+                isolation=ServiceIsolation.SERVICE_ISOLATION_SHARED,
+            )
+        ],
+        mcp_servers=[
+            McpServer(
+                name="blender",
+                service=ServiceEndpoint(service="blender-mcp", path="/mcp"),
+            )
+        ],
+    )
+
+    received = ThreadSettings()
+    received.ParseFromString(sent.SerializeToString())
+
+    assert received == sent
+    service = received.services[0]
+    assert service.ready_when.http_get == "/health"
+    # An undeclared port stays absent, which asks the satellite to assign one.
+    # A port of zero would be a declared port the satellite refuses.
+    assert not service.HasField("port")
+
+    server = received.mcp_servers[0]
+    assert server.HasField("service")
+    assert server.service.service == "blender-mcp"
+    # Exactly one of the two addresses: a server reached through a service
+    # leaves its url empty.
+    assert server.url == ""
