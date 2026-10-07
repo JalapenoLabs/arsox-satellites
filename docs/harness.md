@@ -199,6 +199,7 @@ absorbed in the spawn rather than in the runner:
 | first turn | `--session-id <thread-id>`, an id the satellite chooses | nothing; the CLI mints its own |
 | the id is learned from | the satellite already knows it | `thread.started`, recorded by the mapper |
 | later turns | `--resume <id>` | `codex exec resume <id>` |
+| an imported session | recorded at import, so the first turn resumes it | the same |
 
 Either way the thread's second turn continues the session its first turn opened,
 which is the only part of this the rest of the satellite is written against.

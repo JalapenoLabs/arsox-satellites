@@ -72,6 +72,14 @@ incident, `degraded` and not retryable: the same hook over the same workspace
 ends the same way, and the turn stands. `details` carries `hook`, `outcome`,
 `exit_code` when it exited on its own, and `output_tail`, masked.
 
+## Attachment incidents
+
+A turn's attachment that no longer passes when the harness starts (gone, swapped
+for a link, or grown past a cap since it was queued) is a
+`WORKSPACE_FILE_NOT_FOUND` incident, `degraded` and not retryable, naming the
+file and why. The turn goes on with the file named in the prompt as unreadable.
+See [the harness doc](./harness.md#attachments-reach-the-harness-the-way-it-takes-them).
+
 ## Satellite-scoped incidents reach no thread stream
 
 `thread_id` is nullable, because a failure can belong to the satellite rather
