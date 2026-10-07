@@ -58,13 +58,13 @@ use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
 use arsox_sdk::proto::event::v1::{
     ArtifactCreated, BudgetWarning, Ceiling, CheckerResultEvent, ThreadEndReason, TurnCompleted,
-    TurnStarted,
+    TurnEndHookFinished, TurnStarted,
 };
 use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::incident::v1::{Disposition, Incident, IncidentCounts};
 use arsox_sdk::proto::settings::v1::Effort;
 use arsox_sdk::proto::turn::v1::{
-    CheckerResult, Stage, StageDisposition, StageOutcome, TurnResult, TurnStatus,
+    CheckerResult, Stage, StageDisposition, StageOutcome, TurnEndHookResult, TurnResult, TurnStatus,
 };
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -627,6 +627,11 @@ impl Checked {
 /// failure's result is built somewhere else.
 #[derive(Debug)]
 struct Closing {
+    /// Every turn end hook that ran, in the order it ran.
+    hooks: Vec<TurnEndHookResult>,
+
+    hooks_stage: StageOutcome,
+
     /// What the artifact scan announced.
     artifacts: Vec<Artifact>,
 
@@ -636,20 +641,31 @@ struct Closing {
 impl Closing {
     /// The closing of a turn that stopped before any work began.
     fn never_reached() -> Self {
+        let reason = || Some("the turn stopped before any work began".to_owned());
+
         Self {
+            hooks: Vec::new(),
+            hooks_stage: stage_outcome(
+                Stage::TurnEndHooks,
+                StageDisposition::Skipped,
+                reason(),
+                None,
+            ),
             artifacts: Vec::new(),
             artifacts_stage: stage_outcome(
                 Stage::Artifacts,
                 StageDisposition::Skipped,
-                Some("the turn stopped before any work began".to_owned()),
+                reason(),
                 None,
             ),
         }
     }
 
-    /// Writes the closing steps into the turn's result.
+    /// Writes the closing steps into the turn's result, in the order they ran.
     fn apply(self, result: &mut TurnResult) {
+        result.turn_end_hooks = self.hooks;
         result.artifacts = self.artifacts;
+        result.stages.push(self.hooks_stage);
         result.stages.push(self.artifacts_stage);
     }
 }
@@ -947,7 +963,10 @@ impl Runner {
         let worked = self.work(claimed, &mut context).await;
 
         // Before the services stop, so a step that talks to one still can.
-        let closing = self.close(claimed).await;
+        // Cancelling means stop now, so a cancelled turn runs no hooks; its
+        // artifacts are still scanned, because what it left is already there.
+        let cancelled = matches!(&worked, Ok((TurnStatus::Cancelled, _)));
+        let closing = self.close(claimed, &context, cancelled).await;
         context.services.stop().await;
 
         (worked, closing)
@@ -955,11 +974,148 @@ impl Runner {
 
     /// Runs what every turn ends with once its work is over.
     ///
-    /// The artifact scan, whatever the work amounted to: a turn that failed
-    /// halfway may still have left the file it was asked for, and losing work
-    /// already paid for to a failure later in the turn is the wrong trade.
-    async fn close(&self, claimed: &ClaimedTurn) -> Closing {
+    /// The thread's turn end hooks, then the artifact scan, so a file a hook
+    /// produced is announced by the same turn. Both run however the work ended:
+    /// a turn that failed halfway may still have left the file it was asked for,
+    /// and losing work already paid for to a failure later in the turn is the
+    /// wrong trade. The one exception is a cancelled turn, which runs no hooks.
+    async fn close(
+        &self,
+        claimed: &ClaimedTurn,
+        context: &TurnContext,
+        cancelled: bool,
+    ) -> Closing {
+        let (hooks, hooks_stage) = self.run_hooks(claimed, context, cancelled).await;
+        let (artifacts, artifacts_stage) = self.scan_artifacts(Attribution::of(claimed)).await;
+
+        Closing {
+            hooks,
+            hooks_stage,
+            artifacts,
+            artifacts_stage,
+        }
+    }
+
+    /// Runs the thread's turn end hooks one at a time, in declaration order.
+    ///
+    /// Each outcome reaches the stream as `hook.finished` the moment it is
+    /// known, and one that did not succeed is a degraded `TURN_END_HOOK_FAILED`
+    /// incident. None of them stops the next: a hook is post-processing, and
+    /// the work it runs after is already done. See [`crate::hooks`].
+    async fn run_hooks(
+        &self,
+        claimed: &ClaimedTurn,
+        context: &TurnContext,
+        cancelled: bool,
+    ) -> (Vec<TurnEndHookResult>, StageOutcome) {
+        let declared = &claimed.settings.turn_end_hooks;
+        let skipped = |reason: &str| {
+            stage_outcome(
+                Stage::TurnEndHooks,
+                StageDisposition::Skipped,
+                Some(reason.to_owned()),
+                None,
+            )
+        };
+
+        // Reported rather than omitted, so "not run" never reads as "ran and
+        // found nothing to do".
+        if declared.is_empty() {
+            return (Vec::new(), skipped("the thread declares no turn end hooks"));
+        }
+        if cancelled {
+            return (
+                Vec::new(),
+                skipped("the turn was cancelled, which runs no hooks"),
+            );
+        }
+
         let at = Attribution::of(claimed);
+        let started = tokio::time::Instant::now();
+
+        // The environment a service gets: the thread's declared variables,
+        // then where this turn's services listen, which a hook that talks to
+        // one of them needs.
+        let mut environment = crate::harness::spawn::declared_environment(&claimed.settings.env);
+        environment.extend(context.services.addresses().environment());
+        let around = crate::hooks::Surroundings {
+            working_dir: &context.working_dir,
+            environment: &environment,
+        };
+
+        let mut results = Vec::with_capacity(declared.len());
+
+        for hook in declared {
+            let result = crate::hooks::run(hook, around).await;
+
+            tracing::info!(
+                event.name = "turn.hook.finished",
+                thread.id = at.thread_id,
+                turn.id = at.turn_id,
+                hook.name = %hook.name,
+                hook.outcome = result.outcome().as_str_name(),
+                "turn end hook {{hook.name}} ended {{hook.outcome}}",
+            );
+
+            self.append(
+                at,
+                "hook.finished",
+                None,
+                Payload::TurnEndHookFinished(TurnEndHookFinished {
+                    result: Some(result.clone()),
+                }),
+            )
+            .await;
+
+            if !crate::hooks::succeeded(&result) {
+                self.record_incident_with(
+                    at,
+                    ErrorCode::TurnEndHookFailed,
+                    Disposition::Degraded,
+                    // The same hook over the same workspace ends the same way.
+                    false,
+                    &format!(
+                        "turn end hook {:?} ended {}, and the turn stands",
+                        hook.name,
+                        result.outcome().as_str_name()
+                    ),
+                    Some(hook_evidence(&result)),
+                )
+                .await;
+            }
+
+            results.push(result);
+        }
+
+        let failures = results
+            .iter()
+            .filter(|result| !crate::hooks::succeeded(result))
+            .count();
+
+        let stage = if failures == 0 {
+            stage_outcome(
+                Stage::TurnEndHooks,
+                StageDisposition::Ran,
+                None,
+                Some(started.elapsed()),
+            )
+        } else {
+            stage_outcome(
+                Stage::TurnEndHooks,
+                StageDisposition::Failed,
+                Some(format!(
+                    "{failures} of {} turn end hooks did not succeed",
+                    results.len()
+                )),
+                Some(started.elapsed()),
+            )
+        };
+
+        (results, stage)
+    }
+
+    /// Scans the thread's artifacts/ directory and announces what changed.
+    async fn scan_artifacts(&self, at: Attribution<'_>) -> (Vec<Artifact>, StageOutcome) {
         let started = tokio::time::Instant::now();
 
         match crate::artifacts::scan(&self.store, &self.workspace_root, at.thread_id).await {
@@ -976,15 +1132,14 @@ impl Runner {
                     .await;
                 }
 
-                Closing {
-                    artifacts_stage: stage_outcome(
-                        Stage::Artifacts,
-                        StageDisposition::Ran,
-                        None,
-                        Some(started.elapsed()),
-                    ),
-                    artifacts: announced,
-                }
+                let stage = stage_outcome(
+                    Stage::Artifacts,
+                    StageDisposition::Ran,
+                    None,
+                    Some(started.elapsed()),
+                );
+
+                (announced, stage)
             }
             Err(error) => {
                 let reason = format!("the artifacts directory could not be scanned: {error}");
@@ -1001,15 +1156,14 @@ impl Runner {
                 )
                 .await;
 
-                Closing {
-                    artifacts_stage: stage_outcome(
-                        Stage::Artifacts,
-                        StageDisposition::Failed,
-                        Some(reason),
-                        Some(started.elapsed()),
-                    ),
-                    artifacts: Vec::new(),
-                }
+                let stage = stage_outcome(
+                    Stage::Artifacts,
+                    StageDisposition::Failed,
+                    Some(reason),
+                    Some(started.elapsed()),
+                );
+
+                (Vec::new(), stage)
             }
         }
     }
@@ -2768,6 +2922,7 @@ fn assemble(
         Stage::SelfReview,
         Stage::Merge,
         Stage::Suggestions,
+        Stage::PullRequestWatch,
     ]
     .into_iter()
     .map(|stage| StageOutcome {
@@ -2842,6 +2997,27 @@ fn evidence_of(consumed: &Consumed) -> Option<prost_types::Struct> {
     (!fields.is_empty()).then(|| prost_types::Struct {
         fields: fields.into_iter().collect(),
     })
+}
+
+/// What a hook that did not succeed did, in the shape `Incident.details` takes.
+fn hook_evidence(result: &TurnEndHookResult) -> prost_types::Struct {
+    let mut fields = std::collections::BTreeMap::new();
+
+    fields.insert("hook".to_owned(), text(result.name.clone()));
+    fields.insert(
+        "outcome".to_owned(),
+        text(result.outcome().as_str_name().to_owned()),
+    );
+    if let Some(code) = result.exit_code {
+        fields.insert("exit_code".to_owned(), number(f64::from(code)));
+    }
+    if !result.output_tail.is_empty() {
+        fields.insert("output_tail".to_owned(), text(result.output_tail.clone()));
+    }
+
+    prost_types::Struct {
+        fields: fields.into_iter().collect(),
+    }
 }
 
 fn text(value: String) -> prost_types::Value {

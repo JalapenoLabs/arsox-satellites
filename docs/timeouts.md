@@ -15,6 +15,7 @@ So each carries a bound, and every bound is per thread.
 | harness idle, meaning no output at all | 15 minutes | the harness is torn down and started once on the same session; a second expiry fails the turn with `HARNESS_IDLE_TIMEOUT` |
 | one relayed tool call | 15 minutes, not per thread | the agent reads a tool error saying the call timed out, and the host application is sent `ToolCallCancelled` |
 | one service's readiness probe | 60 seconds, per service | the service is stopped and recorded as a `degraded` `SERVICE_START_FAILED`, and the turn goes on without it |
+| one turn end hook | 10 minutes, per hook, at most one hour | the hook's whole process group is stopped, and it is reported as `TIMED_OUT` and recorded as a degraded `TURN_END_HOOK_FAILED`; the turn stands |
 
 The relayed call's bound is a constant, `relay::CALL_DEADLINE`, rather than a
 thread setting. It bounds a host application's answer rather than anything the

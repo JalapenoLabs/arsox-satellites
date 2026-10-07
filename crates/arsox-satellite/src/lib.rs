@@ -23,6 +23,7 @@ pub mod commands;
 pub mod disk;
 pub mod egress;
 pub mod harness;
+pub mod hooks;
 pub mod media;
 pub mod privilege;
 pub mod proxy;

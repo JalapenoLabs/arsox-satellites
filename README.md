@@ -593,6 +593,12 @@ Each control gets its own code, because "denied" without saying which gate close
 | `SERVICE_START_FAILED` | no | a declared service got no port, would not launch, exited before it was ready, or never passed its readiness probe; the turn went on without it |
 | `SERVICE_EXITED` | no | a ready service exited during the turn; `recovered` when a restart brought it back, `degraded` once the turn's restarts were spent |
 
+**Turn end hooks**
+
+| Code | Retryable | Meaning |
+|---|---|---|
+| `TURN_END_HOOK_FAILED` | no | a [turn end hook](./docs/harness.md#turn-end-hooks) exited nonzero, ran past its timeout, or could not start; recorded as a degraded incident, and the turn stands |
+
 **Internal**
 
 | Code | Retryable | Meaning |
@@ -668,6 +674,7 @@ Every long-running operation has a bound, and every bound is configurable per th
 | turn wall clock | unset | see [Budgets and cost ceilings](#budgets-and-cost-ceilings) |
 | harness idle (no output at all) | 15 minutes | the harness is considered hung and restarted once |
 | a service's readiness probe | 60 seconds, per service | the service is stopped, recorded as `SERVICE_START_FAILED`, and the turn goes on without it |
+| a turn end hook | 10 minutes, per hook, at most one hour | the hook's process group is stopped, recorded as `TURN_END_HOOK_FAILED`, and the turn stands |
 
 ### Failure recovery
 
@@ -1525,11 +1532,12 @@ Each turn runs through a fixed stack.
 9. Automated checkers run. Failures return to the commander to reassign. Checkers may be failing for reasons the agents deliberately accept, so the commander can skip them. A skip applies to this turn only and never carries into future turns.
 10. Automated self-review runs, if enabled
 11. Auto squash or merge runs, if enabled
-12. The commander scans for artifacts
-13. Artifacts upload to the SDK, if the SDK wants them returned automatically
-14. Suggestions stage runs, if enabled
-15. The thread's services stop, however the turn ended
-16. [PR watching](#watching-pull-requests) begins, if enabled. The turn ends; the thread stays alive until the watch resolves.
+12. The thread's [turn end hooks](./docs/harness.md#turn-end-hooks) run, in order, unless the turn was cancelled
+13. The commander scans for artifacts
+14. Artifacts upload to the SDK, if the SDK wants them returned automatically
+15. Suggestions stage runs, if enabled
+16. The thread's services stop, however the turn ended
+17. [PR watching](#watching-pull-requests) begins, if enabled. The turn ends; the thread stays alive until the watch resolves.
 
 **A new turn on an existing thread:**
 1. A turn starts (SDK call)
@@ -1541,11 +1549,12 @@ Each turn runs through a fixed stack.
 7. Automated checkers run, as above
 8. Automated self-review runs, if enabled
 9. Auto squash or merge runs, if enabled
-10. The commander scans for artifacts
-11. Artifacts upload to the SDK, if requested
-12. Suggestions stage runs, if enabled
-13. The thread's services stop
-14. PR watching begins, if enabled
+10. The thread's turn end hooks run, unless the turn was cancelled
+11. The commander scans for artifacts
+12. Artifacts upload to the SDK, if requested
+13. Suggestions stage runs, if enabled
+14. The thread's services stop
+15. PR watching begins, if enabled
 
 While the satellite's [setup script](#satellite-setup) is running, both stacks wait at their first satellite step: provisioning does not start and no turn is claimed until it finishes.
 

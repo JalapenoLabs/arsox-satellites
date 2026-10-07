@@ -64,6 +64,14 @@ Both carry `details.service` and, when the service wrote anything,
 `details.output_tail`, its last 40 lines; `SERVICE_EXITED` also carries
 `details.status`. None is retryable.
 
+## Hook incidents
+
+A [turn end hook](./harness.md#turn-end-hooks) that exits nonzero, is ended by a
+signal, runs past its timeout, or cannot start is a `TURN_END_HOOK_FAILED`
+incident, `degraded` and not retryable: the same hook over the same workspace
+ends the same way, and the turn stands. `details` carries `hook`, `outcome`,
+`exit_code` when it exited on its own, and `output_tail`, masked.
+
 ## Satellite-scoped incidents reach no thread stream
 
 `thread_id` is nullable, because a failure can belong to the satellite rather

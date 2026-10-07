@@ -849,6 +849,60 @@ satellite's side would be asserting on intent, and "did this turn resume a
 session" is precisely the kind of question that has to be answered by the thing
 that was asked to do it.
 
+## Turn end hooks
+
+A thread may declare commands, `ThreadSettings.turn_end_hooks`, that the
+satellite runs after every turn's work and before it scans `artifacts/`. They
+are the place for deterministic post-processing an agent should not be trusted
+to remember: converting a `.blend` it saved into the `.glb` a host stores, for
+instance. Running before the scan is what lets the same turn announce what a
+hook produced. The code is `src/hooks.rs`, and the supervision it shares with the
+setup script is `src/supervise.rs`.
+
+**They run however the work ended, except when it was cancelled.** A turn that
+failed halfway may still have left the file a hook converts, so a failure runs
+them like a success. A cancelled turn runs none, because cancelling means stop
+now; its artifacts are still scanned, because what it left is already there.
+
+**One at a time, in declaration order, and a failure stops nothing.** Each runs
+to its end or its bound before the next starts. A hook that exits nonzero, is
+ended by a signal, runs past its timeout, or cannot start is reported as exactly
+that, recorded as a degraded `TURN_END_HOOK_FAILED` incident carrying its name,
+outcome, exit code, and output tail, and the hooks after it and the artifact scan
+run regardless. None of it fails the turn: the work a hook runs after is already
+done.
+
+| | |
+|---|---|
+| Identity | the agent account, through `scrubbed_command`, like every child |
+| Program | `argv` exactly as declared, with no shell, so nothing is expanded or split; `argv[0]` is an absolute path or a name on the satellite's `PATH` |
+| Working directory | the thread's workspace root |
+| Environment | the scrubbed base, the thread's declared `env`, and `ARSOX_SERVICE_*` for the turn's services, which are still running |
+| Standard input | none |
+| Bound | `timeout`, 10 minutes when absent, at most one hour |
+| Stopping | `SIGTERM` to its process group, 10 seconds, then `SIGKILL` to the group |
+
+**Not brokered.** A hook is the host's configuration rather than anything an
+agent chose, for the same reason setup commands and checkers keep the full
+`PATH`.
+
+**Its whole process group goes at its bound.** A hook that starts Blender, which
+starts a render worker, is stopped with everything it started, through the same
+supervision the setup script runs under rather than a second copy of it.
+
+**Reported three ways, all masked.** Each outcome reaches the stream as
+`hook.finished` the moment it is known, the turn's result carries every one in
+`TurnResult.turn_end_hooks`, and `STAGE_TURN_END_HOOKS` says what the stage
+amounted to: `RAN` when every hook succeeded, `FAILED` naming how many did not,
+and `SKIPPED` with the reason when the thread declares none or the turn was
+cancelled. A hook runs with the thread's declared variables in its environment,
+so its output tail is masked by the thread's redactor like checker output.
+
+**Refused at thread creation** with `REQUEST_FIELD_INVALID` naming
+`settings.turn_end_hooks` and the hook: a name that is not 1 to 64 of
+`A-Z a-z 0-9 _ -` or repeats another ignoring case, an empty `argv` or `argv[0]`,
+a NUL in any argument, and a timeout that is not positive or is past one hour.
+
 ## What `GET /v1/harness` reports
 
 Capability facts are stated per harness, in code, because they are facts about a
