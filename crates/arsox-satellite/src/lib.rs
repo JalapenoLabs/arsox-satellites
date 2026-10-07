@@ -32,6 +32,7 @@ pub mod services;
 pub mod setup;
 pub mod store;
 pub mod stream;
+pub mod supervise;
 pub mod timeouts;
 pub mod workspace;
 

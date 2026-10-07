@@ -402,6 +402,7 @@ impl Setup {
             Err(error) => Run {
                 ending: Ending::NotLaunched(error.to_string()),
                 output: format!("could not write the setup script: {error}"),
+                elapsed: std::time::Duration::ZERO,
             },
         };
 
@@ -652,6 +653,7 @@ mod tests {
             judge(&Run {
                 ending,
                 output: "tail".to_owned(),
+                elapsed: std::time::Duration::ZERO,
             })
         };
 
