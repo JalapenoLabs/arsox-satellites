@@ -360,5 +360,6 @@ series follows the runtime it describes.
   satellite is handled rather than surfaced.
 - **`arsox-testkit`**, a fake satellite so a consumer can test their integration
   without running a container.
-- **The relay and the workspace file routes in Node and Python.** Both packages
-  already carry the contract for them; the clients do not call them yet.
+- **The relay, the workspace file routes, turn attachments, and harness session
+  export and import in Node and Python.** Both packages already carry the
+  contract for them; the clients do not call them yet.
