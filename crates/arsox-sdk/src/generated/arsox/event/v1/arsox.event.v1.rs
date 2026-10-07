@@ -165,10 +165,27 @@ pub struct QuestionAnswered {
     #[prost(bool, tag="3")]
     pub timed_out: bool,
 }
+/// A file under the thread's artifacts/ directory is new, or its contents
+/// changed, as of the end of a turn.
+///
+/// One event per file, emitted after the turn's hooks ran and before the turn
+/// completes, so a host application reacting to it can download the file with
+/// `GET /v1/threads/{id}/files/artifacts/<path>` while the thread still holds it.
+/// A file announced once is announced again only when its SHA-256 changes, and
+/// the satellite remembers what it announced across a restart.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ArtifactCreated {
     #[prost(message, optional, tag="1")]
     pub artifact: ::core::option::Option<super::super::artifact::v1::Artifact>,
+}
+/// A turn end hook finished, however it ended.
+///
+/// One event per hook, in the order they ran. A hook that did not succeed is
+/// also a degraded TURN_END_HOOK_FAILED incident on the same stream.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct TurnEndHookFinished {
+    #[prost(message, optional, tag="1")]
+    pub result: ::core::option::Option<super::super::turn::v1::TurnEndHookResult>,
 }
 /// An agent used the override_redaction tool.
 ///
@@ -622,7 +639,7 @@ pub struct ThreadEvent {
     /// directly.
     #[prost(string, optional, tag="6")]
     pub member_id: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(oneof="thread_event::Payload", tags="20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 45, 44")]
+    #[prost(oneof="thread_event::Payload", tags="20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 45, 46, 44")]
     pub payload: ::core::option::Option<thread_event::Payload>,
 }
 /// Nested message and enum types in `ThreadEvent`.
@@ -679,6 +696,8 @@ pub mod thread_event {
         StatisticsUpdated(super::StatisticsUpdated),
         #[prost(message, tag="45")]
         RateLimitReported(super::RateLimitReported),
+        #[prost(message, tag="46")]
+        TurnEndHookFinished(super::TurnEndHookFinished),
         /// Every failure, at every severity. The one event type that cannot be
         /// switched off: a stream that can be configured to hide failures is worse
         /// than no stream.

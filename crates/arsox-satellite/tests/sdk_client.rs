@@ -101,6 +101,7 @@ async fn start() -> String {
         port: 0,
         // Long enough that no test races the collector.
         collect_interval: std::time::Duration::from_hours(1),
+        agent_home: None,
     })
     .await
     .expect("should assemble");

@@ -63,7 +63,7 @@ RUN apt-get update \
         openssh-client=1:9.6p1-3ubuntu13.19 \
         build-essential=12.10ubuntu1 \
         pkg-config=1.8.1-2build1 \
-        curl=8.5.0-2ubuntu10.13 \
+        curl=8.5.0-2ubuntu10.15 \
         wget=1.21.4-1ubuntu4.5 \
         jq=1.7.1-3ubuntu0.24.04.2 \
         zip=3.0-13ubuntu0.2 \

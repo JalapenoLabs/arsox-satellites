@@ -133,10 +133,27 @@ first byte, a best-effort media type, and the bytes as a pinned stream.
 otherwise sends a streamed body chunked and the satellite requires the length to
 check its ceiling first.
 
+`TurnOptions.attachments` names files already uploaded with `write_file`, and
+`start_turn_with` carries them. Only the path is read: the satellite measures the
+size and sniffs the media type itself, and refuses the submission when a rule is
+broken. See [the harness doc](./harness.md#attachments-reach-the-harness-the-way-it-takes-them).
+
 **A path with an empty, `.`, or `..` component is refused in the SDK** with
 `WORKSPACE_PATH_INVALID`, before anything is sent. It has to be: the URL crate
 drops a `..` segment rather than encoding it, so `a/../secret` would quietly
 address `secret`. The satellite refuses the same paths itself.
+
+## Harness sessions
+
+`ThreadHandle::export_session` returns a `SessionExport`: the harness and the
+session id, read from the response's headers so a host can decide where the
+archive may go without opening it, and the archive itself through
+`content_length()` and `into_body()`, as `FileDownload` carries a file. A thread
+with nothing to export answers `HARNESS_SESSION_NOT_FOUND`, which
+`Error::is_session_not_found` names because it is an answer rather than a
+failure. `ThreadHandle::import_session` takes the exact length and a stream of
+`Bytes`, with the same bounds as `write_file`. See
+[the harness doc](./harness.md#a-session-can-leave-its-thread).
 
 ## No handle renders the secret
 
@@ -343,5 +360,6 @@ series follows the runtime it describes.
   satellite is handled rather than surfaced.
 - **`arsox-testkit`**, a fake satellite so a consumer can test their integration
   without running a container.
-- **The relay and the workspace file routes in Node and Python.** Both packages
-  already carry the contract for them; the clients do not call them yet.
+- **The relay, the workspace file routes, turn attachments, and harness session
+  export and import in Node and Python.** Both packages already carry the
+  contract for them; the clients do not call them yet.

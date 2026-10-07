@@ -111,6 +111,24 @@ enum ErrorCode {
   ERROR_CODE_HARNESS_CRASHED = 1001;
   ERROR_CODE_HARNESS_IDLE_TIMEOUT = 1002;
 
+  // Harness sessions, exported and imported through /v1/threads/{id}/session.
+  //
+  // The thread has not opened a harness session yet, or the transcript its
+  // session id names is no longer on disk, so there is nothing to export.
+  ERROR_CODE_HARNESS_SESSION_NOT_FOUND = 1003;
+
+  // An import was sent to a thread that already has a harness session or any
+  // turn, queued or finished. A session is imported into a fresh thread, before
+  // its first turn, so that turn resumes it.
+  ERROR_CODE_HARNESS_SESSION_ALREADY_STARTED = 1004;
+
+  // The imported session belongs to a different harness than the thread runs.
+  // A Claude transcript cannot be resumed by Codex, or the other way round.
+  ERROR_CODE_HARNESS_SESSION_MISMATCH = 1005;
+
+  // The imported archive is larger than the satellite accepts in one request.
+  ERROR_CODE_HARNESS_SESSION_TOO_LARGE = 1006;
+
   // Streaming.
   ERROR_CODE_STREAM_CONSUMER_LAGGED = 1100;
   ERROR_CODE_STREAM_SEQUENCE_EXPIRED = 1101;
@@ -168,6 +186,14 @@ enum ErrorCode {
   // A service that had become ready exited during the turn. Recovered when a
   // restart brought it back, degraded once the turn's restarts were spent.
   ERROR_CODE_SERVICE_EXITED = 1601;
+
+  // Turn end hooks, declared in `ThreadSettings.turn_end_hooks` and run after
+  // each turn's work.
+  //
+  // A hook exited nonzero, ran past its timeout, or could not start. Recorded as
+  // a degraded incident carrying its outcome and output tail. The turn, the
+  // hooks after it, and the artifact scan all go on regardless.
+  ERROR_CODE_TURN_END_HOOK_FAILED = 1700;
 }
 
 // The single error shape, on every transport.

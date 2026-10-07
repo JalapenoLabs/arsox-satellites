@@ -44,7 +44,7 @@
 //! `HARNESS_CRASHED`, whichever it was.
 
 use crate::harness::spawn::{
-    EgressAccess, Grants, HarnessCommand, ModelAccess, Session, TurnChoice, command_for,
+    EgressAccess, Grants, HarnessCommand, ModelAccess, Session, TurnChoice, TurnInput, command_for,
     process_for,
 };
 use crate::harness::{HarnessResult, Mapping, accounting, checkers, claude, codex};
@@ -52,17 +52,19 @@ use crate::proxy::budget::{Ceilings, Crossing, Meter};
 use crate::redaction::Redactor;
 use crate::store::{AppendEvent, ClaimedTurn, Store};
 use crate::timeouts::Bounds;
+use arsox_sdk::proto::artifact::v1::Artifact;
 use arsox_sdk::proto::common::v1::{Duration, Timestamp};
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::event::v1::thread_event::Payload;
 use arsox_sdk::proto::event::v1::{
-    BudgetWarning, Ceiling, CheckerResultEvent, ThreadEndReason, TurnCompleted, TurnStarted,
+    ArtifactCreated, BudgetWarning, Ceiling, CheckerResultEvent, ThreadEndReason, TurnCompleted,
+    TurnEndHookFinished, TurnStarted,
 };
 use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::incident::v1::{Disposition, Incident, IncidentCounts};
 use arsox_sdk::proto::settings::v1::Effort;
 use arsox_sdk::proto::turn::v1::{
-    CheckerResult, Stage, StageDisposition, StageOutcome, TurnResult, TurnStatus,
+    CheckerResult, Stage, StageDisposition, StageOutcome, TurnEndHookResult, TurnResult, TurnStatus,
 };
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -618,6 +620,56 @@ impl Checked {
     }
 }
 
+/// What a turn's closing steps amounted to, for its report.
+///
+/// Carried beside the work's own outcome rather than folded into it, because
+/// the closing steps run however the work ended, a failure included, and a
+/// failure's result is built somewhere else.
+#[derive(Debug)]
+struct Closing {
+    /// Every turn end hook that ran, in the order it ran.
+    hooks: Vec<TurnEndHookResult>,
+
+    hooks_stage: StageOutcome,
+
+    /// What the artifact scan announced.
+    artifacts: Vec<Artifact>,
+
+    artifacts_stage: StageOutcome,
+}
+
+impl Closing {
+    /// The closing of a turn that stopped before any work began.
+    fn never_reached() -> Self {
+        let reason = || Some("the turn stopped before any work began".to_owned());
+
+        Self {
+            hooks: Vec::new(),
+            hooks_stage: stage_outcome(
+                Stage::TurnEndHooks,
+                StageDisposition::Skipped,
+                reason(),
+                None,
+            ),
+            artifacts: Vec::new(),
+            artifacts_stage: stage_outcome(
+                Stage::Artifacts,
+                StageDisposition::Skipped,
+                reason(),
+                None,
+            ),
+        }
+    }
+
+    /// Writes the closing steps into the turn's result, in the order they ran.
+    fn apply(self, result: &mut TurnResult) {
+        result.turn_end_hooks = self.hooks;
+        result.artifacts = self.artifacts;
+        result.stages.push(self.hooks_stage);
+        result.stages.push(self.artifacts_stage);
+    }
+}
+
 /// Why a fix cycle ended the stage rather than producing another attempt.
 #[derive(Debug)]
 struct StoppedEarly {
@@ -670,6 +722,10 @@ pub struct Runner {
     /// The loopback ports every running turn's services hold, so no two turns
     /// are ever handed the same one. See [`crate::services`].
     service_ports: crate::services::Leases,
+
+    /// Where every harness this runner launches keeps its state, named on each
+    /// launch so a session can be found again for export.
+    agent_home: Option<crate::harness::sessions::AgentHome>,
 }
 
 impl Runner {
@@ -682,6 +738,7 @@ impl Runner {
         max_concurrent_threads: u32,
         collector: Arc<crate::collector::Collector>,
         gates: Gates,
+        agent_home: Option<crate::harness::sessions::AgentHome>,
     ) -> Self {
         Self {
             store,
@@ -691,6 +748,7 @@ impl Runner {
             collector,
             gates,
             service_ports: crate::services::Leases::default(),
+            agent_home,
         }
     }
 
@@ -758,7 +816,9 @@ impl Runner {
         )
         .await;
 
-        let (status, mut result) = match self.drive(&claimed).await {
+        let (driven, closing) = self.drive(&claimed).await;
+
+        let (status, mut result) = match driven {
             Ok(finished) => finished,
             Err(failure) => {
                 // Fatal by construction: `drive` only returns an error when the
@@ -779,6 +839,10 @@ impl Runner {
                 (TurnStatus::Failed, failure.into_result(&claimed))
             }
         };
+
+        // Whatever the work amounted to, the turn's closing steps ran after it
+        // and their outcomes belong in its report.
+        closing.apply(&mut result);
 
         // Counted once, here, rather than inside `assemble`. This is the one
         // point every ending passes through, and it is past the last incident
@@ -871,9 +935,15 @@ impl Runner {
     /// the work can have. The turn is not over, and its result is not recorded,
     /// until they are gone. A turn future dropped before that, by a satellite
     /// shutting down, kills them as it drops. See [`crate::services`].
-    async fn drive(&self, claimed: &ClaimedTurn) -> Result<(TurnStatus, TurnResult), Failure> {
+    async fn drive(
+        &self,
+        claimed: &ClaimedTurn,
+    ) -> (Result<(TurnStatus, TurnResult), Failure>, Closing) {
         let ceilings = Ceilings::from_budget(claimed.settings.budget.as_ref());
-        let prepared = self.prepare(claimed, &ceilings).await?;
+        let prepared = match self.prepare(claimed, &ceilings).await {
+            Ok(prepared) => prepared,
+            Err(failure) => return (Err(failure), Closing::never_reached()),
+        };
 
         // The guard is held here rather than inside `open`, because the grant
         // has to outlive every session in the turn, the checker fix cycle
@@ -897,9 +967,211 @@ impl Runner {
         .await;
 
         let worked = self.work(claimed, &mut context).await;
+
+        // Before the services stop, so a step that talks to one still can.
+        // Cancelling means stop now, so a cancelled turn runs no hooks; its
+        // artifacts are still scanned, because what it left is already there.
+        let cancelled = matches!(&worked, Ok((TurnStatus::Cancelled, _)));
+        let closing = self.close(claimed, &context, cancelled).await;
         context.services.stop().await;
 
-        worked
+        (worked, closing)
+    }
+
+    /// Runs what every turn ends with once its work is over.
+    ///
+    /// The thread's turn end hooks, then the artifact scan, so a file a hook
+    /// produced is announced by the same turn. Both run however the work ended:
+    /// a turn that failed halfway may still have left the file it was asked for,
+    /// and losing work already paid for to a failure later in the turn is the
+    /// wrong trade. The one exception is a cancelled turn, which runs no hooks.
+    async fn close(
+        &self,
+        claimed: &ClaimedTurn,
+        context: &TurnContext,
+        cancelled: bool,
+    ) -> Closing {
+        let (hooks, hooks_stage) = self.run_hooks(claimed, context, cancelled).await;
+        let (artifacts, artifacts_stage) = self.scan_artifacts(Attribution::of(claimed)).await;
+
+        Closing {
+            hooks,
+            hooks_stage,
+            artifacts,
+            artifacts_stage,
+        }
+    }
+
+    /// Runs the thread's turn end hooks one at a time, in declaration order.
+    ///
+    /// Each outcome reaches the stream as `hook.finished` the moment it is
+    /// known, and one that did not succeed is a degraded `TURN_END_HOOK_FAILED`
+    /// incident. None of them stops the next: a hook is post-processing, and
+    /// the work it runs after is already done. See [`crate::hooks`].
+    async fn run_hooks(
+        &self,
+        claimed: &ClaimedTurn,
+        context: &TurnContext,
+        cancelled: bool,
+    ) -> (Vec<TurnEndHookResult>, StageOutcome) {
+        let declared = &claimed.settings.turn_end_hooks;
+        let skipped = |reason: &str| {
+            stage_outcome(
+                Stage::TurnEndHooks,
+                StageDisposition::Skipped,
+                Some(reason.to_owned()),
+                None,
+            )
+        };
+
+        // Reported rather than omitted, so "not run" never reads as "ran and
+        // found nothing to do".
+        if declared.is_empty() {
+            return (Vec::new(), skipped("the thread declares no turn end hooks"));
+        }
+        if cancelled {
+            return (
+                Vec::new(),
+                skipped("the turn was cancelled, which runs no hooks"),
+            );
+        }
+
+        let at = Attribution::of(claimed);
+        let started = tokio::time::Instant::now();
+
+        // The environment a service gets: the thread's declared variables,
+        // then where this turn's services listen, which a hook that talks to
+        // one of them needs.
+        let mut environment = crate::harness::spawn::declared_environment(&claimed.settings.env);
+        environment.extend(context.services.addresses().environment());
+        let around = crate::hooks::Surroundings {
+            working_dir: &context.working_dir,
+            environment: &environment,
+        };
+
+        let mut results = Vec::with_capacity(declared.len());
+
+        for hook in declared {
+            let result = crate::hooks::run(hook, around).await;
+
+            tracing::info!(
+                event.name = "turn.hook.finished",
+                thread.id = at.thread_id,
+                turn.id = at.turn_id,
+                hook.name = %hook.name,
+                hook.outcome = result.outcome().as_str_name(),
+                "turn end hook {{hook.name}} ended {{hook.outcome}}",
+            );
+
+            self.append(
+                at,
+                "hook.finished",
+                None,
+                Payload::TurnEndHookFinished(TurnEndHookFinished {
+                    result: Some(result.clone()),
+                }),
+            )
+            .await;
+
+            if !crate::hooks::succeeded(&result) {
+                self.record_incident_with(
+                    at,
+                    ErrorCode::TurnEndHookFailed,
+                    Disposition::Degraded,
+                    // The same hook over the same workspace ends the same way.
+                    false,
+                    &format!(
+                        "turn end hook {:?} ended {}, and the turn stands",
+                        hook.name,
+                        result.outcome().as_str_name()
+                    ),
+                    Some(hook_evidence(&result)),
+                )
+                .await;
+            }
+
+            results.push(result);
+        }
+
+        let failures = results
+            .iter()
+            .filter(|result| !crate::hooks::succeeded(result))
+            .count();
+
+        let stage = if failures == 0 {
+            stage_outcome(
+                Stage::TurnEndHooks,
+                StageDisposition::Ran,
+                None,
+                Some(started.elapsed()),
+            )
+        } else {
+            stage_outcome(
+                Stage::TurnEndHooks,
+                StageDisposition::Failed,
+                Some(format!(
+                    "{failures} of {} turn end hooks did not succeed",
+                    results.len()
+                )),
+                Some(started.elapsed()),
+            )
+        };
+
+        (results, stage)
+    }
+
+    /// Scans the thread's artifacts/ directory and announces what changed.
+    async fn scan_artifacts(&self, at: Attribution<'_>) -> (Vec<Artifact>, StageOutcome) {
+        let started = tokio::time::Instant::now();
+
+        match crate::artifacts::scan(&self.store, &self.workspace_root, at.thread_id).await {
+            Ok(announced) => {
+                for artifact in &announced {
+                    self.append(
+                        at,
+                        "artifact.created",
+                        None,
+                        Payload::ArtifactCreated(ArtifactCreated {
+                            artifact: Some(artifact.clone()),
+                        }),
+                    )
+                    .await;
+                }
+
+                let stage = stage_outcome(
+                    Stage::Artifacts,
+                    StageDisposition::Ran,
+                    None,
+                    Some(started.elapsed()),
+                );
+
+                (announced, stage)
+            }
+            Err(error) => {
+                let reason = format!("the artifacts directory could not be scanned: {error}");
+
+                // Degraded: the work happened and what is missing is its
+                // announcement. The record is unchanged, so the next turn's scan
+                // announces these files instead.
+                self.record_incident(
+                    at,
+                    ErrorCode::Internal,
+                    Disposition::Degraded,
+                    false,
+                    &reason,
+                )
+                .await;
+
+                let stage = stage_outcome(
+                    Stage::Artifacts,
+                    StageDisposition::Failed,
+                    Some(reason),
+                    Some(started.elapsed()),
+                );
+
+                (Vec::new(), stage)
+            }
+        }
     }
 
     /// The turn's sessions and checkers, with everything they share open.
@@ -908,9 +1180,16 @@ impl Runner {
         claimed: &ClaimedTurn,
         context: &mut TurnContext,
     ) -> Result<(TurnStatus, TurnResult), Failure> {
-        let consumed = self
-            .session_with_restart(claimed, context, &claimed.turn.prompt)
-            .await?;
+        // Read again now rather than trusted from the queue, because the agent
+        // owns the workspace in between. Read once for the turn, so a restart
+        // hands the harness the same files the first attempt was handed.
+        let attached = self.deliver_attachments(claimed, context).await;
+        let input = TurnInput {
+            prompt: &claimed.turn.prompt,
+            attachments: &attached,
+        };
+
+        let consumed = self.session_with_restart(claimed, context, &input).await?;
 
         if consumed.cancelled {
             return Ok((
@@ -993,6 +1272,43 @@ impl Runner {
             turn_status,
             assemble(claimed, reported_result, turn_status, &checked),
         ))
+    }
+
+    /// Reads the turn's attachments as the harness is about to start.
+    ///
+    /// A file that no longer passes the rules it was admitted under is named in
+    /// the prompt as unreadable rather than failing the turn, and recorded as a
+    /// degraded incident: the work can go on, and what is missing is one input
+    /// to it. See [`crate::harness::attachments`].
+    async fn deliver_attachments(
+        &self,
+        claimed: &ClaimedTurn,
+        context: &TurnContext,
+    ) -> Vec<crate::harness::attachments::Delivered> {
+        let delivered = crate::harness::attachments::deliver(
+            context.working_dir.clone(),
+            claimed.turn.attachments.clone(),
+        )
+        .await;
+
+        for attachment in &delivered {
+            if let Some(reason) = attachment.unreadable() {
+                self.record_incident(
+                    Attribution::of(claimed),
+                    ErrorCode::WorkspaceFileNotFound,
+                    Disposition::Degraded,
+                    false,
+                    &format!(
+                        "attachment {:?} could not be handed to the harness, so the prompt names \
+                         it instead: {reason}",
+                        attachment.path
+                    ),
+                )
+                .await;
+            }
+        }
+
+        delivered
     }
 
     /// Everything that has to hold before a harness is spawned.
@@ -1317,7 +1633,7 @@ impl Runner {
         &self,
         claimed: &ClaimedTurn,
         context: &mut TurnContext,
-        prompt: &str,
+        input: &TurnInput<'_>,
     ) -> Result<Consumed, Failure> {
         let thread_id = &claimed.turn.thread_id;
         let turn_id = &claimed.turn.turn_id;
@@ -1329,7 +1645,7 @@ impl Runner {
             // which is the "same context" a restart is supposed to preserve, and
             // one that died before announcing it opens a session again under the
             // id the first attempt was given.
-            let command = self.command_for_turn(claimed, context, prompt).await;
+            let command = self.command_for_turn(claimed, context, input).await;
             let consumed = self
                 .run_session(&command, thread_id, turn_id, context)
                 .await;
@@ -1450,13 +1766,13 @@ impl Runner {
         &self,
         claimed: &ClaimedTurn,
         context: &TurnContext,
-        prompt: &str,
+        input: &TurnInput<'_>,
     ) -> HarnessCommand {
         let session = self.session_for(&claimed.turn.thread_id).await;
 
         command_for(
             context.harness,
-            prompt,
+            input,
             &session,
             context.working_dir.clone(),
             &Grants {
@@ -1467,6 +1783,7 @@ impl Runner {
                 }),
                 exec_broker: context.shims.clone(),
                 services: context.services.addresses().clone(),
+                agent_home: self.agent_home.clone(),
             },
             // Read per turn rather than held on the runner, so a thread's
             // posture and its MCP servers are whatever its settings say now.
@@ -1669,7 +1986,12 @@ impl Runner {
         );
 
         match self
-            .session_with_restart(claimed, context, &checkers::fix_prompt(failures))
+            .session_with_restart(
+                claimed,
+                context,
+                // A prompt the satellite wrote, so nothing is attached to it.
+                &TurnInput::text(&checkers::fix_prompt(failures)),
+            )
             .await
         {
             Ok(consumed) => {
@@ -2474,9 +2796,14 @@ fn spawn_harness(
     // Never `Command::new` directly. A spawned process inherits its parent's
     // environment, and the satellite's holds `ARSOX_SECRET`.
     let mut child = process_for(command)
-        // The CLI waits on stdin for several seconds otherwise, which looks
-        // exactly like a hung process.
-        .stdin(Stdio::null())
+        // A launch with nothing to say on stdin gets none: the CLI waits on it
+        // for several seconds otherwise, which looks exactly like a hung
+        // process, and `codex exec` reads a piped one as more prompt.
+        .stdin(if command.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -2505,6 +2832,26 @@ fn spawn_harness(
         )
     })?;
 
+    if let (Some(message), Some(mut pipe)) = (command.stdin.clone(), child.stdin.take()) {
+        // Written beside the read loop rather than before it. The message can
+        // be megabytes of base64 and a pipe holds 64 KiB, so a write that had
+        // to finish first would wait on a harness that is itself waiting to be
+        // read. Dropping the pipe afterwards is load-bearing: stream-json input
+        // keeps the CLI waiting for another message until stdin closes.
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt as _;
+
+            if let Err(error) = pipe.write_all(&message.0).await {
+                // The harness exited before reading its prompt, which its own
+                // ending already reports. Traced so the two can be matched up.
+                tracing::debug!(
+                    event.name = "turn.harness.stdin_failed",
+                    "could not hand the harness its message on stdin: {error}",
+                );
+            }
+        });
+    }
+
     Ok((child, stdout, stderr))
 }
 
@@ -2517,8 +2864,18 @@ fn checker_stage(
     reason: Option<String>,
     elapsed: Option<std::time::Duration>,
 ) -> StageOutcome {
+    stage_outcome(Stage::Checkers, disposition, reason, elapsed)
+}
+
+/// One stage's outcome, with its elapsed time in the contract's shape.
+fn stage_outcome(
+    stage: Stage,
+    disposition: StageDisposition,
+    reason: Option<String>,
+    elapsed: Option<std::time::Duration>,
+) -> StageOutcome {
     StageOutcome {
-        stage: Stage::Checkers.into(),
+        stage: stage.into(),
         disposition: disposition.into(),
         reason,
         elapsed: elapsed.map(|elapsed| Duration {
@@ -2552,12 +2909,13 @@ fn choice_for(claimed: &ClaimedTurn) -> TurnChoice {
 
 /// Folds what the harness and the checkers reported into the full turn result.
 ///
-/// A turn is bigger than a harness run: self-review, artifact scanning, and
-/// suggestions are all stages the harness knows nothing about. They are reported
-/// as skipped rather than omitted, so "not run" never reads as "found nothing".
+/// A turn is bigger than a harness run: self-review and suggestions are stages
+/// the harness knows nothing about. They are reported as skipped rather than
+/// omitted, so "not run" never reads as "found nothing".
 ///
-/// Checkers are the one of those stages that exists, so its outcome comes from
-/// `checked` rather than from the unimplemented list.
+/// Checkers are a stage that exists, so its outcome comes from `checked` rather
+/// than from the unimplemented list. The closing steps, the artifact scan among
+/// them, are added by [`Closing::apply`] once they have run.
 fn assemble(
     claimed: &ClaimedTurn,
     harness: Option<HarnessResult>,
@@ -2570,8 +2928,8 @@ fn assemble(
         Stage::Plan,
         Stage::SelfReview,
         Stage::Merge,
-        Stage::Artifacts,
         Stage::Suggestions,
+        Stage::PullRequestWatch,
     ]
     .into_iter()
     .map(|stage| StageOutcome {
@@ -2615,6 +2973,7 @@ fn assemble(
         timing: Some(harness.timing),
         stop_reason: harness.stop_reason.map(Into::into),
         rate_limits: None,
+        turn_end_hooks: Vec::new(),
     }
 }
 
@@ -2645,6 +3004,27 @@ fn evidence_of(consumed: &Consumed) -> Option<prost_types::Struct> {
     (!fields.is_empty()).then(|| prost_types::Struct {
         fields: fields.into_iter().collect(),
     })
+}
+
+/// What a hook that did not succeed did, in the shape `Incident.details` takes.
+fn hook_evidence(result: &TurnEndHookResult) -> prost_types::Struct {
+    let mut fields = std::collections::BTreeMap::new();
+
+    fields.insert("hook".to_owned(), text(result.name.clone()));
+    fields.insert(
+        "outcome".to_owned(),
+        text(result.outcome().as_str_name().to_owned()),
+    );
+    if let Some(code) = result.exit_code {
+        fields.insert("exit_code".to_owned(), number(f64::from(code)));
+    }
+    if !result.output_tail.is_empty() {
+        fields.insert("output_tail".to_owned(), text(result.output_tail.clone()));
+    }
+
+    prost_types::Struct {
+        fields: fields.into_iter().collect(),
+    }
 }
 
 fn text(value: String) -> prost_types::Value {

@@ -24,3 +24,9 @@ I do NOT want runtime imports of a protobuf file and interpreted at runtime, I w
 For example, there's a javascript & typescript package that converts protobuf files into dist .js and .d.ts dists.
 This dramatically increases the contract of protobuf being the full source of truth and well maintained + documented, fully compiled + checked at build time.
 I also am fine with these protobuf dists being checked into git.
+
+## Turn inputs, closing steps, and sessions
+
+- **Turn attachments** name files the host uploaded into the workspace. The bytes decide what a file is, never its name. Claude receives images and PDFs as content blocks in one stream-json message on stdin, and only a turn with such a block switches to stdin; Codex receives images with `-i`. Everything else is named in the prompt. Files are checked at submission and read again when the harness starts. See `docs/harness.md#attachments-reach-the-harness-the-way-it-takes-them`.
+- **Turn end hooks** run after the work and before the artifact scan, as the agent, through `supervise.rs`, and never fail the turn. A cancelled turn runs none. See `docs/harness.md#turn-end-hooks`.
+- **Harness sessions** leave and enter threads as one tar archive. The satellite sets `CLAUDE_CONFIG_DIR` and `CODEX_HOME` under the agent's home on every launch, so it decides where sessions are rather than guessing. See `docs/harness.md#a-session-can-leave-its-thread`.

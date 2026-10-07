@@ -188,6 +188,7 @@ async fn start_prepared(
             metadata: BTreeMap::new(),
             idempotency_key: None,
             overrides: None,
+            attachments: Vec::new(),
             satellite_initiated: false,
             triggered_by_turn_id: None,
         })
@@ -222,6 +223,10 @@ async fn start_prepared(
                 .expect("should start the egress proxy"),
             broker,
         },
+        // Inside the scratch directory, so no harness state lands in a real home.
+        Some(arsox_satellite::harness::sessions::AgentHome::at(
+            workspace.path().join("agent-home"),
+        )),
     );
     tokio::spawn(runner.dispatch());
 
@@ -572,6 +577,7 @@ async fn a_turn_interrupted_by_a_restart_is_marked_rather_than_left_running() {
             metadata: BTreeMap::new(),
             idempotency_key: None,
             overrides: None,
+            attachments: Vec::new(),
             satellite_initiated: false,
             triggered_by_turn_id: None,
         })
@@ -624,6 +630,7 @@ async fn only_one_turn_per_thread_is_ever_claimed() {
                 metadata: BTreeMap::new(),
                 idempotency_key: None,
                 overrides: None,
+                attachments: Vec::new(),
                 satellite_initiated: false,
                 triggered_by_turn_id: None,
             })
@@ -799,6 +806,7 @@ async fn queue_another(store: &Store, thread_id: &str, prompt: &str) -> String {
             metadata: BTreeMap::new(),
             idempotency_key: None,
             overrides: None,
+            attachments: Vec::new(),
             satellite_initiated: false,
             triggered_by_turn_id: None,
         })

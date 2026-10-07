@@ -6,7 +6,8 @@ pub struct Artifact {
     /// Base name, for saving locally.
     #[prost(string, tag="1")]
     pub name: ::prost::alloc::string::String,
-    /// Path relative to the thread's artifacts/ directory.
+    /// Path relative to the thread's artifacts/ directory. The file downloads from
+    /// `GET /v1/threads/{thread_id}/files/artifacts/<path>`.
     #[prost(string, tag="2")]
     pub path: ::prost::alloc::string::String,
     #[prost(uint64, tag="3")]
@@ -18,9 +19,12 @@ pub struct Artifact {
     /// Hex-encoded SHA-256 of the contents, so a download can be verified.
     #[prost(string, tag="5")]
     pub sha256: ::prost::alloc::string::String,
+    /// When the file's current contents were written, as its filesystem reports
+    /// the modification time.
     #[prost(message, optional, tag="6")]
     pub created_at: ::core::option::Option<super::super::common::v1::Timestamp>,
-    /// Which member produced it, when attributable.
+    /// Which member produced it, when attributable. Absent today: the satellite
+    /// runs one agent per turn and a file carries no author.
     #[prost(string, optional, tag="7")]
     pub member_id: ::core::option::Option<::prost::alloc::string::String>,
 }
@@ -32,7 +36,7 @@ pub struct WorkspaceFile {
     pub path: ::prost::alloc::string::String,
     #[prost(uint64, tag="2")]
     pub size_bytes: u64,
-    /// Whether an agent promoted this file to artifacts/.
+    /// Whether the file is under the thread's artifacts/ directory.
     #[prost(bool, tag="3")]
     pub is_artifact: bool,
     #[prost(message, optional, tag="4")]
@@ -57,6 +61,10 @@ pub struct WorkspaceFileWritten {
     #[prost(bool, tag="4")]
     pub created: bool,
 }
+/// GET /v1/threads/{thread_id}/artifacts
+///
+/// What the thread's artifacts/ directory holds now, whether or not a scan has
+/// announced it yet, each with its SHA-256.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListArtifactsRequest {
     #[prost(string, tag="1")]
@@ -71,12 +79,17 @@ pub struct ListArtifactsResponse {
     #[prost(message, optional, tag="2")]
     pub page: ::core::option::Option<super::super::common::v1::PageResponse>,
 }
+/// GET /v1/threads/{thread_id}/files
+///
+/// Regular files anywhere in the thread's workspace, artifact or not.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ListWorkspaceFilesRequest {
     #[prost(string, tag="1")]
     pub thread_id: ::prost::alloc::string::String,
-    /// Restrict to files under this workspace-relative prefix. Empty lists
-    /// everything.
+    /// Restrict to files under this workspace-relative directory, such as
+    /// `repos/api`. Checked like a file route's path, so an absolute path, a `.` or
+    /// `..` component, or a path through a symbolic link is refused. A directory
+    /// that does not exist lists nothing. Empty lists everything.
     #[prost(string, tag="2")]
     pub path_prefix: ::prost::alloc::string::String,
     #[prost(message, optional, tag="3")]

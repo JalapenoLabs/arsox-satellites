@@ -11,6 +11,7 @@ use crate::{Satellite, contract_error, protobuf};
 use arsox_sdk::proto::common::v1::{PageRequest, PageResponse};
 use arsox_sdk::proto::error::v1::ErrorCode;
 use arsox_sdk::proto::incident::v1::{ListIncidentsRequest, ListIncidentsResponse};
+use arsox_sdk::proto::settings::v1::ThreadSettings;
 use arsox_sdk::proto::thread::v1::{
     CreateThreadRequest, CreateThreadResponse, DestroyThreadResponse, DrainThreadResponse,
     GetThreadResponse, ListThreadsResponse, PauseThreadResponse, ResumeThreadResponse, Thread,
@@ -136,33 +137,27 @@ pub(crate) fn store_failure(error: &StoreError) -> Response {
     crate::contract_error_retryable(status, error.code(), &error.to_string(), error.retryable())
 }
 
-async fn create_thread(
-    State(satellite): State<Arc<Satellite>>,
-    Protobuf(request): Protobuf<CreateThreadRequest>,
-) -> Response {
-    let Some(settings) = request.settings else {
-        return contract_error(
-            StatusCode::BAD_REQUEST,
-            ErrorCode::RequestFieldMissing,
-            "settings is required: a thread must declare its budget and idle TTL",
-        );
-    };
-
+/// Refuses settings a thread could never run under, naming what is wrong.
+///
+/// Every rule here is checked while the caller is still listening and can fix
+/// it, rather than discovered later as an incident on every turn the thread
+/// runs. Boxed because a response is large and refusal is the rare path.
+fn admissible(settings: &ThreadSettings) -> Result<(), Box<Response>> {
     // Required, always, as the safety net against forgotten workspaces filling a
     // disk. Refusing here is cheaper than collecting an immortal thread later.
     if settings.idle_ttl.is_none() {
-        return contract_error(
+        return Err(Box::new(contract_error(
             StatusCode::BAD_REQUEST,
             ErrorCode::RequestFieldMissing,
             "settings.idle_ttl is required so a forgotten thread is eventually collected",
-        );
+        )));
     }
     if settings.budget.is_none() {
-        return contract_error(
+        return Err(Box::new(contract_error(
             StatusCode::BAD_REQUEST,
             ErrorCode::RequestFieldMissing,
             "settings.budget is required: an unbounded spend must be typed out, not defaulted into",
-        );
+        )));
     }
 
     // A repo's name becomes a directory under the thread's workspace, so one
@@ -171,11 +166,11 @@ async fn create_thread(
     // the caller is still listening and can fix it.
     for repo in &settings.repos {
         if let Err(error) = crate::workspace::directory_name(repo) {
-            return contract_error(
+            return Err(Box::new(contract_error(
                 StatusCode::BAD_REQUEST,
                 ErrorCode::RequestFieldInvalid,
                 &format!("settings.repos: {error}"),
-            );
+            )));
         }
     }
 
@@ -189,11 +184,11 @@ async fn create_thread(
     // definition, and an error body is a log line somewhere.
     for declared in &settings.env {
         if let Some(refusal) = crate::harness::spawn::declared_key_refusal(&declared.key) {
-            return contract_error(
+            return Err(Box::new(contract_error(
                 StatusCode::BAD_REQUEST,
                 ErrorCode::RequestFieldInvalid,
                 &format!("settings.env: {} {refusal}", declared.key),
-            );
+            )));
         }
     }
 
@@ -201,12 +196,12 @@ async fn create_thread(
     // turn, and a service declared on a repo would be a declaration nothing
     // reads. Refused here, naming the field and the service, rather than
     // discovered as a degraded incident on every turn the thread runs.
-    if let Err(reason) = crate::services::refusal(&settings) {
-        return contract_error(
+    if let Err(reason) = crate::services::refusal(settings) {
+        return Err(Box::new(contract_error(
             StatusCode::BAD_REQUEST,
             ErrorCode::RequestFieldInvalid,
             &reason,
-        );
+        )));
     }
 
     // A server's name reaches a CLI's config keys and its tool names, and its
@@ -220,11 +215,40 @@ async fn create_thread(
         &settings.relayed_mcp_servers,
         &settings.services,
     ) {
-        return contract_error(
+        return Err(Box::new(contract_error(
             StatusCode::BAD_REQUEST,
             ErrorCode::RequestFieldInvalid,
             &reason,
+        )));
+    }
+
+    // A hook runs after every turn, so a declaration that could never run is
+    // refused here, naming the hook, rather than failing on every turn.
+    if let Err(reason) = crate::hooks::refusal(&settings.turn_end_hooks) {
+        return Err(Box::new(contract_error(
+            StatusCode::BAD_REQUEST,
+            ErrorCode::RequestFieldInvalid,
+            &reason,
+        )));
+    }
+
+    Ok(())
+}
+
+async fn create_thread(
+    State(satellite): State<Arc<Satellite>>,
+    Protobuf(request): Protobuf<CreateThreadRequest>,
+) -> Response {
+    let Some(settings) = request.settings else {
+        return contract_error(
+            StatusCode::BAD_REQUEST,
+            ErrorCode::RequestFieldMissing,
+            "settings is required: a thread must declare its budget and idle TTL",
         );
+    };
+
+    if let Err(response) = admissible(&settings) {
+        return *response;
     }
 
     // Kept before the settings are handed to the store, because provisioning
@@ -414,6 +438,24 @@ async fn start_turn(
     Path(thread_id): Path<String>,
     Protobuf(request): Protobuf<StartTurnRequest>,
 ) -> Response {
+    // Checked while the caller is still listening, so a turn that names a file
+    // that is not there is refused rather than queued to fail later. What is
+    // stored is what the satellite found, not what the caller claimed.
+    let attachments = if request.attachments.is_empty() {
+        Vec::new()
+    } else {
+        let directory =
+            match crate::workspace::files::thread_workspace(&satellite, &thread_id).await {
+                Ok(directory) => directory,
+                Err(response) => return response,
+            };
+
+        match crate::harness::attachments::admit(directory, request.attachments).await {
+            Ok(admitted) => admitted,
+            Err(refusal) => return attachment_refusal(refusal),
+        }
+    };
+
     match satellite
         .store
         .create_turn(NewTurn {
@@ -422,6 +464,7 @@ async fn start_turn(
             metadata: request.metadata.into_iter().collect(),
             idempotency_key: request.idempotency_key,
             overrides: request.overrides,
+            attachments,
             // Only a pull request watch starts a turn the SDK did not ask for,
             // and that path does not come through here.
             satellite_initiated: false,
@@ -439,6 +482,26 @@ async fn start_turn(
             })
         }
         Err(error) => store_failure(&error),
+    }
+}
+
+/// The answer a refused attachment gets.
+///
+/// A path answers exactly as the file routes would answer it, so a caller
+/// handles a missing upload the same way wherever it meets one. A cap has no
+/// code of its own and is the field failing validation that it is.
+fn attachment_refusal(refusal: crate::harness::attachments::Refusal) -> Response {
+    use crate::harness::attachments::Refusal;
+
+    match refusal {
+        Refusal::File { index, path, error } => {
+            error.response(&format!("attachments[{index}] {path}"))
+        }
+        Refusal::Limit(reason) => contract_error(
+            StatusCode::BAD_REQUEST,
+            ErrorCode::RequestFieldInvalid,
+            &reason,
+        ),
     }
 }
 

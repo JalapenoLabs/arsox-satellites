@@ -135,6 +135,16 @@ impl Error {
     pub fn is_relay_not_declared(&self) -> bool {
         self.code() == Some(ErrorCode::RelayNotDeclared)
     }
+
+    /// Whether a session export found nothing to export.
+    ///
+    /// The thread has not opened a harness session yet, or its files are no
+    /// longer on disk. Distinct from [`Self::is_not_found`], which is about the
+    /// thread: the thread is there, and has no conversation to carry out.
+    #[must_use]
+    pub fn is_session_not_found(&self) -> bool {
+        self.code() == Some(ErrorCode::HarnessSessionNotFound)
+    }
 }
 
 impl Display for Error {

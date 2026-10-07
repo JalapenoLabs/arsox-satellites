@@ -82,4 +82,37 @@ impl Harness {
         }
     }
 }
+/// What an exported session archive carries, as its first entry.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct HarnessSession {
+    /// The harness that wrote the session. Never UNSPECIFIED on an export.
+    #[prost(enumeration="Harness", tag="1")]
+    pub harness: i32,
+    /// The harness's own id for the session, which `Thread.harness_session_id`
+    /// carries and the resuming turn names.
+    #[prost(string, tag="2")]
+    pub session_id: ::prost::alloc::string::String,
+    /// The workspace directory the session ran in, as an absolute path on the
+    /// satellite that exported it. Informational: the transcript's own lines still
+    /// name it, and a resumed agent may meet paths under it that no longer exist.
+    #[prost(string, tag="3")]
+    pub workspace: ::prost::alloc::string::String,
+    #[prost(message, optional, tag="4")]
+    pub exported_at: ::core::option::Option<super::super::common::v1::Timestamp>,
+    /// The layout of the archive around this entry. 1 is the only layout today; a
+    /// satellite refuses an archive whose layout it does not know.
+    #[prost(uint32, tag="5")]
+    pub format_version: u32,
+}
+/// PUT /v1/threads/{thread_id}/session
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ImportHarnessSessionResponse {
+    /// The session as it was imported. The thread's `harness_session_id` is now
+    /// `session.session_id`.
+    #[prost(message, optional, tag="1")]
+    pub session: ::core::option::Option<HarnessSession>,
+    /// Every file installed, relative to where the harness keeps its sessions.
+    #[prost(string, repeated, tag="2")]
+    pub files: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
 // @@protoc_insertion_point(module)

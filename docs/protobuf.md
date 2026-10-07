@@ -26,11 +26,13 @@ proto/
     incident/v1/   incident            Disposition, Incident, incident queries
     usage/v1/      usage               TokenUsage, CostEstimate, lifetime statistics
     harness/v1/    harness             Harness, HarnessCapabilities
+                   session             HarnessSession, the session export and import
     settings/v1/   settings            ThreadSettings, the index into the rest
                    budget              Budget
                    model               ModelEndpoint, LlmAuth, CredentialPresentation, RetryPolicy
                    repo                GitAuth, AgentsRepo, Repo
                    service             Service, ReadinessProbe, ServiceIsolation
+                   hook                TurnEndHook
                    team                TeamMode
                    overrides           TurnOverrides, Effort
                    stages              PlanMode, HumanInTheLoop, SelfReview, Suggestions
@@ -42,20 +44,20 @@ proto/
                    tool                McpServer, ServiceEndpoint, RelayedMcpServer, RelayedTool, VirtualBrowser, Viewport
                    limits              StreamSettings, ResourceLimits, Timeouts
     thread/v1/     thread              Thread, ThreadState, thread endpoints
-    turn/v1/       turn                TurnStatus, Turn, report vocabulary, endpoints
-                   result              Stage, StageOutcome, TurnResult
+    turn/v1/       turn                TurnStatus, Turn, TurnAttachment, report vocabulary, endpoints
+                   result              Stage, StageOutcome, TurnEndHookResult, TurnResult
                    brief               TurnBrief
     interaction/v1/ question           Question, QuestionSet, QuestionAnswer
                    plan                Plan, PlanDecision
     suggestion/v1/ suggestion          Suggestion, SetupScriptSuggestion
-    artifact/v1/   artifact            Artifact, WorkspaceFile, WorkspaceFileWritten
+    artifact/v1/   artifact            Artifact, WorkspaceFile, WorkspaceFileWritten, the listings
     relay/v1/      relay               ToolCall, ToolResult, the relay socket's frames
     event/v1/      author              AuthorKind, Author
                    agent               agent messages and tool calls
                    team                spawn, despawn, chat, direct messages
                    integration         integration requests and outcomes, checkers
                    service             service start and logs
-                   lifecycle           budget, plan, question, artifact, turn, stats
+                   lifecycle           budget, plan, question, artifact, turn, hook, stats
                    event               ThreadEvent envelope
                    control             ControlEvent and satellite lifecycle
     satellite/v1/  satellite           version, readiness, status
@@ -307,6 +309,12 @@ here:
   whole on both ends. `ListArtifacts` and `ListWorkspaceFiles` are the proto
   half; the transfer itself is `application/octet-stream`, and a write is
   answered with `WorkspaceFileWritten`. See [the relay doc](./relay.md#workspace-files).
+  A harness session travels the same way: a tar archive whose first entry is
+  the `HarnessSession` message, so the proto half rides inside the bytes rather
+  than beside them. See [the harness doc](./harness.md#a-session-can-leave-its-thread).
+- **Turn attachments' bytes.** `TurnAttachment` names a workspace path the host
+  already uploaded, and the satellite reads the file itself when the harness
+  starts.
 - **The relayed MCP servers as the agents see them.** `RelayedMcpServer` is
   what a thread declares and `arsox.relay.v1` is what travels between the
   satellite and the host application. The MCP JSON-RPC the harness speaks to

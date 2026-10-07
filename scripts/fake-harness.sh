@@ -22,10 +22,16 @@ set -eu
 
 TRANSCRIPT="${ARSOX_FAKE_TRANSCRIPT:-/fixtures/tool-call.stdout.jsonl}"
 
-# The satellite passes the prompt as the argument after --print.
+# The satellite passes the prompt as the argument after --print, or, when the
+# turn carries an attachment, as a stream-json message on stdin. The message is
+# kept whole: the directives below are plain text inside its text block.
 prompt=""
 while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--print" ] && [ "$#" -gt 1 ]; then
+  if [ "$1" = "--input-format" ]; then
+    prompt="$(cat)"
+    break
+  fi
+  if [ "$1" = "--print" ] && [ "$#" -gt 1 ] && [ "$2" != "--input-format" ]; then
     prompt="$2"
     break
   fi

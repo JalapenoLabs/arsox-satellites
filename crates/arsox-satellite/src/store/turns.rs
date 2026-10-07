@@ -10,7 +10,7 @@
 use super::{Store, StoreError, from_nanos, to_nanos};
 use arsox_sdk::proto::common::v1::Timestamp;
 use arsox_sdk::proto::settings::v1::TurnOverrides;
-use arsox_sdk::proto::turn::v1::{Turn, TurnOrder, TurnResult, TurnStatus};
+use arsox_sdk::proto::turn::v1::{Turn, TurnAttachment, TurnOrder, TurnResult, TurnStatus};
 use prost::Message as _;
 use sqlx::Row as _;
 use std::collections::BTreeMap;
@@ -27,6 +27,10 @@ pub struct NewTurn {
     /// What this turn decides for itself, as submitted. Absent fields inherit
     /// the thread's defaults when the turn is claimed.
     pub overrides: Option<TurnOverrides>,
+
+    /// The files that came with the prompt, as the API checked them. See
+    /// [`crate::harness::attachments::admit`].
+    pub attachments: Vec<TurnAttachment>,
 
     /// True when the satellite started this turn itself rather than the SDK
     /// asking for it.
@@ -127,6 +131,20 @@ impl Store {
                 .await?;
         }
 
+        for (position, attachment) in new.attachments.iter().enumerate() {
+            sqlx::query(
+                "INSERT INTO turn_attachments (turn_id, position, path, content_type, size_bytes)
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(&turn_id)
+            .bind(i64::try_from(position).unwrap_or(i64::MAX))
+            .bind(&attachment.path)
+            .bind(attachment.content_type.as_deref())
+            .bind(i64::try_from(attachment.size_bytes).unwrap_or(i64::MAX))
+            .execute(&mut *transaction)
+            .await?;
+        }
+
         transaction.commit().await?;
         self.touch_thread(&new.thread_id).await?;
 
@@ -143,6 +161,7 @@ impl Store {
                 finished_at: None,
                 metadata: new.metadata.into_iter().collect(),
                 overrides: new.overrides,
+                attachments: new.attachments,
             },
             queued: true,
         })
@@ -167,11 +186,12 @@ impl Store {
             .ok_or_else(|| StoreError::TurnNotFound(turn_id.to_owned()))?;
 
         let metadata = self.turn_metadata(turn_id).await?;
+        let attachments = self.turn_attachments(turn_id).await?;
         let result = row
             .get::<Option<Vec<u8>>, _>("result")
             .and_then(|bytes| TurnResult::decode(bytes.as_slice()).ok());
 
-        Ok((hydrate_turn(&row, metadata), result))
+        Ok((hydrate_turn(&row, metadata, attachments), result))
     }
 
     /// Lists a thread's turns, oldest first.
@@ -221,7 +241,8 @@ impl Store {
         for row in &rows {
             let turn_id: String = row.get("turn_id");
             let metadata = self.turn_metadata(&turn_id).await?;
-            turns.push(hydrate_turn(row, metadata));
+            let attachments = self.turn_attachments(&turn_id).await?;
+            turns.push(hydrate_turn(row, metadata, attachments));
         }
 
         Ok(turns)
@@ -378,8 +399,13 @@ impl Store {
 
         let turn_id: String = row.get("turn_id");
         let metadata = self.turn_metadata(&turn_id).await?;
+        let attachments = self.turn_attachments(&turn_id).await?;
 
-        Ok(Some(hydrate_turn(&row, metadata)))
+        Ok(Some(hydrate_turn(&row, metadata, attachments)))
+    }
+
+    async fn turn_attachments(&self, turn_id: &str) -> Result<Vec<TurnAttachment>, StoreError> {
+        attachments_of(self.pool(), turn_id).await
     }
 
     async fn turn_metadata(&self, turn_id: &str) -> Result<BTreeMap<String, String>, StoreError> {
@@ -395,6 +421,35 @@ impl Store {
     }
 }
 
+/// Reads a turn's attachments, in the order they were submitted.
+///
+/// A free function over any executor, so the claim can read them inside its
+/// own transaction and the API outside one.
+pub(crate) async fn attachments_of<'connection, Executor>(
+    executor: Executor,
+    turn_id: &str,
+) -> Result<Vec<TurnAttachment>, StoreError>
+where
+    Executor: sqlx::Executor<'connection, Database = sqlx::Sqlite>,
+{
+    let rows = sqlx::query(
+        "SELECT path, content_type, size_bytes FROM turn_attachments
+          WHERE turn_id = ? ORDER BY position",
+    )
+    .bind(turn_id)
+    .fetch_all(executor)
+    .await?;
+
+    Ok(rows
+        .iter()
+        .map(|row| TurnAttachment {
+            path: row.get("path"),
+            content_type: row.get("content_type"),
+            size_bytes: u64::try_from(row.get::<i64, _>("size_bytes")).unwrap_or_default(),
+        })
+        .collect())
+}
+
 /// Whether a status means the turn is finished and will not change again.
 fn is_terminal(status: i32) -> bool {
     matches!(
@@ -403,7 +458,11 @@ fn is_terminal(status: i32) -> bool {
     )
 }
 
-fn hydrate_turn(row: &sqlx::sqlite::SqliteRow, metadata: BTreeMap<String, String>) -> Turn {
+fn hydrate_turn(
+    row: &sqlx::sqlite::SqliteRow,
+    metadata: BTreeMap<String, String>,
+    attachments: Vec<TurnAttachment>,
+) -> Turn {
     Turn {
         turn_id: row.get("turn_id"),
         thread_id: row.get("thread_id"),
@@ -420,5 +479,6 @@ fn hydrate_turn(row: &sqlx::sqlite::SqliteRow, metadata: BTreeMap<String, String
         overrides: row
             .get::<Option<Vec<u8>>, _>("overrides")
             .and_then(|bytes| TurnOverrides::decode(bytes.as_slice()).ok()),
+        attachments,
     }
 }

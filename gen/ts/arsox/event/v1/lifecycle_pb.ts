@@ -14,7 +14,7 @@ import type { Plan, PlanDecision } from "../../interaction/v1/plan_pb.js";
 import { file_arsox_interaction_v1_plan } from "../../interaction/v1/plan_pb.js";
 import type { QuestionAnswer, QuestionSet } from "../../interaction/v1/question_pb.js";
 import { file_arsox_interaction_v1_question } from "../../interaction/v1/question_pb.js";
-import type { TurnResult } from "../../turn/v1/result_pb.js";
+import type { TurnEndHookResult, TurnResult } from "../../turn/v1/result_pb.js";
 import { file_arsox_turn_v1_result } from "../../turn/v1/result_pb.js";
 import type { Turn } from "../../turn/v1/turn_pb.js";
 import { file_arsox_turn_v1_turn } from "../../turn/v1/turn_pb.js";
@@ -26,7 +26,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file arsox/event/v1/lifecycle.proto.
  */
 export const file_arsox_event_v1_lifecycle: GenFile = /*@__PURE__*/
-  fileDesc("Ch5hcnNveC9ldmVudC92MS9saWZlY3ljbGUucHJvdG8SDmFyc294LmV2ZW50LnYxIk8KDUJ1ZGdldFdhcm5pbmcSKAoHY2VpbGluZxgBIAEoDjIXLmFyc294LmV2ZW50LnYxLkNlaWxpbmcSFAoMcGVyY2VudF91c2VkGAIgASgNIjgKDFBsYW5Qcm9wb3NlZBIoCgRwbGFuGAEgASgLMhouYXJzb3guaW50ZXJhY3Rpb24udjEuUGxhbiJrCgtQbGFuRGVjaWRlZBIPCgdwbGFuX2lkGAEgASgJEjQKCGRlY2lzaW9uGAIgASgOMiIuYXJzb3guaW50ZXJhY3Rpb24udjEuUGxhbkRlY2lzaW9uEhUKDWF1dG9fYXBwcm92ZWQYAyABKAgiSAoNUXVlc3Rpb25Bc2tlZBI3CgxxdWVzdGlvbl9zZXQYASABKAsyIS5hcnNveC5pbnRlcmFjdGlvbi52MS5RdWVzdGlvblNldCJ1ChBRdWVzdGlvbkFuc3dlcmVkEhcKD3F1ZXN0aW9uX3NldF9pZBgBIAEoCRI1CgdhbnN3ZXJzGAIgAygLMiQuYXJzb3guaW50ZXJhY3Rpb24udjEuUXVlc3Rpb25BbnN3ZXISEQoJdGltZWRfb3V0GAMgASgIIkAKD0FydGlmYWN0Q3JlYXRlZBItCghhcnRpZmFjdBgBIAEoCzIbLmFyc294LmFydGlmYWN0LnYxLkFydGlmYWN0InsKE1JlZGFjdGlvbk92ZXJyaWRkZW4SJgoGYXV0aG9yGAEgASgLMhYuYXJzb3guZXZlbnQudjEuQXV0aG9yEhIKCnNlY3JldF9rZXkYAiABKAkSFQoNanVzdGlmaWNhdGlvbhgDIAEoCRIRCglvcGVyYXRpb24YBCABKAkiMAoLVHVyblN0YXJ0ZWQSIQoEdHVybhgBIAEoCzITLmFyc294LnR1cm4udjEuVHVybiI6Cg1UdXJuQ29tcGxldGVkEikKBnJlc3VsdBgBIAEoCzIZLmFyc294LnR1cm4udjEuVHVyblJlc3VsdCJLChFTdGF0aXN0aWNzVXBkYXRlZBI2CgpzdGF0aXN0aWNzGAEgASgLMiIuYXJzb3gudXNhZ2UudjEuTGlmZXRpbWVTdGF0aXN0aWNzIlsKEVJhdGVMaW1pdFJlcG9ydGVkEi8KBnN0YXR1cxgBIAEoCzIfLmFyc294LnVzYWdlLnYxLlJhdGVMaW1pdFN0YXR1cxIVCg1lbmRwb2ludF9uYW1lGAIgASgJKn0KB0NlaWxpbmcSFwoTQ0VJTElOR19VTlNQRUNJRklFRBAAEhsKF0NFSUxJTkdfVE9LRU5TX1BFUl9UVVJOEAESGwoXQ0VJTElOR19DT1NUX1BFUl9USFJFQUQQAhIfChtDRUlMSU5HX1dBTExfQ0xPQ0tfUEVSX1RVUk4QA0J+ChJjb20uYXJzb3guZXZlbnQudjFCDkxpZmVjeWNsZVByb3RvUAGiAgNBRViqAg5BcnNveC5FdmVudC5WMcoCDkFyc294XEV2ZW50XFYx4gIaQXJzb3hcRXZlbnRcVjFcR1BCTWV0YWRhdGHqAhBBcnNveDo6RXZlbnQ6OlYxYgZwcm90bzM", [file_arsox_artifact_v1_artifact, file_arsox_event_v1_author, file_arsox_interaction_v1_plan, file_arsox_interaction_v1_question, file_arsox_turn_v1_result, file_arsox_turn_v1_turn, file_arsox_usage_v1_usage]);
+  fileDesc("Ch5hcnNveC9ldmVudC92MS9saWZlY3ljbGUucHJvdG8SDmFyc294LmV2ZW50LnYxIk8KDUJ1ZGdldFdhcm5pbmcSKAoHY2VpbGluZxgBIAEoDjIXLmFyc294LmV2ZW50LnYxLkNlaWxpbmcSFAoMcGVyY2VudF91c2VkGAIgASgNIjgKDFBsYW5Qcm9wb3NlZBIoCgRwbGFuGAEgASgLMhouYXJzb3guaW50ZXJhY3Rpb24udjEuUGxhbiJrCgtQbGFuRGVjaWRlZBIPCgdwbGFuX2lkGAEgASgJEjQKCGRlY2lzaW9uGAIgASgOMiIuYXJzb3guaW50ZXJhY3Rpb24udjEuUGxhbkRlY2lzaW9uEhUKDWF1dG9fYXBwcm92ZWQYAyABKAgiSAoNUXVlc3Rpb25Bc2tlZBI3CgxxdWVzdGlvbl9zZXQYASABKAsyIS5hcnNveC5pbnRlcmFjdGlvbi52MS5RdWVzdGlvblNldCJ1ChBRdWVzdGlvbkFuc3dlcmVkEhcKD3F1ZXN0aW9uX3NldF9pZBgBIAEoCRI1CgdhbnN3ZXJzGAIgAygLMiQuYXJzb3guaW50ZXJhY3Rpb24udjEuUXVlc3Rpb25BbnN3ZXISEQoJdGltZWRfb3V0GAMgASgIIkAKD0FydGlmYWN0Q3JlYXRlZBItCghhcnRpZmFjdBgBIAEoCzIbLmFyc294LmFydGlmYWN0LnYxLkFydGlmYWN0IkcKE1R1cm5FbmRIb29rRmluaXNoZWQSMAoGcmVzdWx0GAEgASgLMiAuYXJzb3gudHVybi52MS5UdXJuRW5kSG9va1Jlc3VsdCJ7ChNSZWRhY3Rpb25PdmVycmlkZGVuEiYKBmF1dGhvchgBIAEoCzIWLmFyc294LmV2ZW50LnYxLkF1dGhvchISCgpzZWNyZXRfa2V5GAIgASgJEhUKDWp1c3RpZmljYXRpb24YAyABKAkSEQoJb3BlcmF0aW9uGAQgASgJIjAKC1R1cm5TdGFydGVkEiEKBHR1cm4YASABKAsyEy5hcnNveC50dXJuLnYxLlR1cm4iOgoNVHVybkNvbXBsZXRlZBIpCgZyZXN1bHQYASABKAsyGS5hcnNveC50dXJuLnYxLlR1cm5SZXN1bHQiSwoRU3RhdGlzdGljc1VwZGF0ZWQSNgoKc3RhdGlzdGljcxgBIAEoCzIiLmFyc294LnVzYWdlLnYxLkxpZmV0aW1lU3RhdGlzdGljcyJbChFSYXRlTGltaXRSZXBvcnRlZBIvCgZzdGF0dXMYASABKAsyHy5hcnNveC51c2FnZS52MS5SYXRlTGltaXRTdGF0dXMSFQoNZW5kcG9pbnRfbmFtZRgCIAEoCSp9CgdDZWlsaW5nEhcKE0NFSUxJTkdfVU5TUEVDSUZJRUQQABIbChdDRUlMSU5HX1RPS0VOU19QRVJfVFVSThABEhsKF0NFSUxJTkdfQ09TVF9QRVJfVEhSRUFEEAISHwobQ0VJTElOR19XQUxMX0NMT0NLX1BFUl9UVVJOEANCfgoSY29tLmFyc294LmV2ZW50LnYxQg5MaWZlY3ljbGVQcm90b1ABogIDQUVYqgIOQXJzb3guRXZlbnQuVjHKAg5BcnNveFxFdmVudFxWMeICGkFyc294XEV2ZW50XFYxXEdQQk1ldGFkYXRh6gIQQXJzb3g6OkV2ZW50OjpWMWIGcHJvdG8z", [file_arsox_artifact_v1_artifact, file_arsox_event_v1_author, file_arsox_interaction_v1_plan, file_arsox_interaction_v1_question, file_arsox_turn_v1_result, file_arsox_turn_v1_turn, file_arsox_usage_v1_usage]);
 
 /**
  * Emitted at 80% of any ceiling, so the host application can react before the
@@ -149,6 +149,15 @@ export const QuestionAnsweredSchema: GenMessage<QuestionAnswered> = /*@__PURE__*
   messageDesc(file_arsox_event_v1_lifecycle, 4);
 
 /**
+ * A file under the thread's artifacts/ directory is new, or its contents
+ * changed, as of the end of a turn.
+ *
+ * One event per file, emitted after the turn's hooks ran and before the turn
+ * completes, so a host application reacting to it can download the file with
+ * `GET /v1/threads/{id}/files/artifacts/<path>` while the thread still holds it.
+ * A file announced once is announced again only when its SHA-256 changes, and
+ * the satellite remembers what it announced across a restart.
+ *
  * @generated from message arsox.event.v1.ArtifactCreated
  */
 export type ArtifactCreated = Message<"arsox.event.v1.ArtifactCreated"> & {
@@ -164,6 +173,28 @@ export type ArtifactCreated = Message<"arsox.event.v1.ArtifactCreated"> & {
  */
 export const ArtifactCreatedSchema: GenMessage<ArtifactCreated> = /*@__PURE__*/
   messageDesc(file_arsox_event_v1_lifecycle, 5);
+
+/**
+ * A turn end hook finished, however it ended.
+ *
+ * One event per hook, in the order they ran. A hook that did not succeed is
+ * also a degraded TURN_END_HOOK_FAILED incident on the same stream.
+ *
+ * @generated from message arsox.event.v1.TurnEndHookFinished
+ */
+export type TurnEndHookFinished = Message<"arsox.event.v1.TurnEndHookFinished"> & {
+  /**
+   * @generated from field: arsox.turn.v1.TurnEndHookResult result = 1;
+   */
+  result?: TurnEndHookResult;
+};
+
+/**
+ * Describes the message arsox.event.v1.TurnEndHookFinished.
+ * Use `create(TurnEndHookFinishedSchema)` to create a new message.
+ */
+export const TurnEndHookFinishedSchema: GenMessage<TurnEndHookFinished> = /*@__PURE__*/
+  messageDesc(file_arsox_event_v1_lifecycle, 6);
 
 /**
  * An agent used the override_redaction tool.
@@ -210,7 +241,7 @@ export type RedactionOverridden = Message<"arsox.event.v1.RedactionOverridden"> 
  * Use `create(RedactionOverriddenSchema)` to create a new message.
  */
 export const RedactionOverriddenSchema: GenMessage<RedactionOverridden> = /*@__PURE__*/
-  messageDesc(file_arsox_event_v1_lifecycle, 6);
+  messageDesc(file_arsox_event_v1_lifecycle, 7);
 
 /**
  * @generated from message arsox.event.v1.TurnStarted
@@ -227,7 +258,7 @@ export type TurnStarted = Message<"arsox.event.v1.TurnStarted"> & {
  * Use `create(TurnStartedSchema)` to create a new message.
  */
 export const TurnStartedSchema: GenMessage<TurnStarted> = /*@__PURE__*/
-  messageDesc(file_arsox_event_v1_lifecycle, 7);
+  messageDesc(file_arsox_event_v1_lifecycle, 8);
 
 /**
  * @generated from message arsox.event.v1.TurnCompleted
@@ -244,7 +275,7 @@ export type TurnCompleted = Message<"arsox.event.v1.TurnCompleted"> & {
  * Use `create(TurnCompletedSchema)` to create a new message.
  */
 export const TurnCompletedSchema: GenMessage<TurnCompleted> = /*@__PURE__*/
-  messageDesc(file_arsox_event_v1_lifecycle, 8);
+  messageDesc(file_arsox_event_v1_lifecycle, 9);
 
 /**
  * Opt in through stream settings. Off by default because these change on every
@@ -264,7 +295,7 @@ export type StatisticsUpdated = Message<"arsox.event.v1.StatisticsUpdated"> & {
  * Use `create(StatisticsUpdatedSchema)` to create a new message.
  */
 export const StatisticsUpdatedSchema: GenMessage<StatisticsUpdated> = /*@__PURE__*/
-  messageDesc(file_arsox_event_v1_lifecycle, 9);
+  messageDesc(file_arsox_event_v1_lifecycle, 10);
 
 /**
  * Where the run stands against its provider's quotas.
@@ -300,7 +331,7 @@ export type RateLimitReported = Message<"arsox.event.v1.RateLimitReported"> & {
  * Use `create(RateLimitReportedSchema)` to create a new message.
  */
 export const RateLimitReportedSchema: GenMessage<RateLimitReported> = /*@__PURE__*/
-  messageDesc(file_arsox_event_v1_lifecycle, 10);
+  messageDesc(file_arsox_event_v1_lifecycle, 11);
 
 /**
  * Which ceiling is being approached.

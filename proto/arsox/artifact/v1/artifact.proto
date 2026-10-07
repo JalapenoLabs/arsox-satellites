@@ -4,10 +4,17 @@ syntax = "proto3";
 
 // Files a turn produced, and the workspace they came out of.
 //
-// The agents decide what counts as an artifact. Artifacts are moved up from the
-// repo level into the thread's artifacts/ directory, because repo directories
-// are the most ephemeral part of the workspace and are frequently torn down or
-// recreated, while artifacts should outlive them.
+// Every thread's workspace has an artifacts/ directory, created with the thread
+// and owned by the agent, and its AGENTS.md tells the agent that deliverables
+// belong there and scratch work does not. The agent decides what counts as an
+// artifact by where it puts a file. When each turn ends, after its hooks, the
+// satellite scans the directory and announces every file that is new or whose
+// contents changed as `artifact.created`.
+//
+// Both listings walk the workspace the way the file routes do: one component at
+// a time, never through a symbolic link, and never reporting anything but
+// regular files. Both page in the same order, by path compared one component at
+// a time, so a cursor is the last path of the previous page.
 package arsox.artifact.v1;
 
 import "arsox/common/v1/common.proto";
@@ -17,7 +24,8 @@ message Artifact {
   // Base name, for saving locally.
   string name = 1;
 
-  // Path relative to the thread's artifacts/ directory.
+  // Path relative to the thread's artifacts/ directory. The file downloads from
+  // `GET /v1/threads/{thread_id}/files/artifacts/<path>`.
   string path = 2;
 
   uint64 size_bytes = 3;
@@ -29,9 +37,12 @@ message Artifact {
   // Hex-encoded SHA-256 of the contents, so a download can be verified.
   string sha256 = 5;
 
+  // When the file's current contents were written, as its filesystem reports
+  // the modification time.
   arsox.common.v1.Timestamp created_at = 6;
 
-  // Which member produced it, when attributable.
+  // Which member produced it, when attributable. Absent today: the satellite
+  // runs one agent per turn and a file carries no author.
   optional string member_id = 7;
 }
 
@@ -42,7 +53,7 @@ message WorkspaceFile {
 
   uint64 size_bytes = 2;
 
-  // Whether an agent promoted this file to artifacts/.
+  // Whether the file is under the thread's artifacts/ directory.
   bool is_artifact = 3;
 
   arsox.common.v1.Timestamp modified_at = 4;
@@ -66,6 +77,10 @@ message WorkspaceFileWritten {
   bool created = 4;
 }
 
+// GET /v1/threads/{thread_id}/artifacts
+//
+// What the thread's artifacts/ directory holds now, whether or not a scan has
+// announced it yet, each with its SHA-256.
 message ListArtifactsRequest {
   string thread_id = 1;
   arsox.common.v1.PageRequest page = 2;
@@ -76,11 +91,16 @@ message ListArtifactsResponse {
   arsox.common.v1.PageResponse page = 2;
 }
 
+// GET /v1/threads/{thread_id}/files
+//
+// Regular files anywhere in the thread's workspace, artifact or not.
 message ListWorkspaceFilesRequest {
   string thread_id = 1;
 
-  // Restrict to files under this workspace-relative prefix. Empty lists
-  // everything.
+  // Restrict to files under this workspace-relative directory, such as
+  // `repos/api`. Checked like a file route's path, so an absolute path, a `.` or
+  // `..` component, or a path through a symbolic link is refused. A directory
+  // that does not exist lists nothing. Empty lists everything.
   string path_prefix = 2;
 
   arsox.common.v1.PageRequest page = 3;

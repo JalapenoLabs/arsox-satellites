@@ -1,0 +1,60 @@
+// Copyright © 2026 Jalapeno Labs
+
+syntax = "proto3";
+
+// A thread's harness session, carried out of one thread and into another.
+//
+// A satellite owns no data and treats every thread as ephemeral: the idle TTL
+// collects a thread, and a replaced container loses every transcript the CLIs
+// kept under the agent's home. The host application keeps what it wants to
+// outlive either by exporting the session, and a brand new thread on any
+// satellite continues the same conversation once the export is imported.
+//
+// `GET /v1/threads/{thread_id}/session` answers `application/x-tar`: first an
+// entry named `arsox-session.binpb` holding a HarnessSession, then every file
+// the harness needs to resume, under `files/`, relative to where that harness
+// keeps its sessions. The archive describes itself, so a host stores one blob
+// and hands the same blob back. The response also carries the harness and the
+// session id as the `Arsox-Harness` and `Arsox-Harness-Session-Id` headers, for
+// a caller that wants them without reading the archive.
+//
+// `PUT /v1/threads/{thread_id}/session` takes the same archive and answers
+// ImportHarnessSessionResponse. The thread must be fresh, with no harness
+// session and no turn, and must run the harness the archive names. The files
+// are installed where that harness looks for them from this thread's
+// workspace, and the thread's first turn resumes the imported session.
+package arsox.harness.v1;
+
+import "arsox/common/v1/common.proto";
+import "arsox/harness/v1/harness.proto";
+
+// What an exported session archive carries, as its first entry.
+message HarnessSession {
+  // The harness that wrote the session. Never UNSPECIFIED on an export.
+  Harness harness = 1;
+
+  // The harness's own id for the session, which `Thread.harness_session_id`
+  // carries and the resuming turn names.
+  string session_id = 2;
+
+  // The workspace directory the session ran in, as an absolute path on the
+  // satellite that exported it. Informational: the transcript's own lines still
+  // name it, and a resumed agent may meet paths under it that no longer exist.
+  string workspace = 3;
+
+  arsox.common.v1.Timestamp exported_at = 4;
+
+  // The layout of the archive around this entry. 1 is the only layout today; a
+  // satellite refuses an archive whose layout it does not know.
+  uint32 format_version = 5;
+}
+
+// PUT /v1/threads/{thread_id}/session
+message ImportHarnessSessionResponse {
+  // The session as it was imported. The thread's `harness_session_id` is now
+  // `session.session_id`.
+  HarnessSession session = 1;
+
+  // Every file installed, relative to where the harness keeps its sessions.
+  repeated string files = 2;
+}

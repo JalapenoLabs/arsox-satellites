@@ -63,6 +63,7 @@ async fn start() -> Running {
         port: 0,
         // Long enough that no test races the collector.
         collect_interval: std::time::Duration::from_hours(1),
+        agent_home: None,
     };
 
     let assembled = assemble(options).await.expect("should assemble");
@@ -438,6 +439,7 @@ mod runner_incidents {
                 metadata: BTreeMap::new(),
                 idempotency_key: None,
                 overrides: None,
+                attachments: Vec::new(),
                 satellite_initiated: false,
                 triggered_by_turn_id: None,
             })

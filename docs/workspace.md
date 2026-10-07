@@ -5,6 +5,10 @@ Every thread owns one subtree of the workspace root, named for the thread:
 ```
 /workspace
   |-- <thread-id>/
+    AGENTS.md
+    CLAUDE.md
+    CODEX.md
+    |-- artifacts/
     |-- repos/
       |-- <repo-name>/
 ```
@@ -73,7 +77,8 @@ been.
 `AGENTS.md` is assembled from ordered layers, most general first:
 
 1. **The Arsox header.** Where the workspace is, which thread this is, that
-   repos live under `repos/`, and that everything below the header is the
+   repos live under `repos/`, that deliverables belong in `artifacts/` and
+   scratch work does not, and that everything below the header is the
    operator's. Not overridable.
 2. **The agents repo.** Fleet-wide conventions. On the roadmap; the seam it
    slots into is `workspace::instructions::layers`.
@@ -98,6 +103,59 @@ Three small writes cost the create request nothing.
 Failing to write them is `INTERNAL`, `degraded`. The agents come up and meet the
 satellite's defaults instead of the operator's prompt, which is worth an
 incident and is not worth parking a thread over.
+
+## Artifacts
+
+Every thread's workspace has an `artifacts/` directory, created with its
+instruction files and owned by the agent account. The header of `AGENTS.md`
+names it by its absolute path and tells the agent that files it produces as
+deliverables belong there and that scratch work does not, because everything in
+it is announced to the host application. The agent decides what is an artifact
+by where it puts a file.
+
+It is created through the confined walk rather than by path, like every other
+write into a tree an agent owns: a workspace rebuilt after a restart may already
+hold whatever the agent left where the directory belongs, and a link there is
+refused rather than followed.
+
+### The scan announces what changed
+
+When a turn's work is over and its [hooks](./harness.md#turn-end-hooks) have
+run, the runner scans `artifacts/` recursively and puts one `artifact.created`
+on the stream for every regular file that is new, or whose SHA-256 differs from
+what the previous scan recorded. The same files are the turn's
+`TurnResult.artifacts`, and `STAGE_ARTIFACTS` reports the scan as `RAN` with its
+elapsed time.
+
+It runs however the work ended, a failure included, because a turn that failed
+halfway may still have left the file it was asked for. It runs before the
+turn's services stop, and before the turn is recorded as finished, so a host
+reacting to `artifact.created` downloads the file with
+`GET /v1/threads/{id}/files/artifacts/<path>` while the thread still holds it.
+
+**What was announced is remembered in the database**, one row per file the last
+scan found, replaced whole by the next scan in one transaction. A restart
+therefore announces nothing it already announced, a file that disappears and
+comes back is announced again as the new file it is, and a scan that fails
+leaves the previous record, so the next scan announces what this one could not.
+A failed scan is an `INTERNAL`, `degraded` incident and `STAGE_ARTIFACTS`
+reports `FAILED`.
+
+**A hash is reused only when the kernel vouches for it.** A file whose inode,
+size, and change time all match its row still has the contents that were
+hashed: the kernel moves the change time on every write, rename, and ownership
+change, and an agent cannot move it back. The modification time is not what is
+compared, because `touch` sets it. Everything else is hashed, reading exactly
+the size the walk measured.
+
+A content type is best effort: the file's first bytes first, then its extension,
+with `.blend`, `.obj`, `.stl`, `.fbx`, `.usdz`, and `.exr` named explicitly
+because the general extension table gets them wrong or does not know them. It is
+absent rather than `application/octet-stream` when neither says anything.
+`created_at` is the file's modification time. `member_id` is absent: one agent
+runs per turn and a file carries no author.
+
+Nothing caps what `artifacts/` may hold today; see the roadmap.
 
 ## Where a thread lands
 
@@ -232,6 +290,8 @@ A setup command's captured output is masked as it is captured, in
 - Issue and ticket prefetch into `issues/`.
 - Per-member worktrees under `members/`, cut from the single clone in `repos/`.
 - Per-thread disk quotas, and `workspace_bytes` on a thread summary.
+- The per-thread artifact cap, `ResourceLimits.artifact_cap_bytes`, enforced by
+  the scan with `ARTIFACT_TOO_LARGE`.
 - A bound on how long provisioning may take. Today `GIT_TERMINAL_PROMPT=0`
   removes the common hang, and git's own network timeouts cover the rest, but a
   wedged clone holds its thread against collection indefinitely.
