@@ -50,6 +50,15 @@
 //!   working directory. Only a Claude launch with attachments has a stdin
 //!   message; the prompt and its directives are then read from that message's
 //!   text block, exactly where the real CLI reads them.
+//! - `[[keep_session]]` keeps the session on disk where the real CLI keeps it,
+//!   and resumes it from there. Claude: `$CLAUDE_CONFIG_DIR/projects/<cwd>/
+//!   <id>.jsonl`, with `<cwd>` the working directory with every character
+//!   outside `A-Za-z0-9` written as `-`, found only from that cwd. Codex:
+//!   `$CODEX_HOME/sessions/2026/01/01/rollout-…-<id>.jsonl`, found anywhere under
+//!   `sessions/`. Each run appends its prompt as one line, and a resume whose
+//!   file is not there exits 1 before saying anything, as both CLIs refuse to
+//!   resume a session they cannot find. A directive rather than the default so
+//!   no other test writes harness state anywhere.
 //! - `[[record_env=FILE]]` writes the environment this replay was launched
 //!   with, one `KEY=VALUE` per line, to `FILE` in the working directory. The
 //!   durable twin of `report_env`, for a test that has to read what a variable
@@ -193,12 +202,6 @@ async fn main() {
     // message and so belongs to one spawn either way.
     let (prompt, blocks) = invocation.input(&arguments);
 
-    if let Some(file) = text_directive(&prompt, "record_stdin")
-        && let Err(error) = std::fs::write(&file, blocks.join("\n"))
-    {
-        eprintln!("could not record stdin to {file}: {error}");
-    }
-
     // A named transcript outranks the configured one, so a test needing a
     // recording this process was not configured with says so per spawn rather
     // than reconfiguring every other test in the process.
@@ -222,46 +225,23 @@ async fn main() {
     let truncate_after = directive(&prompt, "truncate").unwrap_or(usize::MAX);
     let exit_code = directive(&prompt, "exit").unwrap_or(0);
 
-    // Reported from inside the child, because that is the only vantage point
-    // that can answer what an agent actually sees. Anything asserted from the
-    // satellite's side is asserting on intent.
-    if let Some(name) = text_directive(&prompt, "report_env") {
-        let seen = std::env::var(&name).unwrap_or_else(|_unset| "(unset)".to_owned());
-        eprintln!("report_env {name}={seen}");
-    }
+    record(&prompt, &arguments, &blocks);
 
-    // Written to a file rather than to stderr, which the runner reads for
-    // liveness and then discards. A test that has to know what the CLI was asked
-    // to do needs it to survive the turn.
-    if let Some(file) = text_directive(&prompt, "record_argv")
-        && let Err(error) = std::fs::write(&file, arguments.join("\n"))
-    {
-        eprintln!("could not record the command line to {file}: {error}");
-    }
+    // A Claude recording names the session it was captured in, and a real CLI
+    // reports the one it was launched with, so a kept session is reported
+    // under its own id: `(recorded, launched)`.
+    let mut renamed: Option<(String, String)> = None;
 
-    if let Some(file) = text_directive(&prompt, "record_env") {
-        let environment: Vec<String> = std::env::vars()
-            .map(|(key, value)| format!("{key}={value}"))
-            .collect();
-
-        if let Err(error) = std::fs::write(&file, environment.join("\n")) {
-            eprintln!("could not record the environment to {file}: {error}");
-        }
-    }
-
-    for written in text_directives(&prompt, "write") {
-        let (path, contents) = written
-            .split_once('=')
-            .unwrap_or((written.as_str(), written.as_str()));
-        let path = std::path::Path::new(path);
-
-        let created = path
-            .parent()
-            .map_or(Ok(()), std::fs::create_dir_all)
-            .and_then(|()| std::fs::write(path, contents));
-
-        if let Err(error) = created {
-            eprintln!("could not write {}: {error}", path.display());
+    if prompt.contains("[[keep_session]]") {
+        match keep_session(invocation, &arguments, &path, &prompt) {
+            Ok(Some(launched)) => {
+                renamed = recorded_session_id(&transcript).map(|recorded| (recorded, launched));
+            }
+            Ok(None) => {}
+            Err(reason) => {
+                eprintln!("{reason}");
+                std::process::exit(1);
+            }
         }
     }
 
@@ -311,6 +291,11 @@ async fn main() {
         if line.trim().is_empty() {
             continue;
         }
+        let line = match &renamed {
+            Some((recorded, launched)) => line.replace(recorded.as_str(), launched),
+            None => line.to_owned(),
+        };
+
         // Flushed per line, because the satellite reads this as a stream and a
         // buffered replay would arrive all at once, proving nothing about the
         // streaming path.
@@ -376,6 +361,198 @@ fn stdin_message() -> (String, Vec<String>) {
     }
 
     (prompt, blocks)
+}
+
+/// Carries out the directives that report what this child was given, and the
+/// ones that leave files behind, before anything is replayed.
+fn record(prompt: &str, arguments: &[String], blocks: &[String]) {
+    if let Some(file) = text_directive(prompt, "record_stdin")
+        && let Err(error) = std::fs::write(&file, blocks.join("\n"))
+    {
+        eprintln!("could not record stdin to {file}: {error}");
+    }
+
+    // Reported from inside the child, because that is the only vantage point
+    // that can answer what an agent actually sees. Anything asserted from the
+    // satellite's side is asserting on intent.
+    if let Some(name) = text_directive(prompt, "report_env") {
+        let seen = std::env::var(&name).unwrap_or_else(|_unset| "(unset)".to_owned());
+        eprintln!("report_env {name}={seen}");
+    }
+
+    // Written to a file rather than to stderr, which the runner reads for
+    // liveness and then discards. A test that has to know what the CLI was asked
+    // to do needs it to survive the turn.
+    if let Some(file) = text_directive(prompt, "record_argv")
+        && let Err(error) = std::fs::write(&file, arguments.join("\n"))
+    {
+        eprintln!("could not record the command line to {file}: {error}");
+    }
+
+    if let Some(file) = text_directive(prompt, "record_env") {
+        let environment: Vec<String> = std::env::vars()
+            .map(|(key, value)| format!("{key}={value}"))
+            .collect();
+
+        if let Err(error) = std::fs::write(&file, environment.join("\n")) {
+            eprintln!("could not record the environment to {file}: {error}");
+        }
+    }
+
+    for written in text_directives(prompt, "write") {
+        let (path, contents) = written
+            .split_once('=')
+            .unwrap_or((written.as_str(), written.as_str()));
+        let path = std::path::Path::new(path);
+
+        let created = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(path, contents));
+
+        if let Err(error) = created {
+            eprintln!("could not write {}: {error}", path.display());
+        }
+    }
+}
+
+/// Keeps the session where the real CLI would, resuming it from there.
+///
+/// Returns the session id Claude was launched with, which it reports in place
+/// of the recording's, and why a resume could not find its session, which ends
+/// the run before it says anything, as the real CLIs do.
+fn keep_session(
+    invocation: Invocation,
+    arguments: &[String],
+    transcript: &str,
+    prompt: &str,
+) -> Result<Option<String>, String> {
+    let flag_value = |flag: &str| {
+        arguments
+            .iter()
+            .position(|argument| argument == flag)
+            .and_then(|index| arguments.get(index + 1))
+            .cloned()
+    };
+
+    let mut launched = None;
+
+    let file = match invocation {
+        Invocation::Claude => {
+            let configured = std::env::var("CLAUDE_CONFIG_DIR")
+                .map_err(|_unset| "CLAUDE_CONFIG_DIR is not set".to_owned())?;
+            let cwd = std::env::current_dir()
+                .and_then(std::fs::canonicalize)
+                .map_err(|error| format!("no working directory: {error}"))?;
+            let project: String = cwd
+                .to_string_lossy()
+                .chars()
+                .map(|character| {
+                    if character.is_ascii_alphanumeric() {
+                        character
+                    } else {
+                        '-'
+                    }
+                })
+                .collect();
+            let directory = std::path::Path::new(&configured)
+                .join("projects")
+                .join(project);
+
+            if let Some(session_id) = flag_value("--resume") {
+                let file = directory.join(format!("{session_id}.jsonl"));
+                if !file.is_file() {
+                    return Err(format!(
+                        "No conversation found with session ID: {session_id}"
+                    ));
+                }
+                launched = Some(session_id);
+                file
+            } else {
+                let session_id = flag_value("--session-id")
+                    .ok_or_else(|| "neither --session-id nor --resume was given".to_owned())?;
+                let file = directory.join(format!("{session_id}.jsonl"));
+                launched = Some(session_id);
+                file
+            }
+        }
+        Invocation::Codex => {
+            let configured =
+                std::env::var("CODEX_HOME").map_err(|_unset| "CODEX_HOME is not set".to_owned())?;
+            let sessions = std::path::Path::new(&configured).join("sessions");
+
+            if arguments.get(2).map(String::as_str) == Some("resume") {
+                let separator = arguments
+                    .iter()
+                    .position(|argument| argument == "--")
+                    .ok_or_else(|| "a resume without a separator".to_owned())?;
+                let session_id = arguments
+                    .get(separator + 1)
+                    .ok_or_else(|| "a resume without a session id".to_owned())?;
+
+                find_rollout(&sessions, &format!("-{session_id}.jsonl"))
+                    .ok_or_else(|| format!("no rollout found for thread id {session_id}"))?
+            } else {
+                // Codex mints its own id and announces it on `thread.started`,
+                // which the recording carries.
+                let recorded = std::fs::read_to_string(transcript).unwrap_or_default();
+                let session_id = recorded
+                    .lines()
+                    .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                    .find(|line| line["type"] == "thread.started")
+                    .and_then(|line| line["thread_id"].as_str().map(str::to_owned))
+                    .ok_or_else(|| "the recording announces no thread id".to_owned())?;
+
+                sessions
+                    .join("2026/01/01")
+                    .join(format!("rollout-2026-01-01T00-00-00-{session_id}.jsonl"))
+            }
+        }
+    };
+
+    let appended = file
+        .parent()
+        .map_or(Ok(()), std::fs::create_dir_all)
+        .and_then(|()| {
+            std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&file)
+        })
+        .and_then(|mut opened| writeln!(opened, "{}", serde_json::json!({ "prompt": prompt })));
+
+    appended
+        .map(|()| launched)
+        .map_err(|error| format!("could not keep the session at {}: {error}", file.display()))
+}
+
+/// The session id a Claude recording was captured under.
+fn recorded_session_id(transcript: &str) -> Option<String> {
+    transcript
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .find_map(|line| line["session_id"].as_str().map(str::to_owned))
+}
+
+/// The first rollout under `directory` whose name ends with `suffix`.
+fn find_rollout(directory: &std::path::Path, suffix: &str) -> Option<std::path::PathBuf> {
+    for entry in std::fs::read_dir(directory).ok()?.flatten() {
+        let path = entry.path();
+
+        if path.is_dir() {
+            if let Some(found) = find_rollout(&path, suffix) {
+                return Some(found);
+            }
+        } else if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with("rollout-") && name.ends_with(suffix))
+        {
+            return Some(path);
+        }
+    }
+
+    None
 }
 
 /// Ends this replay with the code a directive asked for.

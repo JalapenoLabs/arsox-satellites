@@ -593,10 +593,11 @@ fn proxy_v1(base_url: &str) -> String {
 
 /// Assembles the environment a harness child runs with.
 ///
-/// Seven layers, in the one order that is safe: what the satellite hands every
+/// Eight layers, in the one order that is safe: what the satellite hands every
 /// agent, then what the thread declared, then the LLM proxy's variables, then
 /// the MCP header values, then where the thread's services listen, then the
-/// egress proxy's, then the broker's `PATH`.
+/// egress proxy's, then where both CLIs keep their state, then the broker's
+/// `PATH`.
 /// Everything the satellite decides goes after everything the thread declared,
 /// because the last value set for a key is the one the child sees. A thread that
 /// could set `ANTHROPIC_BASE_URL` would route its agent out from under every
@@ -617,6 +618,10 @@ fn environment_for(
     env.extend(servers.environment());
     env.extend(grants.services.environment());
     env.extend(egress_environment(grants));
+
+    if let Some(home) = grants.agent_home.as_ref() {
+        env.extend(home.environment());
+    }
 
     if let Some(shims) = grants.exec_broker.as_deref() {
         env.push(AgentVar {
@@ -969,6 +974,14 @@ pub struct Grants {
     /// Empty for every thread that declared no services. See
     /// [`crate::services`].
     pub services: crate::services::Addresses,
+
+    /// Where both CLIs keep their state, sessions included.
+    ///
+    /// Named on every launch rather than left to each CLI's default, because
+    /// the satellite has to find a session again to export it. Absent only on
+    /// a satellite that found no home for the agent at all. See
+    /// [`crate::harness::sessions`].
+    pub agent_home: Option<crate::harness::sessions::AgentHome>,
 }
 
 impl Grants {
@@ -2331,6 +2344,7 @@ mod tests {
                 exec_broker: None,
                 choice: TurnChoice::default(),
                 services: crate::services::Addresses::default(),
+                agent_home: None,
             },
             &ThreadSettings::default(),
         )
@@ -2792,5 +2806,47 @@ mod tests {
             command.args[command.args.len() - 2..],
             ["01a01cd2-200b-77f0-b4b8-7421557ff5ed", "again"]
         );
+    }
+
+    #[test]
+    fn the_satellite_names_where_both_clis_keep_their_sessions() {
+        // Set last, so a thread that declared its own state directory cannot
+        // move a session out from under its export.
+        let command = command_for(
+            Harness::Claude,
+            &TurnInput::text("do the thing"),
+            &Session::Start {
+                session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            &Grants {
+                agent_home: Some(crate::harness::sessions::AgentHome::at(PathBuf::from(
+                    "/home/arsox",
+                ))),
+                ..Grants::default()
+            },
+            &declaring(
+                vec![declared(
+                    "CLAUDE_CONFIG_DIR",
+                    "/somewhere/else",
+                    Some(false),
+                )],
+                None,
+            ),
+        );
+
+        let last = |key: &str| {
+            command
+                .env
+                .iter()
+                .rfind(|variable| variable.key == key)
+                .map(|variable| variable.value.clone())
+        };
+
+        assert_eq!(
+            last("CLAUDE_CONFIG_DIR").as_deref(),
+            Some("/home/arsox/.claude")
+        );
+        assert_eq!(last("CODEX_HOME").as_deref(), Some("/home/arsox/.codex"));
     }
 }

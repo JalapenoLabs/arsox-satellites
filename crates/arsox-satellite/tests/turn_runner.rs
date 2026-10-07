@@ -223,6 +223,10 @@ async fn start_prepared(
                 .expect("should start the egress proxy"),
             broker,
         },
+        // Inside the scratch directory, so no harness state lands in a real home.
+        Some(arsox_satellite::harness::sessions::AgentHome::at(
+            workspace.path().join("agent-home"),
+        )),
     );
     tokio::spawn(runner.dispatch());
 

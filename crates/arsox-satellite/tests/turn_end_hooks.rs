@@ -63,6 +63,7 @@ async fn start() -> Running {
         max_concurrent_threads: 2,
         port: 0,
         collect_interval: std::time::Duration::from_hours(1),
+        agent_home: None,
     })
     .await
     .expect("should assemble");

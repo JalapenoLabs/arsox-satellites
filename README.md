@@ -554,6 +554,10 @@ Each control gets its own code, because "denied" without saying which gate close
 | `HARNESS_LAUNCH_FAILED` | yes | the Claude or Codex CLI could not be started |
 | `HARNESS_CRASHED` | yes | the CLI process died and the single restart did not recover it |
 | `HARNESS_IDLE_TIMEOUT` | yes | the harness produced no output past the idle bound |
+| `HARNESS_SESSION_NOT_FOUND` | no | the thread has opened no harness session, or its files are gone, so there is nothing to export |
+| `HARNESS_SESSION_ALREADY_STARTED` | no | an import was sent to a thread that already has a harness session or a turn |
+| `HARNESS_SESSION_MISMATCH` | no | the imported session belongs to the other harness |
+| `HARNESS_SESSION_TOO_LARGE` | no | the imported archive is past the 2 GiB an import accepts |
 
 **Streaming**
 
@@ -1515,6 +1519,18 @@ while let Some(event) = relay.next().await {
 One client is attached per thread and a new one replaces the old. A call made while nothing is attached fails at once as a tool error the agent reads, a call waits at most 15 minutes, and nothing is replayed. Files move the same direction: `read_file` and `write_file` stream one file out of or into the workspace, refusing any path that crosses a symbolic link. See [the relay doc](./docs/relay.md).
 
 Arsox also provides its own MCP tools to the agents, including team spawn and despawn, `request_integration`, and `override_redaction`.
+
+### Carrying a conversation to another thread
+
+A satellite owns no data, so a conversation outlives its thread only if your application keeps it. Export a thread's harness session after a turn, store the archive, and import it into a fresh thread later, on any satellite running the same harness. That thread's first turn resumes the conversation with its full context.
+
+```rust
+let export = thread.export_session().await?;   // harness, session id, and the tar archive
+// ...store export.into_body() somewhere durable...
+fresh.import_session(length, archive).await?;  // before the fresh thread's first turn
+```
+
+See [the harness doc](./docs/harness.md#a-session-can-leave-its-thread) for where each harness keeps a session and what an import checks.
 
 ## Order of operations
 

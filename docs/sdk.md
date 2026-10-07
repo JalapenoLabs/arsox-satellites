@@ -143,6 +143,18 @@ broken. See [the harness doc](./harness.md#attachments-reach-the-harness-the-way
 drops a `..` segment rather than encoding it, so `a/../secret` would quietly
 address `secret`. The satellite refuses the same paths itself.
 
+## Harness sessions
+
+`ThreadHandle::export_session` returns a `SessionExport`: the harness and the
+session id, read from the response's headers so a host can decide where the
+archive may go without opening it, and the archive itself through
+`content_length()` and `into_body()`, as `FileDownload` carries a file. A thread
+with nothing to export answers `HARNESS_SESSION_NOT_FOUND`, which
+`Error::is_session_not_found` names because it is an answer rather than a
+failure. `ThreadHandle::import_session` takes the exact length and a stream of
+`Bytes`, with the same bounds as `write_file`. See
+[the harness doc](./harness.md#a-session-can-leave-its-thread).
+
 ## No handle renders the secret
 
 `Satellite`, `Threads`, `ThreadHandle`, `TurnHandle`, and `ThreadCreated` all

@@ -65,6 +65,16 @@ sha2 = "0.10"
 # hand-written one would be the one that forgot `.webp`.
 mime_guess = "2"
 
+# A harness session leaves a thread and enters another as one tar archive. The
+# format is old and its edge cases (long names, padding, entry types) are exactly
+# what a hand-written writer would get wrong.
+tar = "0.4"
+
+# The archive is assembled in, and an import received into, an anonymous file
+# the kernel removes when its last handle closes, so a satellite killed mid
+# transfer leaves nothing behind to clean up.
+tempfile = "3"
+
 # Notably faster along allocating hot paths, which for this process means
 # request decoding and event fan-out. Per M-MIMALLOC-APPS.
 [target.'cfg(not(target_env = "msvc"))'.dependencies]

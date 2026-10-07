@@ -71,6 +71,7 @@ async fn start() -> Started {
         max_concurrent_threads: 4,
         port: 0,
         collect_interval: Duration::from_hours(1),
+        agent_home: None,
     })
     .await
     .expect("should assemble");

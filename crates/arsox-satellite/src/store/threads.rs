@@ -636,6 +636,51 @@ impl Store {
         Ok(())
     }
 
+    /// Whether a thread has ever had a turn, queued or finished.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error if the query fails.
+    pub async fn has_turns(&self, thread_id: &str) -> Result<bool, StoreError> {
+        let found: Option<i64> =
+            sqlx::query_scalar("SELECT 1 FROM turns WHERE thread_id = ? LIMIT 1")
+                .bind(thread_id)
+                .fetch_optional(self.pool())
+                .await?;
+
+        Ok(found.is_some())
+    }
+
+    /// Records an imported harness session as the thread's, if it is still
+    /// fresh.
+    ///
+    /// One conditional statement, so a turn queued at the same moment cannot
+    /// slip between a check and the write: the thread must have no harness
+    /// session and no turn at all, and `false` says it no longer qualified.
+    /// The same reasoning that keeps the claim a single statement.
+    ///
+    /// # Errors
+    ///
+    /// Returns a database error if the update fails.
+    pub async fn adopt_harness_session(
+        &self,
+        thread_id: &str,
+        session_id: &str,
+    ) -> Result<bool, StoreError> {
+        let updated = sqlx::query(
+            "UPDATE threads SET harness_session_id = ?
+              WHERE thread_id = ?
+                AND harness_session_id IS NULL
+                AND NOT EXISTS (SELECT 1 FROM turns WHERE turns.thread_id = threads.thread_id)",
+        )
+        .bind(session_id)
+        .bind(thread_id)
+        .execute(self.pool())
+        .await?;
+
+        Ok(updated.rows_affected() == 1)
+    }
+
     async fn thread_by_idempotency_key(&self, key: &str) -> Result<Option<Thread>, StoreError> {
         let Some(row) = sqlx::query("SELECT thread_id FROM threads WHERE idempotency_key = ?")
             .bind(key)

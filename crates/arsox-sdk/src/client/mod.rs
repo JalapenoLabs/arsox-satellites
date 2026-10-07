@@ -19,12 +19,14 @@
 mod error;
 mod files;
 mod relay;
+mod sessions;
 
 pub use error::{Error, Result};
 #[doc(inline)]
 pub use files::{ByteStream, FileDownload};
 #[doc(inline)]
 pub use relay::{Relay, RelayAnswerer, RelayEvent};
+pub use sessions::SessionExport;
 
 use crate::proto::artifact::v1::{
     Artifact, ListArtifactsRequest, ListArtifactsResponse, ListWorkspaceFilesRequest,
@@ -34,7 +36,7 @@ use crate::proto::common::v1::{PageRequest, Timestamp};
 use crate::proto::error::v1::Error as ContractError;
 use crate::proto::error::v1::ErrorCode;
 use crate::proto::event::v1::ThreadEvent;
-use crate::proto::harness::v1::GetHarnessResponse;
+use crate::proto::harness::v1::{GetHarnessResponse, Harness, ImportHarnessSessionResponse};
 use crate::proto::incident::v1::{
     Disposition, Incident, ListIncidentsRequest, ListIncidentsResponse,
 };
@@ -1195,6 +1197,133 @@ impl ThreadHandle {
             .header(reqwest::header::CONTENT_TYPE, "application/octet-stream")
             // Stated explicitly. A streamed body is otherwise sent chunked, with
             // no length for the satellite to check its ceiling against.
+            .header(reqwest::header::CONTENT_LENGTH, content_length)
+            .body(reqwest::Body::wrap_stream(body))
+            .send()
+            .await
+            .map_err(|error| Error::transport(error.to_string()))?;
+
+        decode(response).await
+    }
+
+    /// Exports this thread's harness session as a tar archive.
+    ///
+    /// The archive's first entry is a `HarnessSession` describing it, and the
+    /// rest are the files the harness needs to resume, so a host stores one
+    /// blob and later hands the same bytes to
+    /// [`import_session`](Self::import_session). The harness and the session id
+    /// are on the returned [`SessionExport`] as well, read from the response.
+    ///
+    /// Export after a turn has finished: a session exported while a turn runs
+    /// carries the transcript as far as the harness had written it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::is_session_not_found`] when the thread has not opened a harness
+    /// session yet, or its files are no longer on disk: there is nothing to
+    /// export, which is not a failure. Otherwise an error when the thread is
+    /// unknown or the satellite is unreachable, and a transport error when the
+    /// response does not say how long the archive is, which harness wrote it,
+    /// or which session it is.
+    pub async fn export_session(&self) -> Result<SessionExport> {
+        let response = self
+            .satellite
+            .inner
+            .http
+            .get(format!(
+                "{}/v1/threads/{}/session",
+                self.satellite.inner.base, self.thread_id
+            ))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.satellite.inner.secret),
+            )
+            .send()
+            .await
+            .map_err(|error| Error::transport(error.to_string()))?;
+
+        if !response.status().is_success() {
+            return Err(failure(response).await);
+        }
+
+        let Some(content_length) = response.content_length() else {
+            return Err(Error::transport(
+                "the satellite sent a session without saying how long it is",
+            ));
+        };
+
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned)
+        };
+
+        let harness = header(sessions::HARNESS_HEADER)
+            .and_then(|name| Harness::from_str_name(&name))
+            .filter(|harness| *harness != Harness::Unspecified)
+            .ok_or_else(|| {
+                Error::transport("the satellite sent a session without naming its harness")
+            })?;
+
+        let harness_session_id = header(sessions::SESSION_ID_HEADER)
+            .filter(|session_id| !session_id.is_empty())
+            .ok_or_else(|| {
+                Error::transport("the satellite sent a session without naming its id")
+            })?;
+
+        let body = response
+            .bytes_stream()
+            .map(|chunk| chunk.map_err(|error| Error::transport(error.to_string())));
+
+        Ok(SessionExport::new(
+            harness,
+            harness_session_id,
+            content_length,
+            Box::pin(body),
+        ))
+    }
+
+    /// Imports an exported harness session into this thread.
+    ///
+    /// The thread must be fresh, with no harness session and no turn, and run
+    /// the harness that wrote the session. The files are placed where that
+    /// harness looks from this thread's workspace, and the thread's first turn
+    /// resumes the conversation. `content_length` must be the archive's exact
+    /// size, as [`write_file`](Self::write_file) requires of a file.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error whose code is `HARNESS_SESSION_ALREADY_STARTED` for a
+    /// thread that is not fresh, `HARNESS_SESSION_MISMATCH` for a session of
+    /// the other harness, `HARNESS_SESSION_TOO_LARGE` past the satellite's cap,
+    /// and `REQUEST_BODY_MALFORMED` for an archive that is not one session.
+    pub async fn import_session<Body, Failure>(
+        &self,
+        content_length: u64,
+        body: Body,
+    ) -> Result<ImportHarnessSessionResponse>
+    where
+        Body: Stream<Item = std::result::Result<bytes::Bytes, Failure>> + Send + 'static,
+        Failure: Into<Box<dyn std::error::Error + Send + Sync>> + 'static,
+    {
+        let response = self
+            .satellite
+            .inner
+            .http
+            .put(format!(
+                "{}/v1/threads/{}/session",
+                self.satellite.inner.base, self.thread_id
+            ))
+            .header(
+                "Authorization",
+                format!("Bearer {}", self.satellite.inner.secret),
+            )
+            .header("Accept", PROTOBUF)
+            .header(reqwest::header::CONTENT_TYPE, "application/x-tar")
+            // Stated explicitly, so the satellite can check its cap before it
+            // receives a byte. A streamed body is otherwise sent chunked.
             .header(reqwest::header::CONTENT_LENGTH, content_length)
             .body(reqwest::Body::wrap_stream(body))
             .send()

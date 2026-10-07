@@ -207,6 +207,10 @@ pub(crate) struct Satellite {
 
     /// The host application's setup script, and the gate it holds.
     pub(crate) setup: setup::Setup,
+
+    /// Where the harnesses keep their sessions, for export and import. `None`
+    /// when the satellite found no home for the agent at all.
+    pub(crate) agent_home: Option<harness::sessions::AgentHome>,
 }
 
 impl Satellite {
@@ -435,6 +439,7 @@ fn router(satellite: Arc<Satellite>) -> Router {
         .merge(relay::socket::routes())
         .merge(workspace::files::routes())
         .merge(artifacts::routes())
+        .merge(harness::sessions::routes())
         .merge(setup::routes())
         .route_layer(from_fn_with_state(Arc::clone(&satellite), require_auth));
 
@@ -530,6 +535,13 @@ pub struct ServeOptions {
 
     /// How often to sweep for expired threads.
     pub collect_interval: std::time::Duration,
+
+    /// The home directory both CLIs keep their state under, sessions included.
+    ///
+    /// `None` resolves it: the agent account's home in the image, this
+    /// process's own on a satellite that cannot hand its children down. A test
+    /// names a scratch directory so no harness state lands in a real home.
+    pub agent_home: Option<std::path::PathBuf>,
 }
 
 impl ServeOptions {
@@ -555,6 +567,7 @@ impl ServeOptions {
                 "ARSOX_COLLECT_INTERVAL",
                 DEFAULT_COLLECT_INTERVAL_SECONDS,
             ))),
+            agent_home: None,
         }
     }
 }
@@ -656,6 +669,8 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
         .await
         .context("failed to start the egress proxy")?;
 
+    let agent_home = harness::sessions::AgentHome::resolve(options.agent_home.clone());
+
     let runner = harness::runner::Runner::new(
         store.clone(),
         std::path::PathBuf::from(&options.workspace_root),
@@ -667,6 +682,7 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
             network,
             broker: broker.clone(),
         },
+        agent_home.clone(),
     );
     tokio::spawn(runner.dispatch());
 
@@ -711,6 +727,7 @@ pub async fn assemble(options: ServeOptions) -> Result<Assembled> {
             relay,
             workspace_root: std::path::PathBuf::from(&options.workspace_root),
             setup,
+            agent_home,
         })),
         store,
     })

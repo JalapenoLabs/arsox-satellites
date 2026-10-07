@@ -722,6 +722,10 @@ pub struct Runner {
     /// The loopback ports every running turn's services hold, so no two turns
     /// are ever handed the same one. See [`crate::services`].
     service_ports: crate::services::Leases,
+
+    /// Where every harness this runner launches keeps its state, named on each
+    /// launch so a session can be found again for export.
+    agent_home: Option<crate::harness::sessions::AgentHome>,
 }
 
 impl Runner {
@@ -734,6 +738,7 @@ impl Runner {
         max_concurrent_threads: u32,
         collector: Arc<crate::collector::Collector>,
         gates: Gates,
+        agent_home: Option<crate::harness::sessions::AgentHome>,
     ) -> Self {
         Self {
             store,
@@ -743,6 +748,7 @@ impl Runner {
             collector,
             gates,
             service_ports: crate::services::Leases::default(),
+            agent_home,
         }
     }
 
@@ -1777,6 +1783,7 @@ impl Runner {
                 }),
                 exec_broker: context.shims.clone(),
                 services: context.services.addresses().clone(),
+                agent_home: self.agent_home.clone(),
             },
             // Read per turn rather than held on the runner, so a thread's
             // posture and its MCP servers are whatever its settings say now.

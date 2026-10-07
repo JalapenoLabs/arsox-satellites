@@ -634,6 +634,10 @@ process inherits its parent's environment by default, and the satellite's holds
 `ARSOX_SECRET`. An agent that could read it could command its own satellite:
 destroy threads, read another thread's artifacts, rewrite its own permissions.
 
+Two more are the satellite's to set on every launch, `CLAUDE_CONFIG_DIR` and
+`CODEX_HOME`, which put both CLIs' state, sessions included, where session export
+finds it. See [the session section](#a-session-can-leave-its-thread).
+
 The one `ARSOX_` family an agent is given is `ARSOX_SERVICE_<NAME>_PORT` and
 `ARSOX_SERVICE_<NAME>_URL`, where the thread's [services](./services.md) listen.
 They are minted per turn and listed on `HarnessCommand::env` like everything
@@ -902,6 +906,96 @@ so its output tail is masked by the thread's redactor like checker output.
 `settings.turn_end_hooks` and the hook: a name that is not 1 to 64 of
 `A-Z a-z 0-9 _ -` or repeats another ignoring case, an empty `argv` or `argv[0]`,
 a NUL in any argument, and a timeout that is not positive or is past one hour.
+
+## A session can leave its thread
+
+A satellite owns no data. The idle TTL collects a thread, and a replaced
+container loses every transcript the CLIs kept under the agent's home. A host
+that wants a conversation to outlive either exports the session and later
+imports it into a fresh thread, on this satellite or another, whose first turn
+resumes it through the ordinary resume path. The code is
+`src/harness/sessions.rs`.
+
+| | |
+|---|---|
+| `GET /v1/threads/{id}/session` | `application/x-tar`: `arsox-session.binpb`, a `HarnessSession`, then the session's files under `files/`; the harness and the id also as the `Arsox-Harness` and `Arsox-Harness-Session-Id` headers |
+| `PUT /v1/threads/{id}/session` | the same archive, with `Content-Length`; answers `ImportHarnessSessionResponse` |
+
+`Arsox-Harness` carries the enum's name, `HARNESS_CLAUDE` or `HARNESS_CODEX`.
+
+### Where each harness keeps a session
+
+Measured against Claude 2.1.290 and Codex 0.160.0 with a stub model endpoint
+and throwaway homes:
+
+| | Claude | Codex |
+|---|---|---|
+| state directory | `CLAUDE_CONFIG_DIR` | `CODEX_HOME` |
+| a session | `projects/<cwd>/<id>.jsonl`, and a `<id>/` directory when it has one | `sessions/YYYY/MM/DD/rollout-<time>-<id>.jsonl` |
+| what a resume looks for | the file in the **current** working directory's project | the rollout anywhere under `sessions/`, from any working directory, whatever its date directory and whatever else the index holds |
+| a later turn | appends to the same file | appends to the same file |
+
+`<cwd>` is the absolute working directory with every character outside
+`A-Z a-z 0-9` written as `-`: `/workspace/0199…` becomes `-workspace-0199…`.
+Claude cuts a name past 200 characters and adds a hash suffix the satellite does
+not reproduce, so a thread whose workspace path encodes past 200 cannot export
+or import a Claude session; `/workspace/<thread id>` is 47.
+
+**The satellite names both state directories on every launch**:
+`CLAUDE_CONFIG_DIR=<agent home>/.claude` and `CODEX_HOME=<agent home>/.codex`,
+in its own layer after the thread's declared variables. It has to find a session
+again to export it, so it decides where the CLIs keep them rather than guessing,
+and a declared variable cannot move one out from under it. In the image that is
+where each CLI looks by default anyway. The agent's home is the agent account's
+in the image and the satellite's own on a satellite that cannot hand its
+children down; `ServeOptions.agent_home` names one for a test.
+
+### Export
+
+The thread must have opened a harness session, and its files must still be where
+the harness keeps them, or the answer is `HARNESS_SESSION_NOT_FOUND`: nothing to
+export, which is a different fact from a failure. The archive carries that
+session's files and nothing beside them: not another session, and not Claude's
+per-project `memory/`. It is assembled in an anonymous file and streamed with its
+exact length, so the host can hand it to a store that wants the size up front.
+Export after a turn has finished; one taken during a turn carries the transcript
+as far as the harness had written it.
+
+### Import
+
+The thread must be fresh, with no harness session and no turn, queued or
+finished (`HARNESS_SESSION_ALREADY_STARTED`); run the harness that wrote the
+session (`HARNESS_SESSION_MISMATCH`); and the archive must be at most 2 GiB
+(`HARNESS_SESSION_TOO_LARGE`, answered on `Content-Length` before a byte is
+received). An archive that is not one session of this layout is
+`REQUEST_BODY_MALFORMED`: its first entry must be `arsox-session.binpb` at
+`format_version` 1, the session id 1 to 128 of `A-Z a-z 0-9 - _`, and every other
+entry a regular file under `files/` that belongs to that session, checked by the
+same rules a workspace path is, so nothing in it reaches outside the sessions
+directory.
+
+**Claude's files are placed under the new thread's project**, because the
+directory is named for the working directory and a thread's working directory
+is its own. Codex's keep the path they were exported under. A file already
+there is replaced: a host imports the newest copy it kept.
+
+**Files first, then the record.** The files are installed, then one conditional
+statement sets the thread's `harness_session_id` only if it still has no session
+and no turn. A turn queued in between wins and the import answers
+`HARNESS_SESSION_ALREADY_STARTED`; the files it placed stay, inert, since nothing
+resumes a session no thread names. The other order would let a turn claimed in
+the gap resume a session whose files were not there yet.
+
+The thread's first turn then reaches the existing resume path: `--resume <id>`
+for Claude, `codex exec resume <id>` for Codex.
+
+**The agent's home is the agent's.** Everything is read and written through the
+confined walk from the agent's home, never through a link, and what is written
+is handed to the agent account, which is who runs the harness that resumes it.
+
+**Codex keeps one rollout per id in a home every thread shares.** Importing the
+same Codex session into two threads on one satellite gives both one transcript,
+each appending to it. Import a session into one thread at a time.
 
 ## What `GET /v1/harness` reports
 

@@ -15,6 +15,7 @@ pub mod capabilities;
 mod checkers;
 pub mod mcp;
 pub mod runner;
+pub mod sessions;
 pub mod spawn;
 
 pub use arsox_harness::{HarnessResult, MappedEvent, Mapping, claude, codex};
