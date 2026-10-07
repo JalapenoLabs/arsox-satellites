@@ -414,6 +414,24 @@ async fn start_turn(
     Path(thread_id): Path<String>,
     Protobuf(request): Protobuf<StartTurnRequest>,
 ) -> Response {
+    // Checked while the caller is still listening, so a turn that names a file
+    // that is not there is refused rather than queued to fail later. What is
+    // stored is what the satellite found, not what the caller claimed.
+    let attachments = if request.attachments.is_empty() {
+        Vec::new()
+    } else {
+        let directory =
+            match crate::workspace::files::thread_workspace(&satellite, &thread_id).await {
+                Ok(directory) => directory,
+                Err(response) => return response,
+            };
+
+        match crate::harness::attachments::admit(directory, request.attachments).await {
+            Ok(admitted) => admitted,
+            Err(refusal) => return attachment_refusal(refusal),
+        }
+    };
+
     match satellite
         .store
         .create_turn(NewTurn {
@@ -422,6 +440,7 @@ async fn start_turn(
             metadata: request.metadata.into_iter().collect(),
             idempotency_key: request.idempotency_key,
             overrides: request.overrides,
+            attachments,
             // Only a pull request watch starts a turn the SDK did not ask for,
             // and that path does not come through here.
             satellite_initiated: false,
@@ -439,6 +458,26 @@ async fn start_turn(
             })
         }
         Err(error) => store_failure(&error),
+    }
+}
+
+/// The answer a refused attachment gets.
+///
+/// A path answers exactly as the file routes would answer it, so a caller
+/// handles a missing upload the same way wherever it meets one. A cap has no
+/// code of its own and is the field failing validation that it is.
+fn attachment_refusal(refusal: crate::harness::attachments::Refusal) -> Response {
+    use crate::harness::attachments::Refusal;
+
+    match refusal {
+        Refusal::File { index, path, error } => {
+            error.response(&format!("attachments[{index}] {path}"))
+        }
+        Refusal::Limit(reason) => contract_error(
+            StatusCode::BAD_REQUEST,
+            ErrorCode::RequestFieldInvalid,
+            &reason,
+        ),
     }
 }
 

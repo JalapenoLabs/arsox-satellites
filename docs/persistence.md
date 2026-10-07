@@ -6,9 +6,9 @@ volume.
 
 The file lives at `/var/arsox/arsox.db`, overridable with `ARSOX_DB_PATH`.
 **Mount `/var/arsox` as a named volume.** It holds threads, queued turns, event
-history, incidents, the artifacts each thread has announced, and the host's
-setup script, so losing it means losing every thread you intended to resume and
-every record of what went wrong.
+history, incidents, the artifacts each thread has announced, the files each turn
+was submitted with, and the host's setup script, so losing it means losing every
+thread you intended to resume and every record of what went wrong.
 
 ## Three decisions shape the schema
 
@@ -139,6 +139,15 @@ The rows are keyed by thread and path and are not foreign-keyed to `threads`:
 collection keeps the thread row as a tombstone, so a cascade would never fire.
 Collection deletes them itself, with the thread's turns and events. See
 [the workspace doc](./workspace.md#artifacts).
+
+## A turn's attachments are rows beside it
+
+`turn_attachments` holds one row per file a turn was submitted with, in the
+order it was named: the workspace path, and the size and media type the
+satellite measured when it checked the file. It cascades from `turns`, like
+`turn_metadata`, and collection deletes it explicitly beside it. The bytes stay
+in the workspace; the runner reads them again when the harness starts. See
+[the harness doc](./harness.md#attachments-reach-the-harness-the-way-it-takes-them).
 
 ## The setup script is one row
 

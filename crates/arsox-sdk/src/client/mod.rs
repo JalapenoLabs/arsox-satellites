@@ -50,7 +50,7 @@ use crate::proto::thread::v1::{
 };
 use crate::proto::turn::v1::{
     CancelTurnResponse, GetTurnResponse, ListTurnsRequest, ListTurnsResponse, StartTurnRequest,
-    StartTurnResponse, Turn, TurnResult, TurnStatus,
+    StartTurnResponse, Turn, TurnAttachment, TurnResult, TurnStatus,
 };
 use futures_util::{Stream, StreamExt as _};
 use prost::Message as _;
@@ -599,6 +599,44 @@ pub struct TurnOptions {
     /// What this turn decides for itself. Absent fields inherit the thread's
     /// `turn_defaults`.
     pub overrides: Option<TurnOverrides>,
+
+    /// Files already uploaded into the workspace with
+    /// [`ThreadHandle::write_file`], handed to the harness with the prompt.
+    ///
+    /// Only `path` is read: the satellite measures the size and sniffs the
+    /// media type itself and refuses the turn when a rule is broken, at most 8
+    /// files, each at most 3.75 MiB and 12 MiB together. Images reach either
+    /// harness as images, PDFs reach Claude as documents, and anything else is
+    /// named in the prompt for the agent to open.
+    ///
+    /// ```no_run
+    /// # async fn run(thread: arsox_sdk::client::ThreadHandle, png: Vec<u8>) -> arsox_sdk::client::Result<()> {
+    /// use arsox_sdk::client::TurnOptions;
+    /// use arsox_sdk::proto::turn::v1::TurnAttachment;
+    ///
+    /// let size_bytes = png.len() as u64;
+    /// let body = futures_util::stream::once(async move {
+    ///     Ok::<_, std::io::Error>(bytes::Bytes::from(png))
+    /// });
+    /// thread.write_file("feedback/1/annotated.png", size_bytes, body).await?;
+    ///
+    /// thread
+    ///     .start_turn_with(
+    ///         "Make what I circled greener.",
+    ///         TurnOptions {
+    ///             attachments: vec![TurnAttachment {
+    ///                 path: "feedback/1/annotated.png".into(),
+    ///                 content_type: Some("image/png".into()),
+    ///                 size_bytes,
+    ///             }],
+    ///             ..TurnOptions::default()
+    ///         },
+    ///     )
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub attachments: Vec<TurnAttachment>,
 }
 
 /// A handle to one thread.
@@ -673,7 +711,7 @@ impl ThreadHandle {
                     idempotency_key: options.idempotency_key,
                     metadata: options.metadata.into_iter().collect(),
                     overrides: options.overrides,
-                    attachments: Vec::new(),
+                    attachments: options.attachments,
                 },
             )
             .await?;

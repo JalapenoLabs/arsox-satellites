@@ -44,7 +44,7 @@
 //! `HARNESS_CRASHED`, whichever it was.
 
 use crate::harness::spawn::{
-    EgressAccess, Grants, HarnessCommand, ModelAccess, Session, TurnChoice, command_for,
+    EgressAccess, Grants, HarnessCommand, ModelAccess, Session, TurnChoice, TurnInput, command_for,
     process_for,
 };
 use crate::harness::{HarnessResult, Mapping, accounting, checkers, claude, codex};
@@ -1020,9 +1020,16 @@ impl Runner {
         claimed: &ClaimedTurn,
         context: &mut TurnContext,
     ) -> Result<(TurnStatus, TurnResult), Failure> {
-        let consumed = self
-            .session_with_restart(claimed, context, &claimed.turn.prompt)
-            .await?;
+        // Read again now rather than trusted from the queue, because the agent
+        // owns the workspace in between. Read once for the turn, so a restart
+        // hands the harness the same files the first attempt was handed.
+        let attached = self.deliver_attachments(claimed, context).await;
+        let input = TurnInput {
+            prompt: &claimed.turn.prompt,
+            attachments: &attached,
+        };
+
+        let consumed = self.session_with_restart(claimed, context, &input).await?;
 
         if consumed.cancelled {
             return Ok((
@@ -1105,6 +1112,43 @@ impl Runner {
             turn_status,
             assemble(claimed, reported_result, turn_status, &checked),
         ))
+    }
+
+    /// Reads the turn's attachments as the harness is about to start.
+    ///
+    /// A file that no longer passes the rules it was admitted under is named in
+    /// the prompt as unreadable rather than failing the turn, and recorded as a
+    /// degraded incident: the work can go on, and what is missing is one input
+    /// to it. See [`crate::harness::attachments`].
+    async fn deliver_attachments(
+        &self,
+        claimed: &ClaimedTurn,
+        context: &TurnContext,
+    ) -> Vec<crate::harness::attachments::Delivered> {
+        let delivered = crate::harness::attachments::deliver(
+            context.working_dir.clone(),
+            claimed.turn.attachments.clone(),
+        )
+        .await;
+
+        for attachment in &delivered {
+            if let Some(reason) = attachment.unreadable() {
+                self.record_incident(
+                    Attribution::of(claimed),
+                    ErrorCode::WorkspaceFileNotFound,
+                    Disposition::Degraded,
+                    false,
+                    &format!(
+                        "attachment {:?} could not be handed to the harness, so the prompt names \
+                         it instead: {reason}",
+                        attachment.path
+                    ),
+                )
+                .await;
+            }
+        }
+
+        delivered
     }
 
     /// Everything that has to hold before a harness is spawned.
@@ -1429,7 +1473,7 @@ impl Runner {
         &self,
         claimed: &ClaimedTurn,
         context: &mut TurnContext,
-        prompt: &str,
+        input: &TurnInput<'_>,
     ) -> Result<Consumed, Failure> {
         let thread_id = &claimed.turn.thread_id;
         let turn_id = &claimed.turn.turn_id;
@@ -1441,7 +1485,7 @@ impl Runner {
             // which is the "same context" a restart is supposed to preserve, and
             // one that died before announcing it opens a session again under the
             // id the first attempt was given.
-            let command = self.command_for_turn(claimed, context, prompt).await;
+            let command = self.command_for_turn(claimed, context, input).await;
             let consumed = self
                 .run_session(&command, thread_id, turn_id, context)
                 .await;
@@ -1562,13 +1606,13 @@ impl Runner {
         &self,
         claimed: &ClaimedTurn,
         context: &TurnContext,
-        prompt: &str,
+        input: &TurnInput<'_>,
     ) -> HarnessCommand {
         let session = self.session_for(&claimed.turn.thread_id).await;
 
         command_for(
             context.harness,
-            prompt,
+            input,
             &session,
             context.working_dir.clone(),
             &Grants {
@@ -1781,7 +1825,12 @@ impl Runner {
         );
 
         match self
-            .session_with_restart(claimed, context, &checkers::fix_prompt(failures))
+            .session_with_restart(
+                claimed,
+                context,
+                // A prompt the satellite wrote, so nothing is attached to it.
+                &TurnInput::text(&checkers::fix_prompt(failures)),
+            )
             .await
         {
             Ok(consumed) => {
@@ -2586,9 +2635,14 @@ fn spawn_harness(
     // Never `Command::new` directly. A spawned process inherits its parent's
     // environment, and the satellite's holds `ARSOX_SECRET`.
     let mut child = process_for(command)
-        // The CLI waits on stdin for several seconds otherwise, which looks
-        // exactly like a hung process.
-        .stdin(Stdio::null())
+        // A launch with nothing to say on stdin gets none: the CLI waits on it
+        // for several seconds otherwise, which looks exactly like a hung
+        // process, and `codex exec` reads a piped one as more prompt.
+        .stdin(if command.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
@@ -2616,6 +2670,26 @@ fn spawn_harness(
             "the harness produced no stderr to read",
         )
     })?;
+
+    if let (Some(message), Some(mut pipe)) = (command.stdin.clone(), child.stdin.take()) {
+        // Written beside the read loop rather than before it. The message can
+        // be megabytes of base64 and a pipe holds 64 KiB, so a write that had
+        // to finish first would wait on a harness that is itself waiting to be
+        // read. Dropping the pipe afterwards is load-bearing: stream-json input
+        // keeps the CLI waiting for another message until stdin closes.
+        tokio::spawn(async move {
+            use tokio::io::AsyncWriteExt as _;
+
+            if let Err(error) = pipe.write_all(&message.0).await {
+                // The harness exited before reading its prompt, which its own
+                // ending already reports. Traced so the two can be matched up.
+                tracing::debug!(
+                    event.name = "turn.harness.stdin_failed",
+                    "could not hand the harness its message on stdin: {error}",
+                );
+            }
+        });
+    }
 
     Ok((child, stdout, stderr))
 }

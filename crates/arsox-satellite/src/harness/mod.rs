@@ -10,6 +10,7 @@
 //! everything above it.
 
 mod accounting;
+pub mod attachments;
 pub mod capabilities;
 mod checkers;
 pub mod mcp;

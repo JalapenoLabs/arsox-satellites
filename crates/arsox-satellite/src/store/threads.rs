@@ -503,6 +503,7 @@ impl Store {
         for statement in [
             "DELETE FROM events WHERE thread_id = ?",
             "DELETE FROM turn_metadata WHERE turn_id IN (SELECT turn_id FROM turns WHERE thread_id = ?)",
+            "DELETE FROM turn_attachments WHERE turn_id IN (SELECT turn_id FROM turns WHERE thread_id = ?)",
             "DELETE FROM turns WHERE thread_id = ?",
             "DELETE FROM thread_metadata WHERE thread_id = ?",
             "DELETE FROM artifacts WHERE thread_id = ?",

@@ -947,6 +947,10 @@ We also support custom LLM endpoints, for example self-hosted Azure Anthropic mo
 
 By default the satellite decides which header carries your credential: a token always goes as `Authorization: Bearer`, and an API key goes wherever its destination reads one from. Set `auth.presentation` to say so yourself. A self-hosted OpenAI-compatible deployment is the case that needs it, because it lives on a host no rule about somebody else's domain can recognize, and a credential in the wrong header is rejected in a way that reads as a bad key rather than as a mis-shaped request.
 
+#### Attachments
+
+A turn can carry files with its prompt: upload each into the workspace, then name it in `attachments`. Images reach both harnesses as images and PDFs reach Claude as documents; anything else is named in the prompt for the agent to open. A turn carries at most 8 files, each at most 3.75 MiB and 12 MiB together, and one that breaks a rule is refused at submission rather than queued. See [the harness doc](./docs/harness.md#attachments-reach-the-harness-the-way-it-takes-them).
+
 #### Endpoint failover
 
 You can pass multiple LLM endpoints per job. If one errors, because usage is exhausted or the provider is returning 529s, the satellite moves to the next. Order matters and is followed strictly. This lets you stack subscriptions, stack API keys, or list the same endpoint twice with different models.

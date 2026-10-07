@@ -48,6 +48,7 @@
 //! cannot repoint an agent away from the LLM proxy or out from behind the egress
 //! proxy.
 
+use crate::harness::attachments::{self, Content, Delivered};
 use crate::harness::mcp;
 use arsox_sdk::proto::harness::v1::Harness;
 use arsox_sdk::proto::settings::v1::{Effort, EnvVar, ExecAccess, Permissions, ThreadSettings};
@@ -134,6 +135,50 @@ pub struct HarnessCommand {
     /// runner removes every `ARSOX_*` variable the satellite holds before
     /// applying these, so nothing reaches an agent by inheritance.
     pub env: Vec<AgentVar>,
+
+    /// What is written to the harness's standard input before it is closed.
+    ///
+    /// Absent for every launch that carries its prompt as an argument, which
+    /// is every launch but a Claude turn handing the model an attachment. Those
+    /// get no standard input at all, as before.
+    pub stdin: Option<StdinMessage>,
+}
+
+/// One message for a harness's standard input, already encoded.
+///
+/// A newtype so `Debug` reports its length rather than its bytes: it carries
+/// every attachment base64 encoded, and a log line formatting a command must
+/// not grow by megabytes.
+#[derive(Clone, PartialEq, Eq)]
+pub struct StdinMessage(pub Vec<u8>);
+
+impl std::fmt::Debug for StdinMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "StdinMessage({} bytes)", self.0.len())
+    }
+}
+
+/// What one session of a turn is asked to do: the prompt, and the files that
+/// came with it.
+///
+/// A turn's work carries its attachments on every attempt, a restart
+/// included. A checker fix cycle is a prompt the satellite wrote and carries
+/// none, which is what [`TurnInput::text`] builds.
+#[derive(Debug, Clone, Copy)]
+pub struct TurnInput<'a> {
+    pub prompt: &'a str,
+    pub attachments: &'a [Delivered],
+}
+
+impl<'a> TurnInput<'a> {
+    /// A prompt with nothing attached.
+    #[must_use]
+    pub const fn text(prompt: &'a str) -> Self {
+        Self {
+            prompt,
+            attachments: &[],
+        }
+    }
 }
 
 /// How a turn attaches to the harness's own session.
@@ -177,7 +222,7 @@ pub enum Session {
 #[must_use]
 pub fn command_for(
     harness: Harness,
-    prompt: &str,
+    input: &TurnInput<'_>,
     session: &Session,
     working_dir: PathBuf,
     grants: &Grants,
@@ -193,27 +238,45 @@ pub fn command_for(
         // Unspecified means "the documented default", and the documented default
         // is Claude.
         Harness::Unspecified | Harness::Claude => {
-            claude_command(prompt, session, working_dir, grants, settings)
+            claude_command(input, session, working_dir, grants, settings)
         }
-        Harness::Codex => codex_command(prompt, session, working_dir, grants, settings),
+        Harness::Codex => codex_command(input, session, working_dir, grants, settings),
     }
 }
 
 fn claude_command(
-    prompt: &str,
+    input: &TurnInput<'_>,
     session: &Session,
     working_dir: PathBuf,
     grants: &Grants,
     settings: &ThreadSettings,
 ) -> HarnessCommand {
-    let mut args = vec![
-        "--print".to_owned(),
-        prompt.to_owned(),
+    let claude_takes =
+        |content: &Content| matches!(content, Content::Image { .. } | Content::Pdf { .. });
+    let prompt = attachments::prompt_with_note(
+        input.prompt,
+        attachments::prompt_note(input.attachments, claude_takes),
+    );
+    let stdin = claude_message(&prompt, input.attachments);
+
+    let mut args = vec!["--print".to_owned()];
+
+    // An image or a document reaches Claude only as a content block, and a
+    // content block only through stream-json on stdin, measured against 2.1.290.
+    // A turn with none keeps its prompt as the argument it has always been.
+    if stdin.is_some() {
+        args.push("--input-format".to_owned());
+        args.push("stream-json".to_owned());
+    } else {
+        args.push(prompt);
+    }
+
+    args.extend([
         "--output-format".to_owned(),
         "stream-json".to_owned(),
         // stream-json refuses to emit without it.
         "--verbose".to_owned(),
-    ];
+    ]);
 
     match session {
         Session::Start { session_id } => {
@@ -271,7 +334,57 @@ fn claude_command(
         args,
         working_dir,
         env: environment_for(settings, &servers, proxy.unwrap_or_default(), grants),
+        stdin,
     }
+}
+
+/// The one stream-json user message carrying a prompt and its native blocks.
+///
+/// `None` when no attachment is something Claude takes natively, so the turn
+/// launches exactly as one without attachments does. The shape is the one
+/// Claude 2.1.290 accepted on stdin and relayed to the model unchanged: the
+/// prompt as a `text` block, then an `image` or `document` block per file, each
+/// with a base64 source.
+fn claude_message(prompt: &str, attached: &[Delivered]) -> Option<StdinMessage> {
+    use base64::Engine as _;
+
+    let blocks: Vec<serde_json::Value> = attached
+        .iter()
+        .filter_map(|attachment| {
+            let (kind, media_type, bytes) = match &attachment.content {
+                Content::Image { media_type, bytes } => ("image", *media_type, bytes),
+                Content::Pdf { bytes } => ("document", "application/pdf", bytes),
+                Content::Other { .. } | Content::Unreadable(_) => return None,
+            };
+
+            Some(serde_json::json!({
+                "type": kind,
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": base64::engine::general_purpose::STANDARD.encode(bytes),
+                },
+            }))
+        })
+        .collect();
+
+    if blocks.is_empty() {
+        return None;
+    }
+
+    let mut content = vec![serde_json::json!({ "type": "text", "text": prompt })];
+    content.extend(blocks);
+
+    let message = serde_json::json!({
+        "type": "user",
+        "message": { "role": "user", "content": content },
+    });
+
+    // One line, which is what stream-json reads a message as.
+    let mut line = message.to_string().into_bytes();
+    line.push(b'\n');
+
+    Some(StdinMessage(line))
 }
 
 /// The Codex config profile the satellite declares for its own proxy.
@@ -309,7 +422,7 @@ const CODEX_PROVIDER: &str = "arsox";
 /// `codex exec resume` accepts no `-C` and the two forms must not diverge in
 /// where they run.
 fn codex_command(
-    prompt: &str,
+    input: &TurnInput<'_>,
     session: &Session,
     working_dir: PathBuf,
     grants: &Grants,
@@ -361,19 +474,36 @@ fn codex_command(
         None => Vec::new(),
     };
 
+    // An image reaches Codex as a file it reads itself, on `exec` and
+    // `exec resume` alike, measured against 0.160.0. Absolute, so the path does
+    // not depend on the process's working directory, and before the separator,
+    // because `-i` is an option. Everything else is named in the prompt.
+    let codex_takes = |content: &Content| matches!(content, Content::Image { .. });
+    for attachment in input.attachments {
+        if codex_takes(&attachment.content) {
+            args.push("-i".to_owned());
+            args.push(attachment.absolute.to_string_lossy().into_owned());
+        }
+    }
+    let prompt = attachments::prompt_with_note(
+        input.prompt,
+        attachments::prompt_note(input.attachments, codex_takes),
+    );
+
     // Positionals last, behind the separator. `resume` takes the session id
     // first and the prompt second.
     args.push("--".to_owned());
     if let Session::Resume { session_id } = session {
         args.push(session_id.clone());
     }
-    args.push(prompt.to_owned());
+    args.push(prompt);
 
     HarnessCommand {
         program: codex_binary(),
         args,
         working_dir,
         env: environment_for(settings, &servers, proxy, grants),
+        stdin: None,
     }
 }
 
@@ -1131,6 +1261,7 @@ mod tests {
             program: printenv_program(),
             args: printenv_args(),
             working_dir: std::env::temp_dir(),
+            stdin: None,
             env: Vec::new(),
         };
 
@@ -1174,6 +1305,7 @@ mod tests {
             program: printenv_program(),
             args: printenv_args(),
             working_dir: std::env::temp_dir(),
+            stdin: None,
             env: Vec::new(),
         };
 
@@ -1211,6 +1343,7 @@ mod tests {
             program: printenv_program(),
             args: printenv_args(),
             working_dir: std::env::temp_dir(),
+            stdin: None,
             env: vec![AgentVar {
                 key: "ARSOX_FAKE_TRANSCRIPT".to_owned(),
                 value: "/fixtures/x.jsonl".to_owned(),
@@ -1261,6 +1394,7 @@ mod tests {
             program: printenv_program(),
             args: printenv_args(),
             working_dir: std::env::temp_dir(),
+            stdin: None,
             env: declared_environment(&[declared("NPM_TOKEN", "npm-declared-value", None)]),
         };
 
@@ -1314,7 +1448,7 @@ mod tests {
         // credential into any log line that ever formats a command.
         let command = command_for(
             Harness::Claude,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             &Session::Start {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
@@ -1382,6 +1516,7 @@ mod tests {
             program: printenv_program(),
             args: printenv_args(),
             working_dir: std::env::temp_dir(),
+            stdin: None,
             // Values nothing else in this process sets, since a sibling test
             // putting the same string in the real environment would prove
             // nothing about this one.
@@ -1411,7 +1546,7 @@ mod tests {
         // them.
         let command = command_for(
             Harness::Claude,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             &Session::Start {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
@@ -1461,7 +1596,7 @@ mod tests {
     fn a_first_turn_opens_a_session_under_an_id_the_satellite_chose() {
         let command = command_for(
             Harness::Claude,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             &Session::Start {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
@@ -1484,7 +1619,7 @@ mod tests {
         // would mean the second message arrives with no memory of the first.
         let command = command_for(
             Harness::Claude,
-            "and now this",
+            &TurnInput::text("and now this"),
             &Session::Resume {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
@@ -1504,7 +1639,7 @@ mod tests {
         // gap a shell injection lives in.
         let command = command_for(
             Harness::Claude,
-            "; rm -rf / #",
+            &TurnInput::text("; rm -rf / #"),
             &Session::Start {
                 session_id: "x".to_owned(),
             },
@@ -1520,7 +1655,7 @@ mod tests {
     fn command_with(permissions: Option<&Permissions>) -> HarnessCommand {
         command_for(
             Harness::Claude,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             &Session::Start {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
@@ -1684,7 +1819,7 @@ mod tests {
     ) -> HarnessCommand {
         command_for(
             Harness::Codex,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             session,
             PathBuf::from("/workspace/thread"),
             grants,
@@ -1783,7 +1918,7 @@ mod tests {
         // be parsed as one.
         let command = command_for(
             Harness::Codex,
-            "--dangerously-bypass-approvals-and-sandbox",
+            &TurnInput::text("--dangerously-bypass-approvals-and-sandbox"),
             &Session::Start {
                 session_id: "x".to_owned(),
             },
@@ -1861,7 +1996,7 @@ mod tests {
         // there, because that value is a route around every ceiling.
         let command = command_for(
             Harness::Codex,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             &Session::Start {
                 session_id: "x".to_owned(),
             },
@@ -1946,7 +2081,7 @@ mod tests {
         // never meet a shim.
         let command = command_for(
             Harness::Claude,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             &Session::Start {
                 session_id: "x".to_owned(),
             },
@@ -1975,7 +2110,7 @@ mod tests {
         // declared PATH that won would be a gate a settings field opens.
         let command = command_for(
             Harness::Claude,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             &Session::Start {
                 session_id: "x".to_owned(),
             },
@@ -2063,7 +2198,7 @@ mod tests {
         for harness in [Harness::Claude, Harness::Codex] {
             let command = command_for(
                 harness,
-                "do the thing",
+                &TurnInput::text("do the thing"),
                 &Session::Start {
                     session_id: "x".to_owned(),
                 },
@@ -2106,7 +2241,7 @@ mod tests {
         // `bypassPermissions`, so a thread that named its servers is held to them.
         let command = command_for(
             Harness::Claude,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             &Session::Start {
                 session_id: "x".to_owned(),
             },
@@ -2138,7 +2273,7 @@ mod tests {
         };
         let command = command_for(
             Harness::Claude,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             &Session::Start {
                 session_id: "x".to_owned(),
             },
@@ -2160,7 +2295,7 @@ mod tests {
         // Under the default posture nothing needs allowing.
         let unrestricted = command_for(
             Harness::Claude,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             &Session::Start {
                 session_id: "x".to_owned(),
             },
@@ -2182,7 +2317,7 @@ mod tests {
     fn gated_command() -> HarnessCommand {
         command_for(
             Harness::Claude,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             &Session::Start {
                 session_id: "x".to_owned(),
             },
@@ -2228,7 +2363,7 @@ mod tests {
         for harness in [Harness::Claude, Harness::Codex] {
             let command = command_for(
                 harness,
-                "do the thing",
+                &TurnInput::text("do the thing"),
                 &Session::Start {
                     session_id: "x".to_owned(),
                 },
@@ -2343,7 +2478,7 @@ mod tests {
         // hole wearing a different name.
         let command = command_for(
             Harness::Claude,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             &Session::Start {
                 session_id: "x".to_owned(),
             },
@@ -2400,7 +2535,7 @@ mod tests {
     fn turn_with(harness: Harness, grants: &Grants) -> HarnessCommand {
         command_for(
             harness,
-            "do the thing",
+            &TurnInput::text("do the thing"),
             &Session::Start {
                 session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
             },
@@ -2476,5 +2611,186 @@ mod tests {
                 command.args
             );
         }
+    }
+
+    /// A turn carrying an image, a PDF, and a file neither harness takes.
+    fn attached() -> Vec<Delivered> {
+        vec![
+            Delivered {
+                path: "feedback/1/annotated.png".to_owned(),
+                absolute: PathBuf::from("/workspace/thread/feedback/1/annotated.png"),
+                content: Content::Image {
+                    media_type: "image/png",
+                    bytes: b"\x89PNG\r\n\x1a\n".to_vec(),
+                },
+            },
+            Delivered {
+                path: "brief.pdf".to_owned(),
+                absolute: PathBuf::from("/workspace/thread/brief.pdf"),
+                content: Content::Pdf {
+                    bytes: b"%PDF-1.7".to_vec(),
+                },
+            },
+            Delivered {
+                path: "data.csv".to_owned(),
+                absolute: PathBuf::from("/workspace/thread/data.csv"),
+                content: Content::Other {
+                    media_type: None,
+                    size_bytes: 4,
+                },
+            },
+        ]
+    }
+
+    fn attaching(harness: Harness, attachments: &[Delivered]) -> HarnessCommand {
+        command_for(
+            harness,
+            &TurnInput {
+                prompt: "make it greener",
+                attachments,
+            },
+            &Session::Start {
+                session_id: "0199c0de-1111-7000-8000-000000000001".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            &Grants::default(),
+            &ThreadSettings::default(),
+        )
+    }
+
+    #[test]
+    fn claude_is_handed_images_and_documents_as_blocks_on_stdin() {
+        let command = attaching(Harness::Claude, &attached());
+
+        // The prompt leaves argv: Claude reads it from the message instead.
+        assert_eq!(
+            value_of(&command, "--input-format"),
+            Some("stream-json".to_owned())
+        );
+        assert!(
+            !command
+                .args
+                .iter()
+                .any(|argument| argument.contains("greener"))
+        );
+
+        let stdin = command.stdin.as_ref().expect("a message goes on stdin");
+        let line = std::str::from_utf8(&stdin.0).expect("the message is text");
+        assert!(
+            line.ends_with('\n'),
+            "stream-json reads one line per message"
+        );
+
+        let message: serde_json::Value =
+            serde_json::from_str(line.trim_end()).expect("the message is JSON");
+        assert_eq!(message["type"], "user");
+        assert_eq!(message["message"]["role"], "user");
+
+        let content = message["message"]["content"]
+            .as_array()
+            .expect("content is a list of blocks");
+        let kinds: Vec<&str> = content
+            .iter()
+            .map(|block| block["type"].as_str().unwrap_or_default())
+            .collect();
+        assert_eq!(kinds, ["text", "image", "document"]);
+
+        let text = content[0]["text"].as_str().unwrap_or_default();
+        assert!(text.starts_with("make it greener"));
+        assert!(
+            text.contains("`data.csv`"),
+            "the file Claude cannot take is named"
+        );
+        assert!(
+            !text.contains("annotated.png"),
+            "a handed image is not named again"
+        );
+
+        assert_eq!(content[1]["source"]["type"], "base64");
+        assert_eq!(content[1]["source"]["media_type"], "image/png");
+        assert_eq!(content[1]["source"]["data"], "iVBORw0KGgo=");
+        assert_eq!(content[2]["source"]["media_type"], "application/pdf");
+    }
+
+    #[test]
+    fn claude_keeps_its_prompt_argument_when_nothing_native_is_attached() {
+        let only_other: Vec<Delivered> = attached().into_iter().skip(2).collect();
+        let command = attaching(Harness::Claude, &only_other);
+
+        assert!(command.stdin.is_none());
+        assert!(!command.args.contains(&"--input-format".to_owned()));
+
+        let prompt = value_of(&command, "--print").expect("the prompt is an argument");
+        assert!(prompt.starts_with("make it greener"));
+        assert!(prompt.contains("`data.csv`"));
+    }
+
+    #[test]
+    fn codex_reads_images_itself_and_is_told_about_the_rest() {
+        let command = attaching(Harness::Codex, &attached());
+
+        assert!(
+            command.stdin.is_none(),
+            "codex reads a piped stdin as more prompt"
+        );
+
+        let separator = command
+            .args
+            .iter()
+            .position(|argument| argument == "--")
+            .expect("positionals sit behind the separator");
+        let image = command
+            .args
+            .iter()
+            .position(|argument| argument == "-i")
+            .expect("the image is passed with -i");
+
+        assert!(image < separator, "-i is an option, so it precedes --");
+        assert_eq!(
+            command.args[image + 1],
+            "/workspace/thread/feedback/1/annotated.png"
+        );
+        assert_eq!(
+            command
+                .args
+                .iter()
+                .filter(|argument| *argument == "-i")
+                .count(),
+            1,
+            "a PDF is not an image to codex"
+        );
+
+        let prompt = command.args.last().expect("the prompt is last");
+        assert!(prompt.starts_with("make it greener"));
+        assert!(prompt.contains("`brief.pdf` (application/pdf, 8 bytes)"));
+        assert!(prompt.contains("`data.csv`"));
+        assert!(!prompt.contains("annotated.png"));
+    }
+
+    #[test]
+    fn a_resumed_codex_session_takes_its_images_the_same_way() {
+        let command = command_for(
+            Harness::Codex,
+            &TurnInput {
+                prompt: "again",
+                attachments: &attached()[..1],
+            },
+            &Session::Resume {
+                session_id: "01a01cd2-200b-77f0-b4b8-7421557ff5ed".to_owned(),
+            },
+            PathBuf::from("/workspace/thread"),
+            &Grants::default(),
+            &ThreadSettings::default(),
+        );
+
+        assert_eq!(command.args[..2], ["exec", "resume"]);
+        assert_eq!(
+            value_of(&command, "-i"),
+            Some("/workspace/thread/feedback/1/annotated.png".to_owned())
+        );
+        assert_eq!(
+            command.args[command.args.len() - 2..],
+            ["01a01cd2-200b-77f0-b4b8-7421557ff5ed", "again"]
+        );
     }
 }

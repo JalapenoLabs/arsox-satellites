@@ -572,6 +572,61 @@ which the proxy already records as `LLM_MODEL_UNKNOWN`.
 serves, and which endpoint answers is not known until one does, so a flag fixed
 at spawn cannot be read from a list the proxy may fail over.
 
+### Attachments reach the harness the way it takes them
+
+A turn may carry files: the host uploads each into the workspace with
+`PUT /v1/threads/{id}/files/{path}` and names it in
+`StartTurnRequest.attachments`. Measured against Claude 2.1.290 and Codex
+0.160.0:
+
+| The file's bytes say | Claude | Codex |
+|---|---|---|
+| PNG, JPEG, GIF, WebP | an `image` block | `-i <absolute path>` |
+| PDF | a `document` block | named in the prompt |
+| anything else | named in the prompt | named in the prompt |
+
+**Claude takes a block only on stdin.** `--print <prompt>` carries text and
+nothing else, so a turn with an image or a PDF launches with
+`--input-format stream-json` and no prompt argument, and the satellite writes one
+user message to the harness's stdin, `{"type":"user","message":{"role":"user",
+"content":[...]}}`: the prompt as a `text` block, then each file as an `image` or
+`document` block with a base64 source. The pipe is written beside the read loop
+rather than before it, because the message can be megabytes and a pipe holds
+64 KiB, and it is closed afterwards, because stream-json waits for another
+message until stdin closes. A turn with nothing Claude takes natively launches
+exactly as one without attachments: the prompt as the argument after `--print`,
+and no stdin at all.
+
+**Codex reads the file itself.** `-i` is an option of both `codex exec` and
+`codex exec resume`, so it precedes the `--` separator, and it is given the
+absolute path so where the file is does not depend on the process's working
+directory. Codex has no document input, so a PDF is named.
+
+**Named means a paragraph after the prompt**, listing each file the harness was
+not handed by its workspace path, media type, and size, so the agent opens it
+rather than never learning it was sent.
+
+**The bytes decide, never the name.** A model API refuses a "PNG" that is really
+a ZIP and fails the whole request over it, so the type is sniffed from the
+file's first bytes. What the caller sent as `content_type` and `size_bytes` is
+ignored; the satellite stores what it measured.
+
+**Checked twice, trusted neither time.** At submission the satellite refuses a
+turn rather than queueing it: a path the file routes would refuse answers as
+they would (`WORKSPACE_PATH_INVALID`, `WORKSPACE_FILE_NOT_FOUND`,
+`WORKSPACE_FILE_NOT_REGULAR`), and more than 8 files, one past 3.75 MiB, or
+12 MiB together answers `REQUEST_FIELD_INVALID`. The caps are the model's:
+3.75 MiB is the largest file whose base64 fits the 5 MB a model API takes per
+image. The workspace is the agent's between submission and spawn, so the runner
+reads every file again, through the same confined walk, when the harness
+starts. A file that is gone, swapped for a link, or grown past a cap by then is
+named in the prompt as one that could not be read and recorded as a degraded
+`WORKSPACE_FILE_NOT_FOUND` incident; the turn goes on without it.
+
+**The work's sessions carry them, and nothing else does.** A restart hands the
+harness the same files the first attempt was handed, read once for the turn. A
+checker fix cycle is a prompt the satellite wrote, and carries none.
+
 ### The agent's environment is built, not inherited
 
 **No `ARSOX_*` variable the satellite holds reaches an agent.** A spawned
@@ -786,8 +841,10 @@ once for a process and never change, so neither is a knob.
 
 Three directives report from the child's own seat, which is the only vantage
 point that can answer what the CLI actually got: `[[report_env=NAME]]` and
-`[[record_env=FILE]]` for the environment, and `[[record_argv=FILE]]` for the
-command line. Asserting on the
+`[[record_env=FILE]]` for the environment, `[[record_argv=FILE]]` for the
+command line, and `[[record_stdin=FILE]]` for the content blocks of a stdin
+message. A Claude launch with attachments has its prompt, directives included,
+read from that message's text block, where the real CLI reads it. Asserting on the
 satellite's side would be asserting on intent, and "did this turn resume a
 session" is precisely the kind of question that has to be answered by the thing
 that was asked to do it.

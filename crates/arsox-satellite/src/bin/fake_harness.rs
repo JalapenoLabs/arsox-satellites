@@ -44,6 +44,12 @@
 //!   resumed a session is a fact about what the CLI was asked to do, and the CLI
 //!   is the only thing that can report it. A test names a different file per
 //!   turn so a later spawn does not overwrite the evidence from an earlier one.
+//! - `[[record_stdin=FILE]]` writes what arrived on stdin as one line per
+//!   content block, `text`, or `image <media type> <bytes>` and
+//!   `document <media type> <bytes>` with the decoded size, to `FILE` in the
+//!   working directory. Only a Claude launch with attachments has a stdin
+//!   message; the prompt and its directives are then read from that message's
+//!   text block, exactly where the real CLI reads them.
 //! - `[[record_env=FILE]]` writes the environment this replay was launched
 //!   with, one `KEY=VALUE` per line, to `FILE` in the working directory. The
 //!   durable twin of `report_env`, for a test that has to read what a variable
@@ -141,10 +147,26 @@ impl Invocation {
         }
     }
 
-    /// The prompt, wherever this CLI's command line carries it.
+    /// The prompt, and the content blocks it arrived in when it came on stdin.
     ///
-    /// Claude takes it as the value of `--print`. Codex takes it as the last
-    /// positional behind `--`, after the session id when the form is `resume`.
+    /// Claude takes it as the value of `--print`, or, launched with
+    /// `--input-format stream-json`, as the text blocks of the user message on
+    /// stdin. Codex takes it as the last positional behind `--`, after the
+    /// session id when the form is `resume`.
+    fn input(self, arguments: &[String]) -> (String, Vec<String>) {
+        if self == Self::Claude
+            && arguments.iter().any(|argument| argument == "stream-json")
+            && arguments
+                .iter()
+                .any(|argument| argument == "--input-format")
+        {
+            return stdin_message();
+        }
+
+        (self.prompt(arguments), Vec::new())
+    }
+
+    /// The prompt, wherever this CLI's command line carries it.
     fn prompt(self, arguments: &[String]) -> String {
         let found = match self {
             Self::Claude => arguments
@@ -167,9 +189,15 @@ async fn main() {
     let arguments: Vec<String> = std::env::args().collect();
     let invocation = Invocation::of(&arguments);
 
-    // The directives arrive with the prompt, which is an argument and so belongs
-    // to one spawn.
-    let prompt = invocation.prompt(&arguments);
+    // The directives arrive with the prompt, which is an argument or a stdin
+    // message and so belongs to one spawn either way.
+    let (prompt, blocks) = invocation.input(&arguments);
+
+    if let Some(file) = text_directive(&prompt, "record_stdin")
+        && let Err(error) = std::fs::write(&file, blocks.join("\n"))
+    {
+        eprintln!("could not record stdin to {file}: {error}");
+    }
 
     // A named transcript outranks the configured one, so a test needing a
     // recording this process was not configured with says so per spawn rather
@@ -298,6 +326,56 @@ async fn main() {
     }
 
     exit_with(exit_code);
+}
+
+/// Reads the one stream-json user message a Claude launch with attachments is
+/// handed, returning its text and a line describing each block.
+///
+/// Reads to the end, which is when the real CLI stops waiting for another
+/// message, so a satellite that forgot to close stdin hangs this replay exactly
+/// as it would hang the CLI.
+fn stdin_message() -> (String, Vec<String>) {
+    use base64::Engine as _;
+    use std::io::Read as _;
+
+    let mut raw = String::new();
+    if let Err(error) = std::io::stdin().read_to_string(&mut raw) {
+        eprintln!("could not read stdin: {error}");
+        std::process::exit(65);
+    }
+
+    let mut prompt = String::new();
+    let mut blocks = Vec::new();
+
+    for line in raw.lines().filter(|line| !line.trim().is_empty()) {
+        let Ok(message) = serde_json::from_str::<serde_json::Value>(line) else {
+            eprintln!("stdin carried a line that is not JSON");
+            std::process::exit(65);
+        };
+
+        let content = message["message"]["content"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+
+        for block in content {
+            let kind = block["type"].as_str().unwrap_or("unknown");
+
+            if kind == "text" {
+                prompt.push_str(block["text"].as_str().unwrap_or_default());
+                blocks.push("text".to_owned());
+                continue;
+            }
+
+            let media_type = block["source"]["media_type"].as_str().unwrap_or("unknown");
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(block["source"]["data"].as_str().unwrap_or_default())
+                .map_or(0, |bytes| bytes.len());
+            blocks.push(format!("{kind} {media_type} {decoded}"));
+        }
+    }
+
+    (prompt, blocks)
 }
 
 /// Ends this replay with the code a directive asked for.

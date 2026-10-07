@@ -133,6 +133,11 @@ first byte, a best-effort media type, and the bytes as a pinned stream.
 otherwise sends a streamed body chunked and the satellite requires the length to
 check its ceiling first.
 
+`TurnOptions.attachments` names files already uploaded with `write_file`, and
+`start_turn_with` carries them. Only the path is read: the satellite measures the
+size and sniffs the media type itself, and refuses the submission when a rule is
+broken. See [the harness doc](./harness.md#attachments-reach-the-harness-the-way-it-takes-them).
+
 **A path with an empty, `.`, or `..` component is refused in the SDK** with
 `WORKSPACE_PATH_INVALID`, before anything is sent. It has to be: the URL crate
 drops a `..` segment rather than encoding it, so `a/../secret` would quietly

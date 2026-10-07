@@ -413,6 +413,7 @@ async fn a_clone_failure_becomes_an_incident_and_parks_the_thread_with_its_queue
             metadata: BTreeMap::new(),
             idempotency_key: None,
             overrides: None,
+            attachments: Vec::new(),
             satellite_initiated: false,
             triggered_by_turn_id: None,
         })
@@ -580,6 +581,7 @@ async fn a_provisioned_thread_goes_idle_and_releases_the_turns_that_waited() {
             metadata: BTreeMap::new(),
             idempotency_key: None,
             overrides: None,
+            attachments: Vec::new(),
             satellite_initiated: false,
             triggered_by_turn_id: None,
         })

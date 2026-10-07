@@ -438,6 +438,7 @@ mod runner_incidents {
                 metadata: BTreeMap::new(),
                 idempotency_key: None,
                 overrides: None,
+                attachments: Vec::new(),
                 satellite_initiated: false,
                 triggered_by_turn_id: None,
             })
