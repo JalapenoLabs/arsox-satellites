@@ -1,23 +1,23 @@
 # CI
 
-GitHub Actions, on self-hosted runners.
+GitHub Actions, on GitHub-hosted runners.
 
 ## Runners
 
-Every job targets the org's self-hosted pool:
+Every job targets a pinned hosted image, never `ubuntu-latest`:
 
 ```yaml
-runs-on: [ linux, fedora, flagship, earthly, docker ]
+runs-on: ubuntu-24.04
 ```
 
-Labels are matched as a set, so a runner must carry all five to pick up a job.
+Hosted runners are free for a public repository, and every job starts on a
+fresh machine.
 
-**Self-hosted is why there is no caching anywhere in these workflows.** On
-GitHub-hosted runners a cold toolchain download is the dominant cost and
-`actions/cache` earns its complexity. On a persistent runner it is a cache of a
-cache: the work is fast enough that a stale-key bug would cost more debugging
-time than caching ever saves. Tools are downloaded fresh, pinned, and
-checksum-verified each run.
+**There is no caching in these workflows.** The one tool, `buf`, is a single
+binary that downloads in seconds, so a cache round trip would save nothing and
+a stale-key bug would cost more debugging time than caching ever saves. Tools
+are downloaded fresh, pinned, and checksum-verified each run. The Rust jobs on
+the roadmap below are where a cargo cache will earn its keep.
 
 ## Workflows
 
@@ -70,8 +70,8 @@ Codegen plugin versions are pinned separately, in `proto/buf.gen.yaml`.
 ### Network dependency
 
 `buf generate` resolves remote plugins from `buf.build`, so the codegen check
-needs egress to that host. If the runner pool loses it, the fix is vendoring the
-plugins locally rather than dropping the check.
+needs egress to that host. If it becomes unreachable or rate-limits CI, the fix
+is vendoring the plugins locally rather than dropping the check.
 
 ## Roadmap
 
